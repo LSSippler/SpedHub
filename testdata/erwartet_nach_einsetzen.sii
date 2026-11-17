@@ -1,0 +1,1150 @@
+SiiNunit
+{
+economy : _nameless.20e.298c.1238 {
+ bank: _nameless.20e.2752.4a68
+ player: _nameless.20e.3150.57d8
+ companies: 0
+ garages: 1
+ garages[0]: garage.erfurt
+ garage_ignore_list: 0
+ game_progress: _nameless.20e.3442.0ff8
+ event_queue: null
+ mail_ctrl: null
+ oversize_offer_ctrl: null
+ game_time: 604
+ game_time_secs: &40071f91
+ achievements_added: 600
+ new_game: false
+ experience_points: 0
+ adr: 0
+ long_dist: 0
+ heavy: 0
+ fragile: 0
+ urgent: 0
+ mechanical: 0
+ long_duty: 0
+ tight_schedule: 0
+ satisfaction_decrease: 0
+ low_acceleration: 0
+ satisfaction_increase: 0
+ ecodriving: 0
+ user_colors: 0
+ delivery_log: null
+ ferry_log: null
+ police_offence_log: null
+ stored_camera_mode: 1
+ stored_actor_state: 0
+ stored_high_beam_style: 0
+ stored_actor_windows_state: (0, 0)
+ stored_actor_wiper_mode: 0
+ stored_actor_retarder: 0
+ stored_display_mode_on_dashboard: 0
+ stored_display_mode_on_gps: 0
+ stored_dashboard_map_mode: 1
+ stored_world_map_zoom: 0
+ stored_online_job_id: 0
+ stored_online_gps_behind: 0
+ stored_online_gps_ahead: 0
+ stored_online_gps_behind_waypoints: 0
+ stored_online_gps_ahead_waypoints: 0
+ stored_online_gps_avoid_waypoints: 0
+ stored_online_gps_waypoints_history: 0
+ stored_special_job: null
+ police_ctrl: null
+ stored_map_state: 0
+ stored_gas_pump_money: 0
+ stored_weather_change_timer: &457142bf
+ stored_current_weather: 0
+ stored_rain_wetness: 0
+ time_zone: 120
+ time_zone_name: "@@tz_cest@@"
+ last_ferry_position: (2147483647, 2147483647, 2147483647)
+ stored_show_weigh: false
+ stored_need_to_weigh: false
+ stored_nav_start_pos: (2147483647, 2147483647, 2147483647)
+ stored_nav_end_pos: (2147483647, 2147483647, 2147483647)
+ stored_gps_behind: 0
+ stored_gps_ahead: 0
+ stored_gps_behind_waypoints: 0
+ stored_gps_ahead_waypoints: 0
+ stored_gps_avoid_waypoints: 0
+ stored_gps_waypoints_history: 0
+ stored_start_tollgate_pos: (2147483647, 2147483647, 2147483647)
+ stored_map_actions: 0
+ clean_distance_counter: 1
+ clean_distance_max: 1
+ no_cargo_damage_distance_counter: 1
+ no_cargo_damage_distance_max: 1
+ no_violation_distance_counter: 1
+ no_violation_distance_max: 1
+ visited_cities: 1
+ visited_cities[0]: erfurt
+ visited_cities_count: 1
+ visited_cities_count[0]: 1
+ last_visited_city: erfurt
+ discovered_cutscene_items: 0
+ discovered_cutscene_items_states: 0
+ tourist_atlas_log_units: 0
+ tourist_atlas_log_flags: 0
+ unlocked_dealers: 0
+ unlocked_recruitments: 0
+ total_screeshot_count: 0
+ undamaged_cargo_row: 0
+ service_visit_count: 0
+ last_service_pos: (0, 0, 0)
+ gas_station_visit_count: 0
+ last_gas_station_pos: (0, 0, 0)
+ emergency_call_count: 0
+ ai_crash_count: 0
+ truck_color_change_count: 0
+ red_light_fine_count: 0
+ cancelled_job_count: 0
+ total_fuel_litres: 0
+ total_fuel_price: 0
+ transported_cargo_types: 0
+ achieved_feats: 0
+ discovered_roads: 0
+ discovered_items: 22
+ discovered_items[0]: 5318106299669350478
+ discovered_items[1]: 5318106297953880117
+ discovered_items[2]: 5318106297286985780
+ discovered_items[3]: 5318106298222315560
+ discovered_items[4]: 5318106298612385826
+ discovered_items[5]: 5437254548322713600
+ discovered_items[6]: 5318106297190516791
+ discovered_items[7]: 5318106297584781336
+ discovered_items[8]: 5318106298989873221
+ discovered_items[9]: 5437253465588301824
+ discovered_items[10]: 5318106298889209475
+ discovered_items[11]: 5318106299396720234
+ discovered_items[12]: 5318106297412814392
+ discovered_items[13]: 5319838303684853761
+ discovered_items[14]: 5318106296926275134
+ discovered_items[15]: 5318106299128284735
+ discovered_items[16]: 5318106299216365133
+ discovered_items[17]: 5318106296674616913
+ discovered_items[18]: 5318106298041960016
+ discovered_items[19]: 5318106300139111989
+ discovered_items[20]: 5318106296435541583
+ discovered_items[21]: 5318106299874871384
+ drivers_offer: 0
+ default_training_policy: balanced
+ used_vehicle_assortment: null
+ freelance_truck_offer: null
+ trucks_bought_online: 0
+ special_cargo_timer: 0
+ screen_access_list: 39
+ screen_access_list[0]: "screen.bank"
+ screen_access_list[1]: "screen.mail"
+ screen_access_list[2]: "jobs.company"
+ screen_access_list[3]: "jobs.quick"
+ screen_access_list[4]: "screen.skills"
+ screen_access_list[5]: "overview.compman_w"
+ screen_access_list[6]: "screen.garageman"
+ screen_access_list[7]: "screen.truckman"
+ screen_access_list[8]: "screen.trailerman"
+ screen_access_list[9]: "screen.driverman"
+ screen_access_list[10]: "screen.recruit"
+ screen_access_list[11]: "screen.recruit_map"
+ screen_access_list[12]: "screen.real_estate"
+ screen_access_list[13]: "truck.dealer_map"
+ screen_access_list[14]: "truck.eshop"
+ screen_access_list[15]: "truck.eshop.used_trucks"
+ screen_access_list[16]: "trailer.dealer"
+ screen_access_list[17]: "trailer.eshop"
+ screen_access_list[18]: "jobs.online"
+ screen_access_list[19]: "screen.quick.travel"
+ screen_access_list[20]: "jobs.cargo.market"
+ screen_access_list[21]: "jobs.cargo.market.company_s"
+ screen_access_list[22]: "jobs.external.market.online"
+ screen_access_list[23]: "jobs.external.market.online_s"
+ screen_access_list[24]: "convoy.selector"
+ screen_access_list[25]: "convoy.init.access"
+ screen_access_list[26]: "convoy.sessions"
+ screen_access_list[27]: "convoy.current.session"
+ screen_access_list[28]: "truck.upgrades"
+ screen_access_list[29]: "trailer.upgrades"
+ screen_access_list[30]: "screen.bus.skills"
+ screen_access_list[31]: "jobs.bus.company"
+ screen_access_list[32]: "jobs.bus.tourist.company"
+ screen_access_list[33]: "jobs.car_dispatch"
+ screen_access_list[34]: "bus.garage"
+ screen_access_list[35]: "car.garage"
+ screen_access_list[36]: "trailer.config"
+ screen_access_list[37]: "screen.bus_mode"
+ screen_access_list[38]: "screen.car_mode"
+ screen_visit_list: 38
+ screen_visit_list[0]: "screen.bank"
+ screen_visit_list[1]: "screen.mail"
+ screen_visit_list[2]: "jobs.company"
+ screen_visit_list[3]: "jobs.quick"
+ screen_visit_list[4]: "screen.skills"
+ screen_visit_list[5]: "screen.garageman"
+ screen_visit_list[6]: "screen.truckman"
+ screen_visit_list[7]: "screen.trailerman"
+ screen_visit_list[8]: "screen.driverman"
+ screen_visit_list[9]: "screen.recruit"
+ screen_visit_list[10]: "screen.recruit_map"
+ screen_visit_list[11]: "screen.real_estate"
+ screen_visit_list[12]: "truck.dealer_map"
+ screen_visit_list[13]: "truck.eshop"
+ screen_visit_list[14]: "truck.eshop.used_trucks"
+ screen_visit_list[15]: "trailer.dealer"
+ screen_visit_list[16]: "trailer.eshop"
+ screen_visit_list[17]: "jobs.online"
+ screen_visit_list[18]: "screen.quick.travel"
+ screen_visit_list[19]: "jobs.cargo.market"
+ screen_visit_list[20]: "jobs.cargo.market.company_s"
+ screen_visit_list[21]: "jobs.external.market.online"
+ screen_visit_list[22]: "jobs.external.market.online_s"
+ screen_visit_list[23]: "convoy.selector"
+ screen_visit_list[24]: "convoy.init.access"
+ screen_visit_list[25]: "convoy.sessions"
+ screen_visit_list[26]: "convoy.current.session"
+ screen_visit_list[27]: "truck.upgrades"
+ screen_visit_list[28]: "trailer.upgrades"
+ screen_visit_list[29]: "screen.bus.skills"
+ screen_visit_list[30]: "jobs.car_quick"
+ screen_visit_list[31]: "screen.atlas"
+ screen_visit_list[32]: "car.shop"
+ screen_visit_list[33]: "jobs.car_dispatch"
+ screen_visit_list[34]: "jobs.bus"
+ screen_visit_list[35]: "bus.eshop"
+ screen_visit_list[36]: "jobs.bus.company"
+ screen_visit_list[37]: "jobs.bus.tourist.company"
+ driver_pool: 0
+ total_distance: 0
+ total_distances_by_mode: 3
+ total_distances_by_mode[0]: 1
+ total_distances_by_mode[1]: 0
+ total_distances_by_mode[2]: 0
+ total_real_time: 0
+ real_time_seconds: &41a5a141
+ total_real_times_by_mode: 3
+ total_real_times_by_mode[0]: 1
+ total_real_times_by_mode[1]: 0
+ total_real_times_by_mode[2]: 0
+ game_time_initial: nil
+ total_game_times_by_mode: 3
+ total_game_times_by_mode[0]: 4
+ total_game_times_by_mode[1]: 0
+ total_game_times_by_mode[2]: 0
+ registry: null
+ company_jobs_invitation_sent: false
+ company_check_hash: 697398330909959751
+ relations: 20
+ relations[0]: 188
+ relations[1]: 129
+ relations[2]: 153
+ relations[3]: 111
+ relations[4]: 53
+ relations[5]: 143
+ relations[6]: 103
+ relations[7]: 46
+ relations[8]: 58
+ relations[9]: 129
+ relations[10]: 4
+ relations[11]: 150
+ relations[12]: 83
+ relations[13]: 253
+ relations[14]: 42
+ relations[15]: 111
+ relations[16]: 160
+ relations[17]: 222
+ relations[18]: 102
+ relations[19]: 220
+ car_job_log: null
+ car_job_generator: null
+ bus_stops: 0
+ bus_job_log: null
+ bus_experience_points: 0
+}
+
+bank : _nameless.20e.2752.4a68 {
+ money_account: 2000
+ coinsurance_fixed: 1000
+ coinsurance_ratio: &3dcccccd
+ accident_severity: 0
+ loans: 0
+ app_enabled: false
+ loan_limit: 0
+ payment_timer: &45d96e5c
+ overdraft: false
+ overdraft_timer: 0
+ overdraft_warn_count: 0
+ sell_players_truck_later: false
+ sell_players_trailer_later: false
+}
+
+player : _nameless.20e.3150.57d8 {
+ hq_city: erfurt
+ my_vehicles_mode: truck
+ my_vehicles: 3
+ my_vehicles[0]: _nameless.20e.2aa3.9428
+ my_vehicles[1]: _nameless.20e.2aa3.9068
+ my_vehicles[2]: _nameless.20e.2aa3.94c8
+ assigned_vehicles_mode: truck
+ assigned_vehicles: _nameless.20e.2aa3.9f68
+ trailers: 0
+ trailer_utilization_logs: 0
+ trailer_defs: 0
+ buses: 0
+ cars: 0
+ schedule_transfer_to_hq: false
+ schedule_quick_travel: false
+ flags: 4
+ vehicle_mode_flags: 0
+ gas_pump_money_debt: 0
+ current_job: null
+ current_bus_job: null
+ current_car_job: null
+ selected_job: null
+ selected_bus_offer: null
+ driving_time: 4
+ last_sleep_time: 0
+ time_since_mandatory_break: 4
+ on_break_time: 0
+ free_roam_distance: 0
+ discovary_distance: &401c65a3
+ dismissed_drivers: 0
+ trucks: 1
+ trucks[0]: _nameless.206.398b.b508
+ truck_profit_logs: 1
+ truck_profit_logs[0]: _nameless.2ff.7a11.0001
+ drivers: 1
+ drivers[0]: driver.0
+ driver_flags: 1
+ driver_flags[0]: 0
+ driver_readiness_timer: 1
+ driver_readiness_timer[0]: 0
+ driver_undrivable_truck_timers: 1
+ driver_undrivable_truck_timers[0]: 0
+ driver_quit_warned: 0
+ assigned_truck: null
+ truck_placement: (0, 0, 0) (1; 0, 0, 0)
+ assigned_trailer: null
+ trailer_placement: (0, 0, 0) (1; 0, 0, 0)
+ slave_trailer_placements: 0
+ assigned_trailer_connected: false
+ my_truck: null
+ my_truck_placement: (0, 0, 0) (1; 0, 0, 0)
+ my_truck_placement_valid: false
+ my_trailer: null
+ my_trailer_placement: (0, 0, 0) (1; 0, 0, 0)
+ my_slave_trailer_placements: 0
+ my_trailer_attached: false
+ my_trailer_used: false
+}
+
+vehicle : _nameless.206.398b.b508 {
+ engine_wear: &3b48a2f7
+ transmission_wear: &3b48a2f7
+ cabin_wear: &3da68f54
+ engine_wear_unfixable: &3bedddaf
+ transmission_wear_unfixable: &3c9e46ef
+ cabin_wear_unfixable: &3db189b4
+ fuel_relative: &3f367cdb
+ rheostat_factor: &3f400000
+ user_mirror_rot: 9
+ user_mirror_rot[0]: (1; 0, 0, 0)
+ user_mirror_rot[1]: (1; 0, 0, 0)
+ user_mirror_rot[2]: (1; 0, 0, 0)
+ user_mirror_rot[3]: (1; 0, 0, 0)
+ user_mirror_rot[4]: (1; 0, 0, 0)
+ user_mirror_rot[5]: (1; 0, 0, 0)
+ user_mirror_rot[6]: (1; 0, 0, 0)
+ user_mirror_rot[7]: (1; 0, 0, 0)
+ user_mirror_rot[8]: (1; 0, 0, 0)
+ user_head_offset: (0, 0, 0)
+ user_fov: 0
+ user_wheel_up_down: 0
+ user_wheel_front_back: 0
+ user_mouse_left_right_default: 0
+ user_mouse_up_down_default: 0
+ purchase_time: 13551
+ passenger_mass: 0
+ requested_passenger_mass: 0
+ accessories: 75
+ accessories[0]: _nameless.206.3989.7e08
+ accessories[1]: _nameless.206.3989.71a8
+ accessories[2]: _nameless.206.3989.7aa8
+ accessories[3]: _nameless.206.3968.5568
+ accessories[4]: _nameless.206.3968.6a68
+ accessories[5]: _nameless.206.3968.5fe8
+ accessories[6]: _nameless.206.3968.81a8
+ accessories[7]: _nameless.206.3968.62e8
+ accessories[8]: _nameless.206.3987.a3a8
+ accessories[9]: _nameless.206.3968.7128
+ accessories[10]: _nameless.206.3968.6768
+ accessories[11]: _nameless.206.3968.7ba8
+ accessories[12]: _nameless.206.3968.77e8
+ accessories[13]: _nameless.206.3968.7a28
+ accessories[14]: _nameless.206.3968.6828
+ accessories[15]: _nameless.206.3968.6b28
+ accessories[16]: _nameless.206.3968.7ea8
+ accessories[17]: _nameless.206.3968.6ca8
+ accessories[18]: _nameless.206.3987.a028
+ accessories[19]: _nameless.206.3968.6e28
+ accessories[20]: _nameless.206.3987.a8e8
+ accessories[21]: _nameless.206.3987.9768
+ accessories[22]: _nameless.206.3968.6fa8
+ accessories[23]: _nameless.206.3989.6d28
+ accessories[24]: _nameless.206.3987.97d8
+ accessories[25]: _nameless.206.3987.9538
+ accessories[26]: _nameless.206.3989.70e8
+ accessories[27]: _nameless.206.3968.78a8
+ accessories[28]: _nameless.206.3968.7f68
+ accessories[29]: _nameless.206.3989.7208
+ accessories[30]: _nameless.206.380c.f138
+ accessories[31]: _nameless.206.3968.71e8
+ accessories[32]: _nameless.206.3968.8028
+ accessories[33]: _nameless.206.3968.9be8
+ accessories[34]: _nameless.206.3968.8928
+ accessories[35]: _nameless.206.3968.a128
+ accessories[36]: _nameless.206.351b.2138
+ accessories[37]: _nameless.206.3968.9d68
+ accessories[38]: _nameless.206.3968.96a8
+ accessories[39]: _nameless.206.3968.a5a8
+ accessories[40]: _nameless.206.3968.9768
+ accessories[41]: _nameless.206.3968.9a68
+ accessories[42]: _nameless.206.3968.8c28
+ accessories[43]: _nameless.206.3968.b0e8
+ accessories[44]: _nameless.206.3987.9d18
+ accessories[45]: _nameless.206.3968.9468
+ accessories[46]: _nameless.206.3987.9d88
+ accessories[47]: _nameless.206.3987.a098
+ accessories[48]: _nameless.206.3987.9688
+ accessories[49]: _nameless.206.3987.a178
+ accessories[50]: _nameless.206.3987.a1e8
+ accessories[51]: _nameless.206.3968.a668
+ accessories[52]: _nameless.206.3968.a8a8
+ accessories[53]: _nameless.206.3968.a068
+ accessories[54]: _nameless.206.3968.9228
+ accessories[55]: _nameless.206.3968.90a8
+ accessories[56]: _nameless.206.3968.8aa8
+ accessories[57]: _nameless.206.3968.89e8
+ accessories[58]: _nameless.206.3968.aa28
+ accessories[59]: _nameless.206.3968.8da8
+ accessories[60]: _nameless.206.3968.9e28
+ accessories[61]: _nameless.206.3968.a1e8
+ accessories[62]: _nameless.206.3968.8b68
+ accessories[63]: _nameless.206.3989.87c8
+ accessories[64]: _nameless.206.3968.a368
+ accessories[65]: _nameless.206.3968.8ce8
+ accessories[66]: _nameless.206.3968.86e8
+ accessories[67]: _nameless.206.3968.a968
+ accessories[68]: _nameless.206.3968.8e68
+ accessories[69]: _nameless.206.3968.aba8
+ accessories[70]: _nameless.206.3968.8f28
+ accessories[71]: _nameless.206.3968.b1a8
+ accessories[72]: _nameless.206.3968.9b28
+ accessories[73]: _nameless.206.3968.b268
+ accessories[74]: _nameless.206.351b.0538
+ odometer: 3865
+ odometer_float_part: &3ebd4d9f
+ integrity_odometer: 3865
+ integrity_odometer_float_part: &3ebd4d9f
+ trip_fuel_l: 1942
+ trip_fuel: &3f3ae7f6
+ trip_recuperation_kwh: 0
+ trip_recuperation: 0
+ trip_distance_km: 3865
+ trip_distance: &42a439d6
+ trip_time_min: 3966
+ trip_time: &3f71796f
+ license_plate: "SPED 001|_germany"
+ license_plate_type: truck
+ chassis_wear: &3dd0332a
+ chassis_wear_unfixable: &3dddec24
+ wheels_wear: 3
+ wheels_wear[0]: &3c95fff2
+ wheels_wear[1]: &3c8b1ead
+ wheels_wear[2]: &3c95fff2
+ wheels_wear_unfixable: 3
+ wheels_wear_unfixable[0]: &3dcb0050
+ wheels_wear_unfixable[1]: &3d933d06
+ wheels_wear_unfixable[2]: &3dcb0050
+ sliding_axle_offset: 0
+}
+
+vehicle_drv_plate_accessory : _nameless.206.351b.0538 {
+ text: ""
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/codrv_plate/lightboard04.sii"
+ refund: 450
+}
+
+vehicle_addon_accessory : _nameless.206.3968.b268 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/frntglss_mid/lightboard01.sii"
+ refund: 480
+}
+
+vehicle_addon_accessory : _nameless.206.3968.9b28 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/intlight_bck/mg_int_light03.sii"
+ refund: 5550
+}
+
+vehicle_addon_accessory : _nameless.206.3968.b1a8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/l_pillow/pillow_goodyear.sii"
+ refund: 90
+}
+
+vehicle_addon_accessory : _nameless.206.3968.8f28 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/toybed/tirsan_bear.sii"
+ refund: 220
+}
+
+vehicle_addon_accessory : _nameless.206.3968.aba8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/toybig/sportbag.dlc_toys.sii"
+ refund: 930
+}
+
+vehicle_addon_accessory : _nameless.206.3968.8e68 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/toyseat/at.sii"
+ refund: 160
+}
+
+vehicle_addon_accessory : _nameless.206.3968.a968 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/toystand/plush_daf_e6.sii"
+ refund: 90
+}
+
+vehicle_addon_accessory : _nameless.206.3968.86e8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/toyac/head_detective.sii"
+ refund: 100
+}
+
+vehicle_addon_accessory : _nameless.206.3968.8ce8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/intlight_bgr/stock.sii"
+ refund: 1020
+}
+
+vehicle_addon_accessory : _nameless.206.3968.a368 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/steering_w/v8.sii"
+ refund: 2500
+}
+
+vehicle_accessory : _nameless.206.3989.87c8 {
+ data_path: "/def/vehicle/truck/scania.s_2016/interior/cab_s_high_smartdash_advanced_v8.sii"
+ refund: 45120
+}
+
+vehicle_addon_accessory : _nameless.206.3968.8b68 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/s_panel/painted_full.sii"
+ refund: 1260
+}
+
+vehicle_addon_accessory : _nameless.206.3968.a1e8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/windowtrim/windowtrim_mg_01.sii"
+ refund: 780
+}
+
+vehicle_addon_accessory : _nameless.206.3968.9e28 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/r_chs_cover/chs_c_mg_6x2_dia.sii"
+ refund: 8200
+}
+
+vehicle_addon_accessory : _nameless.206.3968.8da8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/exhaust_m/exhaust_mg_02.sii"
+ refund: 8700
+}
+
+vehicle_addon_accessory : _nameless.206.3968.aa28 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/trlr_cables/stock.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.206.3968.89e8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/s_badge/badge_v8.sii"
+ refund: 450
+}
+
+vehicle_addon_accessory : _nameless.206.3968.8aa8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/r_light/stock.sii"
+ refund: 600
+}
+
+vehicle_addon_accessory : _nameless.206.3968.90a8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/r_bumper/rearbumper_mg_04.sii"
+ refund: 4500
+}
+
+vehicle_addon_accessory : _nameless.206.3968.9228 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/r_mudflap/r_mudflap_cont_mg.sii"
+ refund: 300
+}
+
+vehicle_addon_accessory : _nameless.206.3968.a068 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/r_fender/6x2_p.sii"
+ refund: 5440
+}
+
+vehicle_addon_accessory : _nameless.206.3968.a8a8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/r_fendr_top/low_6x2_p.sii"
+ refund: 1800
+}
+
+vehicle_addon_accessory : _nameless.206.3968.a668 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/tank/6x2_600.sii"
+ refund: 960
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.a1e8 {
+ offset: 0
+ paint_color: (&3efe6dfe, &3cce54a8, &3f00bd2d)
+ data_path: "/def/vehicle/r_tire/315_70_michelin_xmulti_d.sii"
+ refund: 4850
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.a178 {
+ offset: 0
+ paint_color: (0, 0, 0)
+ data_path: "/def/vehicle/r_disc/rear_disc_01_paintable.sii"
+ refund: 6300
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.9688 {
+ offset: 2
+ paint_color: (&3efe6dfe, &3cce54a8, &3f00bd2d)
+ data_path: "/def/vehicle/f_tire/315_70_michelin_xline_energy_z2.sii"
+ refund: 2180
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.a098 {
+ offset: 2
+ paint_color: (0, 0, 0)
+ data_path: "/def/vehicle/f_disc/front_disc_02_paintable.sii"
+ refund: 2850
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.9d88 {
+ offset: 0
+ paint_color: (&3efe6dfe, &3cce54a8, &3f00bd2d)
+ data_path: "/def/vehicle/f_tire/315_70_michelin_xline_energy_z2.sii"
+ refund: 2180
+}
+
+vehicle_addon_accessory : _nameless.206.3968.9468 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/sideskirt/6x2_p_v8_2.sii"
+ refund: 18800
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.9d18 {
+ offset: 0
+ paint_color: (0, 0, 0)
+ data_path: "/def/vehicle/f_disc/front_disc_05_paintable.sii"
+ refund: 3300
+}
+
+vehicle_addon_accessory : _nameless.206.3968.b0e8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (&3c1eecbf, &3c1eecbf, &3c1eecbf)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/b_grill/hss_matte2c_led.sii"
+ refund: 6300
+}
+
+vehicle_addon_accessory : _nameless.206.3968.8c28 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/f_bumper/low_40mm_p.sii"
+ refund: 2475
+}
+
+vehicle_addon_accessory : _nameless.206.3968.9a68 {
+ slot_name: 2
+ slot_name[0]: slot_1
+ slot_name[1]: slot_4
+ slot_hookup: 2
+ slot_hookup[0]: "light3.addon_hookup"
+ slot_hookup[1]: "light3.addon_hookup"
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/f_grill/hss_shape1_led.sii"
+ refund: 4050
+}
+
+vehicle_addon_accessory : _nameless.206.3968.9768 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/f_equip/super_mid_paint.sii"
+ refund: 360
+}
+
+vehicle_addon_accessory : _nameless.206.3968.a5a8 {
+ slot_name: 10
+ slot_name[0]: slot_31
+ slot_name[1]: slot_33
+ slot_name[2]: slot_28
+ slot_name[3]: slot_27
+ slot_name[4]: slot_32
+ slot_name[5]: slot_29
+ slot_name[6]: slot_26
+ slot_name[7]: slot_25
+ slot_name[8]: slot_23
+ slot_name[9]: slot_24
+ slot_hookup: 10
+ slot_hookup[0]: "strobe01.addon_hookup"
+ slot_hookup[1]: "strobe01.addon_hookup"
+ slot_hookup[2]: "strobe01.addon_hookup"
+ slot_hookup[3]: "strobe01.addon_hookup"
+ slot_hookup[4]: "strobe01.addon_hookup"
+ slot_hookup[5]: "strobe01.addon_hookup"
+ slot_hookup[6]: "strobe01.addon_hookup"
+ slot_hookup[7]: "strobe01.addon_hookup"
+ slot_hookup[8]: "strobe01.addon_hookup"
+ slot_hookup[9]: "strobe01.addon_hookup"
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/c_grill/cabgrill_mg_02.sii"
+ refund: 5400
+}
+
+vehicle_addon_accessory : _nameless.206.3968.96a8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/f_logo/underlit.sii"
+ refund: 500
+}
+
+vehicle_addon_accessory : _nameless.206.3968.9d68 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/f_light_mid/chrome_mg_03.sii"
+ refund: 2100
+}
+
+vehicle_drv_plate_accessory : _nameless.206.351b.2138 {
+ text: "D:UDO"
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/drv_plate/plate.sii"
+ refund: 150
+}
+
+vehicle_addon_accessory : _nameless.206.3968.a128 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/f_mirror/painted.sii"
+ refund: 2160
+}
+
+vehicle_addon_accessory : _nameless.206.3968.8928 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/f_light_top/modern_v8_bl.sii"
+ refund: 1860
+}
+
+vehicle_addon_accessory : _nameless.206.3968.9be8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/l_horn/horn_05slns.sii"
+ refund: 990
+}
+
+vehicle_addon_accessory : _nameless.206.3968.8028 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/r_horn/horn_05slns.sii"
+ refund: 990
+}
+
+vehicle_addon_accessory : _nameless.206.3968.71e8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (&3c1eecbf, &3c1eecbf, &3c1eecbf)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/r_grill/hss_matte8.sii"
+ refund: 17520
+}
+
+vehicle_paint_job_accessory : _nameless.206.380c.f138 {
+ mask_r_color: (1, 0, 0)
+ mask_g_color: (0, 1, 0)
+ mask_b_color: (0, 0, 1)
+ flake_color: (0, 1, 0)
+ flip_color: (1, 0, 0)
+ base_color: (&3bd5635f, 0, &3ebe12e1)
+ data_path: "/def/vehicle/truck/scania.s_2016/paint_job/color0.sii"
+ refund: 5200
+}
+
+vehicle_accessory : _nameless.206.3989.7208 {
+ data_path: "/def/vehicle/truck/scania.s_2016/transmission/g38cm_r.sii"
+ refund: 18200
+}
+
+vehicle_addon_accessory : _nameless.206.3968.7f68 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/c_badge/empty.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.206.3968.78a8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/badge/s580.sii"
+ refund: 0
+}
+
+vehicle_accessory : _nameless.206.3989.70e8 {
+ data_path: "/def/vehicle/truck/scania.s_2016/engine/dc16_580.sii"
+ refund: 25320
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.9538 {
+ offset: 2
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/f_nuts/front_nuts_01_steel.sii"
+ refund: 450
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.97d8 {
+ offset: 2
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/f_hub/front_hub_01.sii"
+ refund: 600
+}
+
+vehicle_accessory : _nameless.206.3989.6d28 {
+ data_path: "/def/vehicle/truck/scania.s_2016/chassis/6x2_4_midlift.sii"
+ refund: 51120
+}
+
+vehicle_addon_accessory : _nameless.206.3968.6fa8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/s_mirror/stock.sii"
+ refund: 570
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.9768 {
+ offset: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/r_nuts/rear_nuts_02_steel.sii"
+ refund: 600
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.a8e8 {
+ offset: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/r_hub/rear_hub_scania.sii"
+ refund: 1125
+}
+
+vehicle_addon_accessory : _nameless.206.3968.6e28 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/mirror/painted.sii"
+ refund: 4620
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.a028 {
+ offset: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/f_nuts/front_nuts_02_steel.sii"
+ refund: 600
+}
+
+vehicle_addon_accessory : _nameless.206.3968.6ca8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/f_wnd_frame/stock.sii"
+ refund: 720
+}
+
+vehicle_addon_accessory : _nameless.206.3968.7ea8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/f_light_chs/shape1_p.sii"
+ refund: 1440
+}
+
+vehicle_addon_accessory : _nameless.206.3968.6b28 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/f_light_bmp/covered_p.sii"
+ refund: 90
+}
+
+vehicle_addon_accessory : _nameless.206.3968.6828 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/f_intk_b_chs/steelgray.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.206.3968.7a28 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/f_intk_b_cab/steelgray.sii"
+ refund: 900
+}
+
+vehicle_addon_accessory : _nameless.206.3968.77e8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/f_intake_chs/spacegray.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.206.3968.7ba8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/f_intake_cab/spacegray.sii"
+ refund: 750
+}
+
+vehicle_addon_accessory : _nameless.206.3968.6768 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/f_inlay_chs/stock.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.206.3968.7128 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/f_inlay_cab/stock_super.sii"
+ refund: 1400
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.a3a8 {
+ offset: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/f_hub/front_hub_scania.sii"
+ refund: 1080
+}
+
+vehicle_addon_accessory : _nameless.206.3968.62e8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/f_fendr_chs/paint.sii"
+ refund: 3240
+}
+
+vehicle_addon_accessory : _nameless.206.3968.81a8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/f_fender/stock_p_sensor_2.sii"
+ refund: 2720
+}
+
+vehicle_addon_accessory : _nameless.206.3968.5fe8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/f_badge/stock.sii"
+ refund: 150
+}
+
+vehicle_addon_accessory : _nameless.206.3968.6a68 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/doorstep/shape1.sii"
+ refund: 1860
+}
+
+vehicle_addon_accessory : _nameless.206.3968.5568 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/doorhndl/chrome_blk.sii"
+ refund: 1320
+}
+
+vehicle_accessory : _nameless.206.3989.7aa8 {
+ data_path: "/def/vehicle/truck/scania.s_2016/head_light/led.sii"
+ refund: 600
+}
+
+vehicle_accessory : _nameless.206.3989.71a8 {
+ data_path: "/def/vehicle/truck/scania.s_2016/cabin/highline.sii"
+ refund: 38400
+}
+
+vehicle_accessory : _nameless.206.3989.7e08 {
+ data_path: "/def/vehicle/truck/scania.s_2016/data.sii"
+ refund: 0
+}
+
+profit_log : _nameless.2ff.7a11.0001 {
+ stats_data: 0
+ acc_distance_free: 0
+ acc_distance_on_job: 0
+ history_age: nil
+}
+
+player_vehicles : _nameless.20e.2aa3.9428 {
+ vehicle: _nameless.206.398b.b508
+ stored_vehicle_placement: (&452352a1, &42118f21, &c5311760) (&bf7cb3f8; &3a816cd4, &be23cf9c, &b8a039a7)
+ stored_vehicle_city: city.erfurt
+ stored_vehicle_country: null
+ trailer: null
+ stored_trailer_placements: 0
+ stored_trailer_attached: false
+}
+
+player_vehicles : _nameless.20e.2aa3.9068 {
+ vehicle: null
+ stored_vehicle_placement: (0, 0, 0) (1; 0, 0, 0)
+ stored_vehicle_city: null
+ stored_vehicle_country: null
+ trailer: null
+ stored_trailer_placements: 0
+ stored_trailer_attached: false
+}
+
+player_vehicles : _nameless.20e.2aa3.94c8 {
+ vehicle: null
+ stored_vehicle_placement: (0, 0, 0) (1; 0, 0, 0)
+ stored_vehicle_city: null
+ stored_vehicle_country: null
+ trailer: null
+ stored_trailer_placements: 0
+ stored_trailer_attached: false
+}
+
+player_vehicles : _nameless.20e.2aa3.9f68 {
+ vehicle: _nameless.206.398b.b508
+ stored_vehicle_placement: (&452352a1, &42118f21, &c5311760) (&bf7cb3f8; &3a816cd4, &be23cf9c, &b8a039a7)
+ stored_vehicle_city: null
+ stored_vehicle_country: null
+ trailer: null
+ stored_trailer_placements: 0
+ stored_trailer_attached: false
+}
+
+driver_player : driver.0 {
+ profit_log: _nameless.20b.c457.45c8
+}
+
+profit_log : _nameless.20b.c457.45c8 {
+ stats_data: 0
+ acc_distance_free: 0
+ acc_distance_on_job: 0
+ history_age: 8
+}
+
+garage : garage.erfurt {
+ vehicles: 1
+ vehicles[0]: _nameless.206.398b.b508
+ drivers: 1
+ drivers[0]: driver.0
+ trailers: 0
+ status: 6
+ profit_log: _nameless.20e.3442.4168
+ productivity: 0
+}
+
+profit_log : _nameless.20e.3442.4168 {
+ stats_data: 0
+ acc_distance_free: 0
+ acc_distance_on_job: 0
+ history_age: 14
+}
+
+game_progress : _nameless.20e.3442.0ff8 {
+ generic_transports: null
+ undamaged_transports: null
+ clean_transports: null
+ owned_trucks: 1
+ owned_trucks[0]: "vehicle.scania.s_2016"
+}
+
+}

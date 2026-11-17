@@ -1,0 +1,4595 @@
+SiiNunit
+{
+economy : _nameless.206.2a89.d548 {
+ bank: _nameless.206.3946.aa48
+ player: _nameless.206.3353.6c38
+ companies: 0
+ garages: 2
+ garages[0]: garage.munchen
+ garages[1]: garage.dresden
+ garage_ignore_list: 0
+ game_progress: _nameless.206.3988.7fb8
+ event_queue: null
+ mail_ctrl: null
+ oversize_offer_ctrl: null
+ game_time: 19647
+ game_time_secs: &42373eaf
+ achievements_added: 600
+ new_game: false
+ experience_points: 39402
+ adr: 63
+ long_dist: 6
+ heavy: 4
+ fragile: 1
+ urgent: 1
+ mechanical: 1
+ long_duty: 0
+ tight_schedule: 0
+ satisfaction_decrease: 0
+ low_acceleration: 0
+ satisfaction_increase: 0
+ ecodriving: 0
+ user_colors: 8
+ user_colors[0]: 4288938003
+ user_colors[1]: 0
+ user_colors[2]: 0
+ user_colors[3]: 0
+ user_colors[4]: 4290522299
+ user_colors[5]: 0
+ user_colors[6]: 0
+ user_colors[7]: 0
+ delivery_log: null
+ ferry_log: null
+ police_offence_log: null
+ stored_camera_mode: 1
+ stored_actor_state: 643
+ stored_high_beam_style: 0
+ stored_actor_windows_state: (0, 0)
+ stored_actor_wiper_mode: 0
+ stored_actor_retarder: 0
+ stored_display_mode_on_dashboard: 0
+ stored_display_mode_on_gps: 0
+ stored_dashboard_map_mode: 1
+ stored_world_map_zoom: 0
+ stored_online_job_id: 152094058
+ stored_online_gps_behind: 0
+ stored_online_gps_ahead: 0
+ stored_online_gps_behind_waypoints: 0
+ stored_online_gps_ahead_waypoints: 0
+ stored_online_gps_avoid_waypoints: 0
+ stored_online_gps_waypoints_history: 0
+ stored_special_job: null
+ police_ctrl: null
+ stored_map_state: 0
+ stored_gas_pump_money: 0
+ stored_weather_change_timer: &42df4d6c
+ stored_current_weather: 1
+ stored_rain_wetness: &3f355d54
+ time_zone: 120
+ time_zone_name: "@@tz_cest@@"
+ last_ferry_position: (2147483647, 2147483647, 2147483647)
+ stored_show_weigh: false
+ stored_need_to_weigh: false
+ stored_nav_start_pos: (2147483647, 2147483647, 2147483647)
+ stored_nav_end_pos: (2147483647, 2147483647, 2147483647)
+ stored_gps_behind: 0
+ stored_gps_ahead: 0
+ stored_gps_behind_waypoints: 0
+ stored_gps_ahead_waypoints: 0
+ stored_gps_avoid_waypoints: 0
+ stored_gps_waypoints_history: 0
+ stored_start_tollgate_pos: (2147483647, 2147483647, 2147483647)
+ stored_map_actions: 0
+ clean_distance_counter: 5
+ clean_distance_max: 1884
+ no_cargo_damage_distance_counter: 9565
+ no_cargo_damage_distance_max: 9565
+ no_violation_distance_counter: 5
+ no_violation_distance_max: 1884
+ visited_cities: 38
+ visited_cities[0]: munchen
+ visited_cities[1]: salzburg
+ visited_cities[2]: innsbruck
+ visited_cities[3]: stuttgart
+ visited_cities[4]: prague
+ visited_cities[5]: bratislava
+ visited_cities[6]: budapest
+ visited_cities[7]: kosice
+ visited_cities[8]: gedser
+ visited_cities[9]: kobenhavn
+ visited_cities[10]: koln
+ visited_cities[11]: nurnberg
+ visited_cities[12]: mannheim
+ visited_cities[13]: zurich
+ visited_cities[14]: hamburg
+ visited_cities[15]: ljubljana
+ visited_cities[16]: fier
+ visited_cities[17]: oslo
+ visited_cities[18]: hamar
+ visited_cities[19]: dombas
+ visited_cities[20]: alesund
+ visited_cities[21]: egilsstadir
+ visited_cities[22]: thorshofn
+ visited_cities[23]: hirtshals
+ visited_cities[24]: hannover
+ visited_cities[25]: strasbourg
+ visited_cities[26]: lyon
+ visited_cities[27]: barcelona
+ visited_cities[28]: ajaccio
+ visited_cities[29]: calvi
+ visited_cities[30]: cagliari
+ visited_cities[31]: palermo
+ visited_cities[32]: messina
+ visited_cities[33]: catanzaro
+ visited_cities[34]: madrid
+ visited_cities[35]: coimbra
+ visited_cities[36]: porto
+ visited_cities[37]: a_coruna
+ visited_cities_count: 38
+ visited_cities_count[0]: 3
+ visited_cities_count[1]: 1
+ visited_cities_count[2]: 1
+ visited_cities_count[3]: 2
+ visited_cities_count[4]: 1
+ visited_cities_count[5]: 1
+ visited_cities_count[6]: 2
+ visited_cities_count[7]: 1
+ visited_cities_count[8]: 1
+ visited_cities_count[9]: 1
+ visited_cities_count[10]: 1
+ visited_cities_count[11]: 2
+ visited_cities_count[12]: 1
+ visited_cities_count[13]: 2
+ visited_cities_count[14]: 1
+ visited_cities_count[15]: 1
+ visited_cities_count[16]: 1
+ visited_cities_count[17]: 1
+ visited_cities_count[18]: 1
+ visited_cities_count[19]: 1
+ visited_cities_count[20]: 1
+ visited_cities_count[21]: 1
+ visited_cities_count[22]: 1
+ visited_cities_count[23]: 1
+ visited_cities_count[24]: 1
+ visited_cities_count[25]: 1
+ visited_cities_count[26]: 1
+ visited_cities_count[27]: 1
+ visited_cities_count[28]: 1
+ visited_cities_count[29]: 1
+ visited_cities_count[30]: 1
+ visited_cities_count[31]: 1
+ visited_cities_count[32]: 1
+ visited_cities_count[33]: 1
+ visited_cities_count[34]: 1
+ visited_cities_count[35]: 1
+ visited_cities_count[36]: 1
+ visited_cities_count[37]: 1
+ last_visited_city: a_coruna
+ discovered_cutscene_items: 0
+ discovered_cutscene_items_states: 0
+ tourist_atlas_log_units: 0
+ tourist_atlas_log_flags: 0
+ unlocked_dealers: 12
+ unlocked_dealers[0]: stuttgart
+ unlocked_dealers[1]: munchen
+ unlocked_dealers[2]: bratislava
+ unlocked_dealers[3]: budapest
+ unlocked_dealers[4]: kobenhavn
+ unlocked_dealers[5]: zurich
+ unlocked_dealers[6]: nurnberg
+ unlocked_dealers[7]: salzburg
+ unlocked_dealers[8]: hannover
+ unlocked_dealers[9]: barcelona
+ unlocked_dealers[10]: ajaccio
+ unlocked_dealers[11]: madrid
+ unlocked_recruitments: 8
+ unlocked_recruitments[0]: kobenhavn
+ unlocked_recruitments[1]: koln
+ unlocked_recruitments[2]: mannheim
+ unlocked_recruitments[3]: zurich
+ unlocked_recruitments[4]: nurnberg
+ unlocked_recruitments[5]: oslo
+ unlocked_recruitments[6]: hannover
+ unlocked_recruitments[7]: madrid
+ total_screeshot_count: 1
+ undamaged_cargo_row: 3
+ service_visit_count: 8
+ last_service_pos: (&46ba8db0, &3fe30000, &4783746f)
+ gas_station_visit_count: 10
+ last_gas_station_pos: (&c7a98f9a, &41b82800, &47276f08)
+ emergency_call_count: 0
+ ai_crash_count: 39
+ truck_color_change_count: 0
+ red_light_fine_count: 16
+ cancelled_job_count: 1
+ total_fuel_litres: 4322
+ total_fuel_price: 9914
+ transported_cargo_types: 17
+ transported_cargo_types[0]: used_plast_c
+ transported_cargo_types[1]: hi_volt_cabl
+ transported_cargo_types[2]: spher_valves
+ transported_cargo_types[3]: boric_acid
+ transported_cargo_types[4]: radiators
+ transported_cargo_types[5]: truck_batt
+ transported_cargo_types[6]: pet_food
+ transported_cargo_types[7]: wheat
+ transported_cargo_types[8]: forage_harv
+ transported_cargo_types[9]: propane
+ transported_cargo_types[10]: diesel
+ transported_cargo_types[11]: outdr_flr_tl
+ transported_cargo_types[12]: mob_crusher
+ transported_cargo_types[13]: locomotive
+ transported_cargo_types[14]: grapes
+ transported_cargo_types[15]: elect_wiring
+ transported_cargo_types[16]: jcb_wload457
+ achieved_feats: 0
+ discovered_roads: 0
+ discovered_items: 0
+ drivers_offer: 0
+ default_training_policy: adr
+ used_vehicle_assortment: null
+ freelance_truck_offer: null
+ trucks_bought_online: 4
+ special_cargo_timer: 0
+ screen_access_list: 17
+ screen_access_list[0]: "overview.compman_w"
+ screen_access_list[1]: "screen.real_estate"
+ screen_access_list[2]: "screen.bus.skills"
+ screen_access_list[3]: "jobs.bus.company"
+ screen_access_list[4]: "jobs.bus.tourist.company"
+ screen_access_list[5]: "jobs.car_dispatch"
+ screen_access_list[6]: "bus.garage"
+ screen_access_list[7]: "car.garage"
+ screen_access_list[8]: "screen.bus_mode"
+ screen_access_list[9]: "screen.car_mode"
+ screen_access_list[10]: "trailer.adjust"
+ screen_access_list[11]: "jobs.cargo.market"
+ screen_access_list[12]: "jobs.cargo.market.company_s"
+ screen_access_list[13]: "jobs.external.market.online"
+ screen_access_list[14]: "jobs.external.market.online_s"
+ screen_access_list[15]: "trailer.config"
+ screen_access_list[16]: "screen.load"
+ screen_visit_list: 13
+ screen_visit_list[0]: "screen.real_estate"
+ screen_visit_list[1]: "truck.eshop"
+ screen_visit_list[2]: "trailer.dealer"
+ screen_visit_list[3]: "jobs.external.market.online_s"
+ screen_visit_list[4]: "screen.bus.skills"
+ screen_visit_list[5]: "jobs.car_quick"
+ screen_visit_list[6]: "screen.atlas"
+ screen_visit_list[7]: "car.shop"
+ screen_visit_list[8]: "jobs.car_dispatch"
+ screen_visit_list[9]: "jobs.bus"
+ screen_visit_list[10]: "bus.eshop"
+ screen_visit_list[11]: "jobs.bus.company"
+ screen_visit_list[12]: "jobs.bus.tourist.company"
+ driver_pool: 0
+ total_distance: 0
+ total_distances_by_mode: 3
+ total_distances_by_mode[0]: 8828
+ total_distances_by_mode[1]: 0
+ total_distances_by_mode[2]: 0
+ total_real_time: 0
+ real_time_seconds: &4130d42e
+ total_real_times_by_mode: 3
+ total_real_times_by_mode[0]: 942
+ total_real_times_by_mode[1]: 0
+ total_real_times_by_mode[2]: 0
+ game_time_initial: nil
+ total_game_times_by_mode: 3
+ total_game_times_by_mode[0]: 19047
+ total_game_times_by_mode[1]: 0
+ total_game_times_by_mode[2]: 0
+ registry: null
+ company_jobs_invitation_sent: true
+ company_check_hash: 2364641201098577359
+ relations: 20
+ relations[0]: 67
+ relations[1]: 249
+ relations[2]: 116
+ relations[3]: 123
+ relations[4]: 4
+ relations[5]: 58
+ relations[6]: 181
+ relations[7]: 190
+ relations[8]: 145
+ relations[9]: 11
+ relations[10]: 113
+ relations[11]: 233
+ relations[12]: 80
+ relations[13]: 229
+ relations[14]: 205
+ relations[15]: 64
+ relations[16]: 116
+ relations[17]: 198
+ relations[18]: 88
+ relations[19]: 23
+ car_job_log: null
+ car_job_generator: null
+ bus_stops: 0
+ bus_job_log: null
+ bus_experience_points: 0
+}
+
+bank : _nameless.206.3946.aa48 {
+ money_account: 38101
+ coinsurance_fixed: 1000
+ coinsurance_ratio: &3dcccccd
+ accident_severity: &408d1c95
+ loans: 0
+ app_enabled: true
+ loan_limit: 500000
+ payment_timer: &479072c3
+ overdraft: false
+ overdraft_timer: &47f0a91f
+ overdraft_warn_count: 0
+ sell_players_truck_later: false
+ sell_players_trailer_later: false
+}
+
+player : _nameless.206.3353.6c38 {
+ hq_city: munchen
+ my_vehicles_mode: truck
+ my_vehicles: 3
+ my_vehicles[0]: _nameless.206.3946.acc8
+ my_vehicles[1]: _nameless.206.3946.afe8
+ my_vehicles[2]: _nameless.206.3946.b088
+ assigned_vehicles_mode: truck
+ assigned_vehicles: _nameless.206.3946.b128
+ trailers: 0
+ trailer_utilization_logs: 0
+ trailer_defs: 0
+ buses: 0
+ cars: 0
+ schedule_transfer_to_hq: false
+ schedule_quick_travel: false
+ flags: 25105517
+ vehicle_mode_flags: 0
+ gas_pump_money_debt: 0
+ current_job: null
+ current_bus_job: null
+ current_car_job: null
+ selected_job: null
+ selected_bus_offer: null
+ driving_time: 403
+ last_sleep_time: 0
+ time_since_mandatory_break: 403
+ on_break_time: 0
+ free_roam_distance: 75
+ discovary_distance: &4686ccc3
+ dismissed_drivers: 0
+ trucks: 3
+ trucks[0]: _nameless.206.398b.d488
+ trucks[1]: _nameless.206.398b.f1c8
+ trucks[2]: _nameless.206.398b.b508
+ truck_profit_logs: 3
+ truck_profit_logs[0]: _nameless.206.3987.c018
+ truck_profit_logs[1]: _nameless.206.3987.bf38
+ truck_profit_logs[2]: _nameless.206.3987.c168
+ drivers: 3
+ drivers[0]: driver.1
+ drivers[1]: driver.148
+ drivers[2]: driver.344
+ driver_flags: 3
+ driver_flags[0]: 0
+ driver_flags[1]: 0
+ driver_flags[2]: 0
+ driver_readiness_timer: 3
+ driver_readiness_timer[0]: 0
+ driver_readiness_timer[1]: 0
+ driver_readiness_timer[2]: 0
+ driver_undrivable_truck_timers: 3
+ driver_undrivable_truck_timers[0]: 0
+ driver_undrivable_truck_timers[1]: 0
+ driver_undrivable_truck_timers[2]: 0
+ driver_quit_warned: 0
+ assigned_truck: null
+ truck_placement: (0, 0, 0) (1; 0, 0, 0)
+ assigned_trailer: null
+ trailer_placement: (0, 0, 0) (1; 0, 0, 0)
+ slave_trailer_placements: 0
+ assigned_trailer_connected: false
+ my_truck: null
+ my_truck_placement: (0, 0, 0) (1; 0, 0, 0)
+ my_truck_placement_valid: false
+ my_trailer: null
+ my_trailer_placement: (0, 0, 0) (1; 0, 0, 0)
+ my_slave_trailer_placements: 0
+ my_trailer_attached: false
+ my_trailer_used: false
+}
+
+player_vehicles : _nameless.206.3946.acc8 {
+ vehicle: _nameless.206.398b.b508
+ stored_vehicle_placement: (&c7a4bbb2, &bf6c66d2, &46d579ce) (&be7d4ee2; &3a1a2a47, &3f780b2e, &3902dbe5)
+ stored_vehicle_city: city.a_coruna
+ stored_vehicle_country: null
+ trailer: null
+ stored_trailer_placements: 0
+ stored_trailer_attached: false
+}
+
+player_vehicles : _nameless.206.3946.afe8 {
+ vehicle: null
+ stored_vehicle_placement: (0, 0, 0) (1; 0, 0, 0)
+ stored_vehicle_city: null
+ stored_vehicle_country: null
+ trailer: null
+ stored_trailer_placements: 0
+ stored_trailer_attached: false
+}
+
+player_vehicles : _nameless.206.3946.b088 {
+ vehicle: null
+ stored_vehicle_placement: (0, 0, 0) (1; 0, 0, 0)
+ stored_vehicle_city: null
+ stored_vehicle_country: null
+ trailer: null
+ stored_trailer_placements: 0
+ stored_trailer_attached: false
+}
+
+player_vehicles : _nameless.206.3946.b128 {
+ vehicle: _nameless.206.398b.b508
+ stored_vehicle_placement: (&c7a3fc02, &bf13d32b, &46d44c70) (&3f2f21c6; &3a52d2be, &3f3ab892, &ba60c4ee)
+ stored_vehicle_city: null
+ stored_vehicle_country: null
+ trailer: null
+ stored_trailer_placements: 0
+ stored_trailer_attached: false
+}
+
+vehicle : _nameless.206.398b.d488 {
+ engine_wear: 0
+ transmission_wear: 0
+ cabin_wear: 0
+ engine_wear_unfixable: &3a99db58
+ transmission_wear_unfixable: &3a39a507
+ cabin_wear_unfixable: &3e386bf9
+ fuel_relative: 1
+ rheostat_factor: &3f400000
+ user_mirror_rot: 9
+ user_mirror_rot[0]: (1; 0, 0, 0)
+ user_mirror_rot[1]: (1; 0, 0, 0)
+ user_mirror_rot[2]: (1; 0, 0, 0)
+ user_mirror_rot[3]: (1; 0, 0, 0)
+ user_mirror_rot[4]: (1; 0, 0, 0)
+ user_mirror_rot[5]: (1; 0, 0, 0)
+ user_mirror_rot[6]: (1; 0, 0, 0)
+ user_mirror_rot[7]: (1; 0, 0, 0)
+ user_mirror_rot[8]: (1; 0, 0, 0)
+ user_head_offset: (0, 0, 0)
+ user_fov: 0
+ user_wheel_up_down: 0
+ user_wheel_front_back: 0
+ user_mouse_left_right_default: 0
+ user_mouse_up_down_default: 0
+ purchase_time: 612
+ passenger_mass: 0
+ requested_passenger_mass: 0
+ accessories: 55
+ accessories[0]: _nameless.206.3989.77a8
+ accessories[1]: _nameless.206.3989.7268
+ accessories[2]: _nameless.206.3987.8658
+ accessories[3]: _nameless.206.3987.86c8
+ accessories[4]: _nameless.206.3987.8a48
+ accessories[5]: _nameless.206.3987.74d8
+ accessories[6]: _nameless.206.3987.8c78
+ accessories[7]: _nameless.206.3987.81f8
+ accessories[8]: _nameless.206.3987.8738
+ accessories[9]: _nameless.206.3987.7e08
+ accessories[10]: _nameless.206.3968.38e8
+ accessories[11]: _nameless.206.3968.6be8
+ accessories[12]: _nameless.206.3968.5b68
+ accessories[13]: _nameless.206.3968.74e8
+ accessories[14]: _nameless.206.3968.59e8
+ accessories[15]: _nameless.206.3968.72a8
+ accessories[16]: _nameless.206.3968.6ee8
+ accessories[17]: _nameless.206.3968.6168
+ accessories[18]: _nameless.206.3968.6228
+ accessories[19]: _nameless.206.3968.5928
+ accessories[20]: _nameless.206.380c.fb88
+ accessories[21]: _nameless.206.3989.6e48
+ accessories[22]: _nameless.206.3968.6d68
+ accessories[23]: _nameless.206.3968.7368
+ accessories[24]: _nameless.206.3968.56e8
+ accessories[25]: _nameless.206.3968.7428
+ accessories[26]: _nameless.206.3968.60a8
+ accessories[27]: _nameless.206.351b.1098
+ accessories[28]: _nameless.206.3968.5ce8
+ accessories[29]: _nameless.206.3968.6468
+ accessories[30]: _nameless.206.3968.7c68
+ accessories[31]: _nameless.206.3989.78c8
+ accessories[32]: _nameless.206.3968.5aa8
+ accessories[33]: _nameless.206.3968.57a8
+ accessories[34]: _nameless.206.3968.7968
+ accessories[35]: _nameless.206.3987.9308
+ accessories[36]: _nameless.206.3987.9378
+ accessories[37]: _nameless.206.3987.a798
+ accessories[38]: _nameless.206.3987.9b58
+ accessories[39]: _nameless.206.3989.7ce8
+ accessories[40]: _nameless.206.3968.8268
+ accessories[41]: _nameless.206.3989.6ba8
+ accessories[42]: _nameless.206.3968.5868
+ accessories[43]: _nameless.206.3968.8328
+ accessories[44]: _nameless.206.3968.75a8
+ accessories[45]: _nameless.206.3968.7d28
+ accessories[46]: _nameless.206.3968.68e8
+ accessories[47]: _nameless.206.3968.7ae8
+ accessories[48]: _nameless.206.3968.69a8
+ accessories[49]: _nameless.206.3968.5628
+ accessories[50]: _nameless.206.3968.63a8
+ accessories[51]: _nameless.206.3968.80e8
+ accessories[52]: _nameless.206.3989.6ea8
+ accessories[53]: _nameless.206.3968.53e8
+ accessories[54]: _nameless.206.3968.5e68
+ odometer: 103475
+ odometer_float_part: &3e9a0d08
+ integrity_odometer: 103475
+ integrity_odometer_float_part: &3e9c0000
+ trip_fuel_l: 0
+ trip_fuel: 0
+ trip_recuperation_kwh: 0
+ trip_recuperation: 0
+ trip_distance_km: 0
+ trip_distance: 0
+ trip_time_min: 0
+ trip_time: 0
+ license_plate: "DD<offset hshift=4 vshift=-5><img src=/material/ui/lp/germany/b.mat color=FFFFFFFF><offset hshift=4 vshift=5>RI 772|germany"
+ license_plate_type: truck
+ chassis_wear: 0
+ chassis_wear_unfixable: &3b335082
+ wheels_wear: 3
+ wheels_wear[0]: 0
+ wheels_wear[1]: 0
+ wheels_wear[2]: 0
+ wheels_wear_unfixable: 3
+ wheels_wear_unfixable[0]: 0
+ wheels_wear_unfixable[1]: 0
+ wheels_wear_unfixable[2]: 0
+ sliding_axle_offset: 0
+}
+
+vehicle_accessory : _nameless.206.3989.77a8 {
+ data_path: "/def/vehicle/truck/mercedes.actros/data.sii"
+ refund: 0
+}
+
+vehicle_accessory : _nameless.206.3989.7268 {
+ data_path: "/def/vehicle/truck/mercedes.actros/head_light/standard.sii"
+ refund: 180
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.8658 {
+ offset: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/f_tire/1.sii"
+ refund: 1430
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.86c8 {
+ offset: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/f_disc/front_disc_02_matt_gray.sii"
+ refund: 1200
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.8a48 {
+ offset: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/f_hub/front_hub_01.sii"
+ refund: 600
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.74d8 {
+ offset: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/f_nuts/front_nuts_01_steel.sii"
+ refund: 450
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.8c78 {
+ offset: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/r_tire/1.sii"
+ refund: 3640
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.81f8 {
+ offset: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/r_disc/rear_disc_01_matt_gray.sii"
+ refund: 4800
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.8738 {
+ offset: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/r_hub/rear_hub_01.sii"
+ refund: 675
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.7e08 {
+ offset: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/r_nuts/rear_nuts_01_steel.sii"
+ refund: 450
+}
+
+vehicle_addon_accessory : _nameless.206.3968.38e8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/mercedes.actros/accessory/cab_doorstep/shape1_bc.sii"
+ refund: 1860
+}
+
+vehicle_addon_accessory : _nameless.206.3968.6be8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/mercedes.actros/accessory/doorstep/shape1_bc.sii"
+ refund: 1860
+}
+
+vehicle_addon_accessory : _nameless.206.3968.5b68 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/mercedes.actros/accessory/s_mirror/shape1.sii"
+ refund: 570
+}
+
+vehicle_addon_accessory : _nameless.206.3968.74e8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/mercedes.actros/accessory/f_fender_cab/paint_b_c.sii"
+ refund: 3240
+}
+
+vehicle_addon_accessory : _nameless.206.3968.59e8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/mercedes.actros/accessory/f_fender_chs/paint_b_c.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.206.3968.72a8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/mercedes.actros/accessory/f_intake_cab/paint_b_c.sii"
+ refund: 2100
+}
+
+vehicle_addon_accessory : _nameless.206.3968.6ee8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/mercedes.actros/accessory/f_wnd_frame/plastic.sii"
+ refund: 720
+}
+
+vehicle_addon_accessory : _nameless.206.3968.6168 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/mercedes.actros/accessory/f_light_chs/stock.sii"
+ refund: 600
+}
+
+vehicle_addon_accessory : _nameless.206.3968.6228 {
+ slot_name: 8
+ slot_name[0]: slot_47
+ slot_name[1]: slot_46
+ slot_name[2]: slot_51
+ slot_name[3]: slot_50
+ slot_name[4]: slot_36
+ slot_name[5]: slot_35
+ slot_name[6]: slot_37
+ slot_name[7]: slot_38
+ slot_hookup: 8
+ slot_hookup[0]: "strobe01.addon_hookup"
+ slot_hookup[1]: "strobe01.addon_hookup"
+ slot_hookup[2]: "strobe01.addon_hookup"
+ slot_hookup[3]: "strobe01.addon_hookup"
+ slot_hookup[4]: "strobe01.addon_hookup"
+ slot_hookup[5]: "strobe01.addon_hookup"
+ slot_hookup[6]: "strobe01.addon_hookup"
+ slot_hookup[7]: "strobe01.addon_hookup"
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/mercedes.actros/accessory/f_inlay_cab/plastic_b_c.sii"
+ refund: 1400
+}
+
+vehicle_addon_accessory : _nameless.206.3968.5928 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/mercedes.actros/accessory/f_inlay_chs/stock.sii"
+ refund: 0
+}
+
+vehicle_paint_job_accessory : _nameless.206.380c.fb88 {
+ mask_r_color: (1, 0, 0)
+ mask_g_color: (0, 1, 0)
+ mask_b_color: (0, 0, 1)
+ flake_color: (0, 1, 0)
+ flip_color: (1, 0, 0)
+ base_color: (&3ea3126f, &3e988659, &3e84a8c1)
+ data_path: "/def/vehicle/truck/mercedes.actros/paint_job/color2.sii"
+ refund: 3250
+}
+
+vehicle_accessory : _nameless.206.3989.6e48 {
+ data_path: "/def/vehicle/truck/mercedes.actros/cabin/cabin_l_lw.sii"
+ refund: 13440
+}
+
+vehicle_addon_accessory : _nameless.206.3968.6d68 {
+ slot_name: 4
+ slot_name[0]: slot_5
+ slot_name[1]: slot_6
+ slot_name[2]: slot_4
+ slot_name[3]: slot_7
+ slot_hookup: 4
+ slot_hookup[0]: "bibendum.addon_hookup"
+ slot_hookup[1]: "bibendum.addon_hookup"
+ slot_hookup[2]: "cyl02.addon_hookup"
+ slot_hookup[3]: "cyl02.addon_hookup"
+ paint_color: (&3ea0b11b, &3ea0b11b, &3ea0b11b)
+ data_path: "/def/vehicle/truck/mercedes.actros/accessory/r_grill/hss_paint2_led.sii"
+ refund: 4080
+}
+
+vehicle_addon_accessory : _nameless.206.3968.7368 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/mercedes.actros/accessory/f_logo/underlit.sii"
+ refund: 500
+}
+
+vehicle_addon_accessory : _nameless.206.3968.56e8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/mercedes.actros/accessory/r_mudflap/actros.sii"
+ refund: 360
+}
+
+vehicle_addon_accessory : _nameless.206.3968.7428 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/mercedes.actros/accessory/sunshld/shape8.sii"
+ refund: 2280
+}
+
+vehicle_addon_accessory : _nameless.206.3968.60a8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/mercedes.actros/accessory/mirror/shape1.sii"
+ refund: 4800
+}
+
+vehicle_drv_plate_accessory : _nameless.206.351b.1098 {
+ text: ""
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/mercedes.actros/accessory/codrv_plate/actrs_logo_codr.sii"
+ refund: 210
+}
+
+vehicle_addon_accessory : _nameless.206.3968.5ce8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/mercedes.actros/accessory/l_horn/horn_07smsb.sii"
+ refund: 990
+}
+
+vehicle_addon_accessory : _nameless.206.3968.6468 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/mercedes.actros/accessory/r_horn/horn_07smsb.sii"
+ refund: 990
+}
+
+vehicle_addon_accessory : _nameless.206.3968.7c68 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/mercedes.actros/accessory/s_strip/chrome.sii"
+ refund: 3000
+}
+
+vehicle_accessory : _nameless.206.3989.78c8 {
+ data_path: "/def/vehicle/truck/mercedes.actros/chassis/6x4bc.sii"
+ refund: 58560
+}
+
+vehicle_addon_accessory : _nameless.206.3968.5aa8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/mercedes.actros/accessory/badge_a/badge_26xx.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.206.3968.57a8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/mercedes.actros/accessory/r_fender/6x2_plastic.sii"
+ refund: 2480
+}
+
+vehicle_addon_accessory : _nameless.206.3968.7968 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/mercedes.actros/accessory/r_bumper/6x2_stock.sii"
+ refund: 780
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.9308 {
+ offset: 2
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/r_tire/1.sii"
+ refund: 3640
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.9378 {
+ offset: 2
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/r_disc/rear_disc_01_matt_gray.sii"
+ refund: 4800
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.a798 {
+ offset: 2
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/r_hub/rear_hub_01.sii"
+ refund: 675
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.9b58 {
+ offset: 2
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/r_nuts/rear_nuts_01_steel.sii"
+ refund: 450
+}
+
+vehicle_accessory : _nameless.206.3989.7ce8 {
+ data_path: "/def/vehicle/truck/mercedes.actros/engine/1848ls.sii"
+ refund: 15540
+}
+
+vehicle_addon_accessory : _nameless.206.3968.8268 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/mercedes.actros/accessory/badge_b/badge_xx48.sii"
+ refund: 0
+}
+
+vehicle_accessory : _nameless.206.3989.6ba8 {
+ data_path: "/def/vehicle/truck/mercedes.actros/transmission/12_speed_ret_over.sii"
+ refund: 17000
+}
+
+vehicle_addon_accessory : _nameless.206.3968.5868 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/mercedes.actros/accessory/beacon/shape1.sii"
+ refund: 3120
+}
+
+vehicle_addon_accessory : _nameless.206.3968.8328 {
+ slot_name: 6
+ slot_name[0]: slot_2
+ slot_name[1]: slot_0
+ slot_name[2]: slot_1
+ slot_name[3]: slot_3
+ slot_name[4]: slot_5
+ slot_name[5]: slot_4
+ slot_hookup: 6
+ slot_hookup[0]: "strobe01.addon_hookup"
+ slot_hookup[1]: "strobe01.addon_hookup"
+ slot_hookup[2]: "strobe01.addon_hookup"
+ slot_hookup[3]: "strobe01.addon_hookup"
+ slot_hookup[4]: "smalllight10.addon_hookup"
+ slot_hookup[5]: "smalllight9.addon_hookup"
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/mercedes.actros/accessory/b_grill/shape4.sii"
+ refund: 1710
+}
+
+vehicle_addon_accessory : _nameless.206.3968.75a8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/mercedes.actros/accessory/cor_def/chrome_trim_bc.sii"
+ refund: 2160
+}
+
+vehicle_addon_accessory : _nameless.206.3968.7d28 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/mercedes.actros/accessory/windowtrim/windowtrim_3.sii"
+ refund: 780
+}
+
+vehicle_addon_accessory : _nameless.206.3968.68e8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/mercedes.actros/accessory/doortrim/doortrim_4.sii"
+ refund: 690
+}
+
+vehicle_addon_accessory : _nameless.206.3968.7ae8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/mercedes.actros/accessory/doorhndl/shape4.sii"
+ refund: 2520
+}
+
+vehicle_addon_accessory : _nameless.206.3968.69a8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/mercedes.actros/accessory/trlr_cables/stock.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.206.3968.5628 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/mercedes.actros/accessory/f_bumper/chrometrim_b_c.sii"
+ refund: 1875
+}
+
+vehicle_addon_accessory : _nameless.206.3968.63a8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/mercedes.actros/accessory/s_guard/stoneguard_2.sii"
+ refund: 6400
+}
+
+vehicle_addon_accessory : _nameless.206.3968.80e8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/mercedes.actros/accessory/r_fendr_top/6x2_paintable.sii"
+ refund: 1760
+}
+
+vehicle_accessory : _nameless.206.3989.6ea8 {
+ data_path: "/def/vehicle/truck/mercedes.actros/interior/lowroof.sii"
+ refund: 12480
+}
+
+vehicle_addon_accessory : _nameless.206.3968.53e8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/mercedes.actros/accessory/steering_w/standard.sii"
+ refund: 1200
+}
+
+vehicle_addon_accessory : _nameless.206.3968.5e68 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/mercedes.actros/accessory/set_glass/set4.dlc_toys.sii"
+ refund: 1
+}
+
+vehicle : _nameless.206.398b.f1c8 {
+ engine_wear: 0
+ transmission_wear: 0
+ cabin_wear: 0
+ engine_wear_unfixable: &3e1ef388
+ transmission_wear_unfixable: &3cc01ea3
+ cabin_wear_unfixable: &3e10fcc9
+ fuel_relative: 1
+ rheostat_factor: &3f400000
+ user_mirror_rot: 0
+ user_head_offset: (0, 0, 0)
+ user_fov: 0
+ user_wheel_up_down: 0
+ user_wheel_front_back: 0
+ user_mouse_left_right_default: 0
+ user_mouse_up_down_default: 0
+ purchase_time: 10625
+ passenger_mass: 0
+ requested_passenger_mass: 0
+ accessories: 27
+ accessories[0]: _nameless.206.3989.7bc8
+ accessories[1]: _nameless.206.3989.7e68
+ accessories[2]: _nameless.206.3989.6968
+ accessories[3]: _nameless.206.3989.80a8
+ accessories[4]: _nameless.206.3989.7b68
+ accessories[5]: _nameless.206.3989.7da8
+ accessories[6]: _nameless.206.3989.6908
+ accessories[7]: _nameless.206.380c.e378
+ accessories[8]: _nameless.206.3968.54a8
+ accessories[9]: _nameless.206.3968.6528
+ accessories[10]: _nameless.206.3968.65e8
+ accessories[11]: _nameless.206.3968.7de8
+ accessories[12]: _nameless.206.3968.5c28
+ accessories[13]: _nameless.206.3968.7668
+ accessories[14]: _nameless.206.3968.66a8
+ accessories[15]: _nameless.206.3968.7068
+ accessories[16]: _nameless.206.3968.5da8
+ accessories[17]: _nameless.206.3987.90d8
+ accessories[18]: _nameless.206.3987.9a78
+ accessories[19]: _nameless.206.3987.8e38
+ accessories[20]: _nameless.206.3987.a108
+ accessories[21]: _nameless.206.3987.a338
+ accessories[22]: _nameless.206.3987.a568
+ accessories[23]: _nameless.206.3987.9ae8
+ accessories[24]: _nameless.206.3987.9c38
+ accessories[25]: _nameless.206.3968.7728
+ accessories[26]: _nameless.206.3968.5f28
+ odometer: 587353
+ odometer_float_part: 0
+ integrity_odometer: 587353
+ integrity_odometer_float_part: 0
+ trip_fuel_l: 0
+ trip_fuel: 0
+ trip_recuperation_kwh: 0
+ trip_recuperation: 0
+ trip_distance_km: 0
+ trip_distance: 0
+ trip_time_min: 0
+ trip_time: 0
+ license_plate: "DD<offset hshift=4 vshift=-5><img src=/material/ui/lp/germany/b.mat color=FFFFFFFF><offset hshift=4 vshift=5>TN 190|germany"
+ license_plate_type: truck
+ chassis_wear: 0
+ chassis_wear_unfixable: &3df30120
+ wheels_wear: 2
+ wheels_wear[0]: 0
+ wheels_wear[1]: 0
+ wheels_wear_unfixable: 2
+ wheels_wear_unfixable[0]: 0
+ wheels_wear_unfixable[1]: 0
+ sliding_axle_offset: 0
+}
+
+vehicle_accessory : _nameless.206.3989.7bc8 {
+ data_path: "/def/vehicle/truck/iveco.hiway/data.sii"
+ refund: 0
+}
+
+vehicle_accessory : _nameless.206.3989.7e68 {
+ data_path: "/def/vehicle/truck/iveco.hiway/chassis/4x2.sii"
+ refund: 0
+}
+
+vehicle_accessory : _nameless.206.3989.6968 {
+ data_path: "/def/vehicle/truck/iveco.hiway/cabin/hiway_cab.sii"
+ refund: 0
+}
+
+vehicle_accessory : _nameless.206.3989.80a8 {
+ data_path: "/def/vehicle/truck/iveco.hiway/interior/standard.sii"
+ refund: 0
+}
+
+vehicle_accessory : _nameless.206.3989.7b68 {
+ data_path: "/def/vehicle/truck/iveco.hiway/engine/cursor9_310hp.sii"
+ refund: 0
+}
+
+vehicle_accessory : _nameless.206.3989.7da8 {
+ data_path: "/def/vehicle/truck/iveco.hiway/transmission/12_speed.sii"
+ refund: 0
+}
+
+vehicle_accessory : _nameless.206.3989.6908 {
+ data_path: "/def/vehicle/truck/iveco.hiway/head_light/standard.sii"
+ refund: 0
+}
+
+vehicle_paint_job_accessory : _nameless.206.380c.e378 {
+ mask_r_color: (1, 0, 0)
+ mask_g_color: (0, 1, 0)
+ mask_b_color: (0, 0, 1)
+ flake_color: (0, 1, 0)
+ flip_color: (1, 0, 0)
+ base_color: (&3f1fb7e9, &3f173190, &3f03d07d)
+ data_path: "/def/vehicle/truck/iveco.hiway/paint_job/color7.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.206.3968.54a8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/iveco.hiway/accessory/doorstep/shape1.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.206.3968.6528 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/iveco.hiway/accessory/doorhndl/shape1.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.206.3968.65e8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/iveco.hiway/accessory/mirror/shape3.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.206.3968.7de8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/iveco.hiway/accessory/sunshld/shape1.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.206.3968.5c28 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/iveco.hiway/accessory/f_mirror/shape1.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.206.3968.7668 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/iveco.hiway/accessory/s_mirror/shape1.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.206.3968.66a8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/iveco.hiway/badge/badge_310.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.206.3968.7068 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/iveco.hiway/accessory/sideskirt/shape1.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.206.3968.5da8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/iveco.hiway/accessory/exhaust_l/shape14.sii"
+ refund: 0
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.90d8 {
+ offset: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/f_tire/1.sii"
+ refund: 0
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.9a78 {
+ offset: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/f_disc/front_disc_02_matt_gray.sii"
+ refund: 0
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.8e38 {
+ offset: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/f_hub/front_hub_01.sii"
+ refund: 0
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.a108 {
+ offset: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/f_nuts/front_nuts_01_steel.sii"
+ refund: 0
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.a338 {
+ offset: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/r_tire/1.sii"
+ refund: 0
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.a568 {
+ offset: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/r_disc/rear_disc_01_matt_gray.sii"
+ refund: 0
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.9ae8 {
+ offset: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/r_hub/rear_hub_01.sii"
+ refund: 0
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.9c38 {
+ offset: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/r_nuts/rear_nuts_01_steel.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.206.3968.7728 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/iveco.hiway/accessory/steering_w/standard.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.206.3968.5f28 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/iveco.hiway/accessory/trlr_cables/stock.sii"
+ refund: 0
+}
+
+vehicle : _nameless.206.398b.b508 {
+ engine_wear: &3b48a2f7
+ transmission_wear: &3b48a2f7
+ cabin_wear: &3da68f54
+ engine_wear_unfixable: &3bedddaf
+ transmission_wear_unfixable: &3c9e46ef
+ cabin_wear_unfixable: &3db189b4
+ fuel_relative: &3f367cdb
+ rheostat_factor: &3f400000
+ user_mirror_rot: 9
+ user_mirror_rot[0]: (1; 0, 0, 0)
+ user_mirror_rot[1]: (1; 0, 0, 0)
+ user_mirror_rot[2]: (1; 0, 0, 0)
+ user_mirror_rot[3]: (1; 0, 0, 0)
+ user_mirror_rot[4]: (1; 0, 0, 0)
+ user_mirror_rot[5]: (1; 0, 0, 0)
+ user_mirror_rot[6]: (1; 0, 0, 0)
+ user_mirror_rot[7]: (1; 0, 0, 0)
+ user_mirror_rot[8]: (1; 0, 0, 0)
+ user_head_offset: (0, 0, 0)
+ user_fov: 0
+ user_wheel_up_down: 0
+ user_wheel_front_back: 0
+ user_mouse_left_right_default: 0
+ user_mouse_up_down_default: 0
+ purchase_time: 13551
+ passenger_mass: 0
+ requested_passenger_mass: 0
+ accessories: 75
+ accessories[0]: _nameless.206.3989.7e08
+ accessories[1]: _nameless.206.3989.71a8
+ accessories[2]: _nameless.206.3989.7aa8
+ accessories[3]: _nameless.206.3968.5568
+ accessories[4]: _nameless.206.3968.6a68
+ accessories[5]: _nameless.206.3968.5fe8
+ accessories[6]: _nameless.206.3968.81a8
+ accessories[7]: _nameless.206.3968.62e8
+ accessories[8]: _nameless.206.3987.a3a8
+ accessories[9]: _nameless.206.3968.7128
+ accessories[10]: _nameless.206.3968.6768
+ accessories[11]: _nameless.206.3968.7ba8
+ accessories[12]: _nameless.206.3968.77e8
+ accessories[13]: _nameless.206.3968.7a28
+ accessories[14]: _nameless.206.3968.6828
+ accessories[15]: _nameless.206.3968.6b28
+ accessories[16]: _nameless.206.3968.7ea8
+ accessories[17]: _nameless.206.3968.6ca8
+ accessories[18]: _nameless.206.3987.a028
+ accessories[19]: _nameless.206.3968.6e28
+ accessories[20]: _nameless.206.3987.a8e8
+ accessories[21]: _nameless.206.3987.9768
+ accessories[22]: _nameless.206.3968.6fa8
+ accessories[23]: _nameless.206.3989.6d28
+ accessories[24]: _nameless.206.3987.97d8
+ accessories[25]: _nameless.206.3987.9538
+ accessories[26]: _nameless.206.3989.70e8
+ accessories[27]: _nameless.206.3968.78a8
+ accessories[28]: _nameless.206.3968.7f68
+ accessories[29]: _nameless.206.3989.7208
+ accessories[30]: _nameless.206.380c.f138
+ accessories[31]: _nameless.206.3968.71e8
+ accessories[32]: _nameless.206.3968.8028
+ accessories[33]: _nameless.206.3968.9be8
+ accessories[34]: _nameless.206.3968.8928
+ accessories[35]: _nameless.206.3968.a128
+ accessories[36]: _nameless.206.351b.2138
+ accessories[37]: _nameless.206.3968.9d68
+ accessories[38]: _nameless.206.3968.96a8
+ accessories[39]: _nameless.206.3968.a5a8
+ accessories[40]: _nameless.206.3968.9768
+ accessories[41]: _nameless.206.3968.9a68
+ accessories[42]: _nameless.206.3968.8c28
+ accessories[43]: _nameless.206.3968.b0e8
+ accessories[44]: _nameless.206.3987.9d18
+ accessories[45]: _nameless.206.3968.9468
+ accessories[46]: _nameless.206.3987.9d88
+ accessories[47]: _nameless.206.3987.a098
+ accessories[48]: _nameless.206.3987.9688
+ accessories[49]: _nameless.206.3987.a178
+ accessories[50]: _nameless.206.3987.a1e8
+ accessories[51]: _nameless.206.3968.a668
+ accessories[52]: _nameless.206.3968.a8a8
+ accessories[53]: _nameless.206.3968.a068
+ accessories[54]: _nameless.206.3968.9228
+ accessories[55]: _nameless.206.3968.90a8
+ accessories[56]: _nameless.206.3968.8aa8
+ accessories[57]: _nameless.206.3968.89e8
+ accessories[58]: _nameless.206.3968.aa28
+ accessories[59]: _nameless.206.3968.8da8
+ accessories[60]: _nameless.206.3968.9e28
+ accessories[61]: _nameless.206.3968.a1e8
+ accessories[62]: _nameless.206.3968.8b68
+ accessories[63]: _nameless.206.3989.87c8
+ accessories[64]: _nameless.206.3968.a368
+ accessories[65]: _nameless.206.3968.8ce8
+ accessories[66]: _nameless.206.3968.86e8
+ accessories[67]: _nameless.206.3968.a968
+ accessories[68]: _nameless.206.3968.8e68
+ accessories[69]: _nameless.206.3968.aba8
+ accessories[70]: _nameless.206.3968.8f28
+ accessories[71]: _nameless.206.3968.b1a8
+ accessories[72]: _nameless.206.3968.9b28
+ accessories[73]: _nameless.206.3968.b268
+ accessories[74]: _nameless.206.351b.0538
+ odometer: 3865
+ odometer_float_part: &3ebd4d9f
+ integrity_odometer: 3865
+ integrity_odometer_float_part: &3ebd4d9f
+ trip_fuel_l: 1942
+ trip_fuel: &3f3ae7f6
+ trip_recuperation_kwh: 0
+ trip_recuperation: 0
+ trip_distance_km: 3865
+ trip_distance: &42a439d6
+ trip_time_min: 3966
+ trip_time: &3f71796f
+ license_plate: "SPED 001|_germany"
+ license_plate_type: truck
+ chassis_wear: &3dd0332a
+ chassis_wear_unfixable: &3dddec24
+ wheels_wear: 3
+ wheels_wear[0]: &3c95fff2
+ wheels_wear[1]: &3c8b1ead
+ wheels_wear[2]: &3c95fff2
+ wheels_wear_unfixable: 3
+ wheels_wear_unfixable[0]: &3dcb0050
+ wheels_wear_unfixable[1]: &3d933d06
+ wheels_wear_unfixable[2]: &3dcb0050
+ sliding_axle_offset: 0
+}
+
+vehicle_accessory : _nameless.206.3989.7e08 {
+ data_path: "/def/vehicle/truck/scania.s_2016/data.sii"
+ refund: 0
+}
+
+vehicle_accessory : _nameless.206.3989.71a8 {
+ data_path: "/def/vehicle/truck/scania.s_2016/cabin/highline.sii"
+ refund: 38400
+}
+
+vehicle_accessory : _nameless.206.3989.7aa8 {
+ data_path: "/def/vehicle/truck/scania.s_2016/head_light/led.sii"
+ refund: 600
+}
+
+vehicle_addon_accessory : _nameless.206.3968.5568 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/doorhndl/chrome_blk.sii"
+ refund: 1320
+}
+
+vehicle_addon_accessory : _nameless.206.3968.6a68 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/doorstep/shape1.sii"
+ refund: 1860
+}
+
+vehicle_addon_accessory : _nameless.206.3968.5fe8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/f_badge/stock.sii"
+ refund: 150
+}
+
+vehicle_addon_accessory : _nameless.206.3968.81a8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/f_fender/stock_p_sensor_2.sii"
+ refund: 2720
+}
+
+vehicle_addon_accessory : _nameless.206.3968.62e8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/f_fendr_chs/paint.sii"
+ refund: 3240
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.a3a8 {
+ offset: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/f_hub/front_hub_scania.sii"
+ refund: 1080
+}
+
+vehicle_addon_accessory : _nameless.206.3968.7128 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/f_inlay_cab/stock_super.sii"
+ refund: 1400
+}
+
+vehicle_addon_accessory : _nameless.206.3968.6768 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/f_inlay_chs/stock.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.206.3968.7ba8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/f_intake_cab/spacegray.sii"
+ refund: 750
+}
+
+vehicle_addon_accessory : _nameless.206.3968.77e8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/f_intake_chs/spacegray.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.206.3968.7a28 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/f_intk_b_cab/steelgray.sii"
+ refund: 900
+}
+
+vehicle_addon_accessory : _nameless.206.3968.6828 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/f_intk_b_chs/steelgray.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.206.3968.6b28 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/f_light_bmp/covered_p.sii"
+ refund: 90
+}
+
+vehicle_addon_accessory : _nameless.206.3968.7ea8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/f_light_chs/shape1_p.sii"
+ refund: 1440
+}
+
+vehicle_addon_accessory : _nameless.206.3968.6ca8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/f_wnd_frame/stock.sii"
+ refund: 720
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.a028 {
+ offset: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/f_nuts/front_nuts_02_steel.sii"
+ refund: 600
+}
+
+vehicle_addon_accessory : _nameless.206.3968.6e28 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/mirror/painted.sii"
+ refund: 4620
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.a8e8 {
+ offset: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/r_hub/rear_hub_scania.sii"
+ refund: 1125
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.9768 {
+ offset: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/r_nuts/rear_nuts_02_steel.sii"
+ refund: 600
+}
+
+vehicle_addon_accessory : _nameless.206.3968.6fa8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/s_mirror/stock.sii"
+ refund: 570
+}
+
+vehicle_accessory : _nameless.206.3989.6d28 {
+ data_path: "/def/vehicle/truck/scania.s_2016/chassis/6x2_4_midlift.sii"
+ refund: 51120
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.97d8 {
+ offset: 2
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/f_hub/front_hub_01.sii"
+ refund: 600
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.9538 {
+ offset: 2
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/f_nuts/front_nuts_01_steel.sii"
+ refund: 450
+}
+
+vehicle_accessory : _nameless.206.3989.70e8 {
+ data_path: "/def/vehicle/truck/scania.s_2016/engine/dc16_580.sii"
+ refund: 25320
+}
+
+vehicle_addon_accessory : _nameless.206.3968.78a8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/badge/s580.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.206.3968.7f68 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/c_badge/empty.sii"
+ refund: 0
+}
+
+vehicle_accessory : _nameless.206.3989.7208 {
+ data_path: "/def/vehicle/truck/scania.s_2016/transmission/g38cm_r.sii"
+ refund: 18200
+}
+
+vehicle_paint_job_accessory : _nameless.206.380c.f138 {
+ mask_r_color: (1, 0, 0)
+ mask_g_color: (0, 1, 0)
+ mask_b_color: (0, 0, 1)
+ flake_color: (0, 1, 0)
+ flip_color: (1, 0, 0)
+ base_color: (&3bd5635f, 0, &3ebe12e1)
+ data_path: "/def/vehicle/truck/scania.s_2016/paint_job/color0.sii"
+ refund: 5200
+}
+
+vehicle_addon_accessory : _nameless.206.3968.71e8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (&3c1eecbf, &3c1eecbf, &3c1eecbf)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/r_grill/hss_matte8.sii"
+ refund: 17520
+}
+
+vehicle_addon_accessory : _nameless.206.3968.8028 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/r_horn/horn_05slns.sii"
+ refund: 990
+}
+
+vehicle_addon_accessory : _nameless.206.3968.9be8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/l_horn/horn_05slns.sii"
+ refund: 990
+}
+
+vehicle_addon_accessory : _nameless.206.3968.8928 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/f_light_top/modern_v8_bl.sii"
+ refund: 1860
+}
+
+vehicle_addon_accessory : _nameless.206.3968.a128 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/f_mirror/painted.sii"
+ refund: 2160
+}
+
+vehicle_drv_plate_accessory : _nameless.206.351b.2138 {
+ text: "D:UDO"
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/drv_plate/plate.sii"
+ refund: 150
+}
+
+vehicle_addon_accessory : _nameless.206.3968.9d68 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/f_light_mid/chrome_mg_03.sii"
+ refund: 2100
+}
+
+vehicle_addon_accessory : _nameless.206.3968.96a8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/f_logo/underlit.sii"
+ refund: 500
+}
+
+vehicle_addon_accessory : _nameless.206.3968.a5a8 {
+ slot_name: 10
+ slot_name[0]: slot_31
+ slot_name[1]: slot_33
+ slot_name[2]: slot_28
+ slot_name[3]: slot_27
+ slot_name[4]: slot_32
+ slot_name[5]: slot_29
+ slot_name[6]: slot_26
+ slot_name[7]: slot_25
+ slot_name[8]: slot_23
+ slot_name[9]: slot_24
+ slot_hookup: 10
+ slot_hookup[0]: "strobe01.addon_hookup"
+ slot_hookup[1]: "strobe01.addon_hookup"
+ slot_hookup[2]: "strobe01.addon_hookup"
+ slot_hookup[3]: "strobe01.addon_hookup"
+ slot_hookup[4]: "strobe01.addon_hookup"
+ slot_hookup[5]: "strobe01.addon_hookup"
+ slot_hookup[6]: "strobe01.addon_hookup"
+ slot_hookup[7]: "strobe01.addon_hookup"
+ slot_hookup[8]: "strobe01.addon_hookup"
+ slot_hookup[9]: "strobe01.addon_hookup"
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/c_grill/cabgrill_mg_02.sii"
+ refund: 5400
+}
+
+vehicle_addon_accessory : _nameless.206.3968.9768 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/f_equip/super_mid_paint.sii"
+ refund: 360
+}
+
+vehicle_addon_accessory : _nameless.206.3968.9a68 {
+ slot_name: 2
+ slot_name[0]: slot_1
+ slot_name[1]: slot_4
+ slot_hookup: 2
+ slot_hookup[0]: "light3.addon_hookup"
+ slot_hookup[1]: "light3.addon_hookup"
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/f_grill/hss_shape1_led.sii"
+ refund: 4050
+}
+
+vehicle_addon_accessory : _nameless.206.3968.8c28 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/f_bumper/low_40mm_p.sii"
+ refund: 2475
+}
+
+vehicle_addon_accessory : _nameless.206.3968.b0e8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (&3c1eecbf, &3c1eecbf, &3c1eecbf)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/b_grill/hss_matte2c_led.sii"
+ refund: 6300
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.9d18 {
+ offset: 0
+ paint_color: (0, 0, 0)
+ data_path: "/def/vehicle/f_disc/front_disc_05_paintable.sii"
+ refund: 3300
+}
+
+vehicle_addon_accessory : _nameless.206.3968.9468 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/sideskirt/6x2_p_v8_2.sii"
+ refund: 18800
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.9d88 {
+ offset: 0
+ paint_color: (&3efe6dfe, &3cce54a8, &3f00bd2d)
+ data_path: "/def/vehicle/f_tire/315_70_michelin_xline_energy_z2.sii"
+ refund: 2180
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.a098 {
+ offset: 2
+ paint_color: (0, 0, 0)
+ data_path: "/def/vehicle/f_disc/front_disc_02_paintable.sii"
+ refund: 2850
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.9688 {
+ offset: 2
+ paint_color: (&3efe6dfe, &3cce54a8, &3f00bd2d)
+ data_path: "/def/vehicle/f_tire/315_70_michelin_xline_energy_z2.sii"
+ refund: 2180
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.a178 {
+ offset: 0
+ paint_color: (0, 0, 0)
+ data_path: "/def/vehicle/r_disc/rear_disc_01_paintable.sii"
+ refund: 6300
+}
+
+vehicle_wheel_accessory : _nameless.206.3987.a1e8 {
+ offset: 0
+ paint_color: (&3efe6dfe, &3cce54a8, &3f00bd2d)
+ data_path: "/def/vehicle/r_tire/315_70_michelin_xmulti_d.sii"
+ refund: 4850
+}
+
+vehicle_addon_accessory : _nameless.206.3968.a668 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/tank/6x2_600.sii"
+ refund: 960
+}
+
+vehicle_addon_accessory : _nameless.206.3968.a8a8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/r_fendr_top/low_6x2_p.sii"
+ refund: 1800
+}
+
+vehicle_addon_accessory : _nameless.206.3968.a068 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/r_fender/6x2_p.sii"
+ refund: 5440
+}
+
+vehicle_addon_accessory : _nameless.206.3968.9228 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/r_mudflap/r_mudflap_cont_mg.sii"
+ refund: 300
+}
+
+vehicle_addon_accessory : _nameless.206.3968.90a8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/r_bumper/rearbumper_mg_04.sii"
+ refund: 4500
+}
+
+vehicle_addon_accessory : _nameless.206.3968.8aa8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/r_light/stock.sii"
+ refund: 600
+}
+
+vehicle_addon_accessory : _nameless.206.3968.89e8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/s_badge/badge_v8.sii"
+ refund: 450
+}
+
+vehicle_addon_accessory : _nameless.206.3968.aa28 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/trlr_cables/stock.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.206.3968.8da8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/exhaust_m/exhaust_mg_02.sii"
+ refund: 8700
+}
+
+vehicle_addon_accessory : _nameless.206.3968.9e28 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/r_chs_cover/chs_c_mg_6x2_dia.sii"
+ refund: 8200
+}
+
+vehicle_addon_accessory : _nameless.206.3968.a1e8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/windowtrim/windowtrim_mg_01.sii"
+ refund: 780
+}
+
+vehicle_addon_accessory : _nameless.206.3968.8b68 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/s_panel/painted_full.sii"
+ refund: 1260
+}
+
+vehicle_accessory : _nameless.206.3989.87c8 {
+ data_path: "/def/vehicle/truck/scania.s_2016/interior/cab_s_high_smartdash_advanced_v8.sii"
+ refund: 45120
+}
+
+vehicle_addon_accessory : _nameless.206.3968.a368 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/steering_w/v8.sii"
+ refund: 2500
+}
+
+vehicle_addon_accessory : _nameless.206.3968.8ce8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/intlight_bgr/stock.sii"
+ refund: 1020
+}
+
+vehicle_addon_accessory : _nameless.206.3968.86e8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/toyac/head_detective.sii"
+ refund: 100
+}
+
+vehicle_addon_accessory : _nameless.206.3968.a968 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/toystand/plush_daf_e6.sii"
+ refund: 90
+}
+
+vehicle_addon_accessory : _nameless.206.3968.8e68 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/toyseat/at.sii"
+ refund: 160
+}
+
+vehicle_addon_accessory : _nameless.206.3968.aba8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/toybig/sportbag.dlc_toys.sii"
+ refund: 930
+}
+
+vehicle_addon_accessory : _nameless.206.3968.8f28 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/toybed/tirsan_bear.sii"
+ refund: 220
+}
+
+vehicle_addon_accessory : _nameless.206.3968.b1a8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/l_pillow/pillow_goodyear.sii"
+ refund: 90
+}
+
+vehicle_addon_accessory : _nameless.206.3968.9b28 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/intlight_bck/mg_int_light03.sii"
+ refund: 5550
+}
+
+vehicle_addon_accessory : _nameless.206.3968.b268 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/frntglss_mid/lightboard01.sii"
+ refund: 480
+}
+
+vehicle_drv_plate_accessory : _nameless.206.351b.0538 {
+ text: ""
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/scania.s_2016/accessory/codrv_plate/lightboard04.sii"
+ refund: 450
+}
+
+profit_log : _nameless.206.3987.c018 {
+ stats_data: 8
+ stats_data[0]: _nameless.206.35e5.2e18
+ stats_data[1]: _nameless.206.35e5.2fc8
+ stats_data[2]: _nameless.206.35e5.4528
+ stats_data[3]: _nameless.206.35e5.58d8
+ stats_data[4]: _nameless.206.35e5.4f48
+ stats_data[5]: _nameless.206.35e5.6418
+ stats_data[6]: _nameless.206.35e5.5968
+ stats_data[7]: _nameless.206.35e5.5e78
+ acc_distance_free: 200
+ acc_distance_on_job: 3019
+ history_age: nil
+}
+
+profit_log_entry : _nameless.206.35e5.2e18 {
+ revenue: 9242
+ wage: 6462
+ maintenance: 5820
+ fuel: 773
+ distance: 395
+ distance_on_job: true
+ cargo_count: 35
+ cargo: sandwch_pnls
+ source_city: dresden
+ source_company: trameri
+ destination_city: frankfurt
+ destination_company: lkwlog
+ timestamp_day: 7
+}
+
+profit_log_entry : _nameless.206.35e5.2fc8 {
+ revenue: 13283
+ wage: 9328
+ maintenance: 691
+ fuel: 569
+ distance: 378
+ distance_on_job: true
+ cargo_count: 50
+ cargo: air_mails
+ source_city: frankfurt
+ source_company: lkwlog
+ destination_city: dresden
+ destination_company: dfh
+ timestamp_day: 8
+}
+
+profit_log_entry : _nameless.206.35e5.4528 {
+ revenue: 19704
+ wage: 13811
+ maintenance: 1495
+ fuel: 1064
+ distance: 643
+ distance_on_job: true
+ cargo_count: 40
+ cargo: ethane
+ source_city: dresden
+ source_company: ns_oil
+ destination_city: klagenfurt
+ destination_company: trameri
+ timestamp_day: 9
+}
+
+profit_log_entry : _nameless.206.35e5.58d8 {
+ revenue: 20293
+ wage: 13850
+ maintenance: 1334
+ fuel: 1032
+ distance: 647
+ distance_on_job: true
+ cargo_count: 47
+ cargo: smokd_eel
+ source_city: klagenfurt
+ source_company: eurogoodies
+ destination_city: dresden
+ destination_company: dfh
+ timestamp_day: 9
+}
+
+profit_log_entry : _nameless.206.35e5.4f48 {
+ revenue: 19951
+ wage: 13440
+ maintenance: 1502
+ fuel: 1181
+ distance: 643
+ distance_on_job: true
+ cargo_count: 40
+ cargo: ethane
+ source_city: dresden
+ source_company: ns_oil
+ destination_city: klagenfurt
+ destination_company: trameri
+ timestamp_day: 10
+}
+
+profit_log_entry : _nameless.206.35e5.6418 {
+ revenue: 12232
+ wage: 8512
+ maintenance: 1436
+ fuel: 1008
+ distance: 625
+ distance_on_job: true
+ cargo_count: 34
+ cargo: empty_palet
+ source_city: klagenfurt
+ source_company: sellplan
+ destination_city: dresden
+ destination_company: ns_oil
+ timestamp_day: 11
+}
+
+profit_log_entry : _nameless.206.35e5.5968 {
+ revenue: 13508
+ wage: 9204
+ maintenance: 1649
+ fuel: 931
+ distance: 610
+ distance_on_job: true
+ cargo_count: 33
+ cargo: onion
+ source_city: dresden
+ source_company: euroacres
+ destination_city: lublin
+ destination_company: eurogoodies
+ timestamp_day: 12
+}
+
+profit_log_entry : _nameless.206.35e5.5e78 {
+ revenue: 12247
+ wage: 8227
+ maintenance: 1259
+ fuel: 961
+ distance: 604
+ distance_on_job: true
+ cargo_count: 28
+ cargo: iron_pipes
+ source_city: lublin
+ source_company: lkwlog
+ destination_city: dresden
+ destination_company: dfh
+ timestamp_day: 12
+}
+
+profit_log : _nameless.206.3987.bf38 {
+ stats_data: 8
+ stats_data[0]: _nameless.206.35e5.4d08
+ stats_data[1]: _nameless.206.35e5.64a8
+ stats_data[2]: _nameless.206.35e5.53c8
+ stats_data[3]: _nameless.206.35e5.4ac8
+ stats_data[4]: _nameless.206.35e5.5188
+ stats_data[5]: _nameless.206.35e5.61d8
+ stats_data[6]: _nameless.206.35e5.52a8
+ stats_data[7]: _nameless.206.35e5.4768
+ acc_distance_free: 0
+ acc_distance_on_job: 0
+ history_age: nil
+}
+
+profit_log_entry : _nameless.206.35e5.4d08 {
+ revenue: 6485
+ wage: 4575
+ maintenance: 1016
+ fuel: 689
+ distance: 391
+ distance_on_job: true
+ cargo_count: 33
+ cargo: used_packag
+ source_city: dresden
+ source_company: sellplan
+ destination_city: frankfurt
+ destination_company: lkwlog
+ timestamp_day: 7
+}
+
+profit_log_entry : _nameless.206.35e5.64a8 {
+ revenue: 7791
+ wage: 5593
+ maintenance: 796
+ fuel: 523
+ distance: 379
+ distance_on_job: true
+ cargo_count: 33
+ cargo: motor_oil
+ source_city: frankfurt
+ source_company: ns_oil
+ destination_city: dresden
+ destination_company: trameri
+ timestamp_day: 8
+}
+
+profit_log_entry : _nameless.206.35e5.53c8 {
+ revenue: 14897
+ wage: 10501
+ maintenance: 1184
+ fuel: 1066
+ distance: 642
+ distance_on_job: true
+ cargo_count: 37
+ cargo: roofing_felt
+ source_city: dresden
+ source_company: trameri
+ destination_city: helsingborg
+ destination_company: gnt
+ timestamp_day: 9
+}
+
+profit_log_entry : _nameless.206.35e5.4ac8 {
+ revenue: 0
+ wage: 0
+ maintenance: 0
+ fuel: 1039
+ distance: 642
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: helsingborg
+ source_company: gnt
+ destination_city: dresden
+ destination_company: ""
+ timestamp_day: 10
+}
+
+profit_log_entry : _nameless.206.35e5.5188 {
+ revenue: 14055
+ wage: 9960
+ maintenance: 1279
+ fuel: 905
+ distance: 642
+ distance_on_job: true
+ cargo_count: 1
+ cargo: overweight
+ source_city: dresden
+ source_company: trameri
+ destination_city: helsingborg
+ destination_company: gnt
+ timestamp_day: 10
+}
+
+profit_log_entry : _nameless.206.35e5.61d8 {
+ revenue: 0
+ wage: 0
+ maintenance: 0
+ fuel: 924
+ distance: 642
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: helsingborg
+ source_company: gnt
+ destination_city: dresden
+ destination_company: ""
+ timestamp_day: 11
+}
+
+profit_log_entry : _nameless.206.35e5.52a8 {
+ revenue: 9954
+ wage: 7194
+ maintenance: 1082
+ fuel: 871
+ distance: 497
+ distance_on_job: true
+ cargo_count: 35
+ cargo: rooflights
+ source_city: dresden
+ source_company: dfh
+ destination_city: lodz
+ destination_company: posped
+ timestamp_day: 12
+}
+
+profit_log_entry : _nameless.206.35e5.4768 {
+ revenue: 3735
+ wage: 2653
+ maintenance: 1317
+ fuel: 755
+ distance: 495
+ distance_on_job: true
+ cargo_count: 15
+ cargo: used_plast_c
+ source_city: lodz
+ source_company: sellplan
+ destination_city: dresden
+ destination_company: dfh
+ timestamp_day: 12
+}
+
+profit_log : _nameless.206.3987.c168 {
+ stats_data: 17
+ stats_data[0]: _nameless.206.35e5.6268
+ stats_data[1]: _nameless.206.35e5.6538
+ stats_data[2]: _nameless.206.35e5.59f8
+ stats_data[3]: _nameless.206.35e5.5b18
+ stats_data[4]: _nameless.206.35e5.49a8
+ stats_data[5]: _nameless.206.35e5.4a38
+ stats_data[6]: _nameless.206.35e5.47f8
+ stats_data[7]: _nameless.206.35e5.4888
+ stats_data[8]: _nameless.206.35e5.5ba8
+ stats_data[9]: _nameless.206.35e5.5218
+ stats_data[10]: _nameless.206.35e5.4408
+ stats_data[11]: _nameless.206.35e5.6658
+ stats_data[12]: _nameless.206.35e5.5cc8
+ stats_data[13]: _nameless.206.35e5.5f98
+ stats_data[14]: _nameless.206.35e5.5c38
+ stats_data[15]: _nameless.206.35e5.4b58
+ stats_data[16]: _nameless.207.3a4e.4028
+ acc_distance_free: 0
+ acc_distance_on_job: 0
+ history_age: nil
+}
+
+profit_log_entry : _nameless.206.35e5.6268 {
+ revenue: 0
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 100
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 9
+}
+
+profit_log_entry : _nameless.206.35e5.6538 {
+ revenue: 0
+ wage: 0
+ maintenance: 0
+ fuel: 835
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 10
+}
+
+profit_log_entry : _nameless.206.35e5.59f8 {
+ revenue: 59429
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 1453
+ distance_on_job: true
+ cargo_count: 1
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 10
+}
+
+profit_log_entry : _nameless.206.35e5.5b18 {
+ revenue: 0
+ wage: 0
+ maintenance: 33615
+ fuel: 0
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 10
+}
+
+profit_log_entry : _nameless.206.35e5.49a8 {
+ revenue: 3274
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 182
+ distance_on_job: true
+ cargo_count: 1
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 10
+}
+
+profit_log_entry : _nameless.206.35e5.4a38 {
+ revenue: 0
+ wage: 0
+ maintenance: 0
+ fuel: 896
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 11
+}
+
+profit_log_entry : _nameless.206.35e5.47f8 {
+ revenue: 0
+ wage: 0
+ maintenance: 162
+ fuel: 0
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 11
+}
+
+profit_log_entry : _nameless.206.35e5.4888 {
+ revenue: 0
+ wage: 0
+ maintenance: 647
+ fuel: 0
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 11
+}
+
+profit_log_entry : _nameless.206.35e5.5ba8 {
+ revenue: 0
+ wage: 0
+ maintenance: 116434
+ fuel: 0
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 11
+}
+
+profit_log_entry : _nameless.206.35e5.5218 {
+ revenue: 6891
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 321
+ distance_on_job: true
+ cargo_count: 33
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 11
+}
+
+profit_log_entry : _nameless.206.35e5.4408 {
+ revenue: 0
+ wage: 0
+ maintenance: 1126
+ fuel: 0
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 11
+}
+
+profit_log_entry : _nameless.206.35e5.6658 {
+ revenue: 0
+ wage: 0
+ maintenance: 38165
+ fuel: 0
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 11
+}
+
+profit_log_entry : _nameless.206.35e5.5cc8 {
+ revenue: 0
+ wage: 0
+ maintenance: 0
+ fuel: 680
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 11
+}
+
+profit_log_entry : _nameless.206.35e5.5f98 {
+ revenue: 17961
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 659
+ distance_on_job: true
+ cargo_count: 33
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 13
+}
+
+profit_log_entry : _nameless.206.35e5.5c38 {
+ revenue: 0
+ wage: 0
+ maintenance: 0
+ fuel: 1073
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 13
+}
+
+profit_log_entry : _nameless.206.35e5.4b58 {
+ revenue: 13116
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 474
+ distance_on_job: true
+ cargo_count: 1
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 13
+}
+
+profit_log_entry : _nameless.207.3a4e.4028 {
+ revenue: 0
+ wage: 0
+ maintenance: 314
+ fuel: 0
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 13
+}
+
+driver_player : driver.1 {
+ profit_log: _nameless.206.3987.bde8
+}
+
+profit_log : _nameless.206.3987.bde8 {
+ stats_data: 27
+ stats_data[0]: _nameless.206.35e5.45b8
+ stats_data[1]: _nameless.206.35e5.65c8
+ stats_data[2]: _nameless.206.35e5.6028
+ stats_data[3]: _nameless.206.35e5.5338
+ stats_data[4]: _nameless.206.35e5.54e8
+ stats_data[5]: _nameless.206.35e5.5f08
+ stats_data[6]: _nameless.206.35e5.66e8
+ stats_data[7]: _nameless.206.35e5.5578
+ stats_data[8]: _nameless.206.35e5.4fd8
+ stats_data[9]: _nameless.206.35e5.4648
+ stats_data[10]: _nameless.206.35e5.5d58
+ stats_data[11]: _nameless.206.35e5.5de8
+ stats_data[12]: _nameless.206.35e5.5608
+ stats_data[13]: _nameless.206.35e5.46d8
+ stats_data[14]: _nameless.206.35e5.4be8
+ stats_data[15]: _nameless.206.35e5.4918
+ stats_data[16]: _nameless.206.35e5.5698
+ stats_data[17]: _nameless.206.35e5.60b8
+ stats_data[18]: _nameless.206.35e5.5458
+ stats_data[19]: _nameless.206.35e5.5a88
+ stats_data[20]: _nameless.206.35e5.5068
+ stats_data[21]: _nameless.206.35e5.5728
+ stats_data[22]: _nameless.206.35e5.4c78
+ stats_data[23]: _nameless.206.35e5.6148
+ stats_data[24]: _nameless.206.35e5.4d98
+ stats_data[25]: _nameless.206.35e5.57b8
+ stats_data[26]: _nameless.207.3a4e.4ad8
+ acc_distance_free: 0
+ acc_distance_on_job: 0
+ history_age: 8
+}
+
+profit_log_entry : _nameless.206.35e5.45b8 {
+ revenue: 0
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 100
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 7
+}
+
+profit_log_entry : _nameless.206.35e5.65c8 {
+ revenue: 0
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 100
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 7
+}
+
+profit_log_entry : _nameless.206.35e5.6028 {
+ revenue: 56004
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 598
+ distance_on_job: true
+ cargo_count: 40
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 7
+}
+
+profit_log_entry : _nameless.206.35e5.5338 {
+ revenue: 0
+ wage: 0
+ maintenance: 0
+ fuel: 1208
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 7
+}
+
+profit_log_entry : _nameless.206.35e5.54e8 {
+ revenue: 40520
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 861
+ distance_on_job: true
+ cargo_count: 30
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 8
+}
+
+profit_log_entry : _nameless.206.35e5.5f08 {
+ revenue: 0
+ wage: 0
+ maintenance: 0
+ fuel: 1077
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 8
+}
+
+profit_log_entry : _nameless.206.35e5.66e8 {
+ revenue: 0
+ wage: 0
+ maintenance: 185
+ fuel: 0
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 8
+}
+
+profit_log_entry : _nameless.206.35e5.5578 {
+ revenue: 0
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 100
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 8
+}
+
+profit_log_entry : _nameless.206.35e5.4fd8 {
+ revenue: 23106
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 586
+ distance_on_job: true
+ cargo_count: 34
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 9
+}
+
+profit_log_entry : _nameless.206.35e5.4648 {
+ revenue: 0
+ wage: 0
+ maintenance: 338
+ fuel: 0
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 9
+}
+
+profit_log_entry : _nameless.206.35e5.5d58 {
+ revenue: 0
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 100
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 9
+}
+
+profit_log_entry : _nameless.206.35e5.5de8 {
+ revenue: 0
+ wage: 0
+ maintenance: 0
+ fuel: 835
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 10
+}
+
+profit_log_entry : _nameless.206.35e5.5608 {
+ revenue: 59429
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 1453
+ distance_on_job: true
+ cargo_count: 1
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 10
+}
+
+profit_log_entry : _nameless.206.35e5.46d8 {
+ revenue: 0
+ wage: 0
+ maintenance: 33615
+ fuel: 0
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 10
+}
+
+profit_log_entry : _nameless.206.35e5.4be8 {
+ revenue: 3274
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 182
+ distance_on_job: true
+ cargo_count: 1
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 10
+}
+
+profit_log_entry : _nameless.206.35e5.4918 {
+ revenue: 0
+ wage: 0
+ maintenance: 0
+ fuel: 896
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 11
+}
+
+profit_log_entry : _nameless.206.35e5.5698 {
+ revenue: 0
+ wage: 0
+ maintenance: 162
+ fuel: 0
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 11
+}
+
+profit_log_entry : _nameless.206.35e5.60b8 {
+ revenue: 0
+ wage: 0
+ maintenance: 647
+ fuel: 0
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 11
+}
+
+profit_log_entry : _nameless.206.35e5.5458 {
+ revenue: 0
+ wage: 0
+ maintenance: 116434
+ fuel: 0
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 11
+}
+
+profit_log_entry : _nameless.206.35e5.5a88 {
+ revenue: 6891
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 321
+ distance_on_job: true
+ cargo_count: 33
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 11
+}
+
+profit_log_entry : _nameless.206.35e5.5068 {
+ revenue: 0
+ wage: 0
+ maintenance: 1126
+ fuel: 0
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 11
+}
+
+profit_log_entry : _nameless.206.35e5.5728 {
+ revenue: 0
+ wage: 0
+ maintenance: 38165
+ fuel: 0
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 11
+}
+
+profit_log_entry : _nameless.206.35e5.4c78 {
+ revenue: 0
+ wage: 0
+ maintenance: 0
+ fuel: 680
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 11
+}
+
+profit_log_entry : _nameless.206.35e5.6148 {
+ revenue: 17961
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 659
+ distance_on_job: true
+ cargo_count: 33
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 13
+}
+
+profit_log_entry : _nameless.206.35e5.4d98 {
+ revenue: 0
+ wage: 0
+ maintenance: 0
+ fuel: 1073
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 13
+}
+
+profit_log_entry : _nameless.206.35e5.57b8 {
+ revenue: 13116
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 474
+ distance_on_job: true
+ cargo_count: 1
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 13
+}
+
+profit_log_entry : _nameless.207.3a4e.4ad8 {
+ revenue: 0
+ wage: 0
+ maintenance: 314
+ fuel: 0
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 13
+}
+
+driver_ai : driver.148 {
+ adr: 3
+ long_dist: 1
+ heavy: 1
+ fragile: 1
+ urgent: 0
+ mechanical: 0
+ hometown: dresden
+ current_city: dresden
+ state: 2
+ on_duty_timer: 392
+ extra_maintenance: 0
+ driver_job: null
+ experience_points: 8246
+ training_policy: 1
+ adopted_truck: null
+ assigned_truck: null
+ assigned_truck_efficiency: &3f85d639
+ assigned_truck_axle_count: 3
+ assigned_truck_mass: 8843
+ slot_truck_efficiency: &3f85d639
+ slot_truck_axle_count: 3
+ slot_truck_mass: 8843
+ adopted_trailer: null
+ assigned_trailer: null
+ old_hometown: ""
+ profit_log: _nameless.206.3987.afe8
+}
+
+profit_log : _nameless.206.3987.afe8 {
+ stats_data: 8
+ stats_data[0]: _nameless.206.35e5.62f8
+ stats_data[1]: _nameless.206.35e5.6388
+ stats_data[2]: _nameless.206.35e5.4378
+ stats_data[3]: _nameless.206.35e5.4498
+ stats_data[4]: _nameless.206.35e5.4e28
+ stats_data[5]: _nameless.206.35e5.4eb8
+ stats_data[6]: _nameless.206.35e5.5848
+ stats_data[7]: _nameless.206.35e5.50f8
+ acc_distance_free: 0
+ acc_distance_on_job: 0
+ history_age: 8
+}
+
+profit_log_entry : _nameless.206.35e5.62f8 {
+ revenue: 9242
+ wage: 6462
+ maintenance: 5820
+ fuel: 773
+ distance: 395
+ distance_on_job: true
+ cargo_count: 35
+ cargo: sandwch_pnls
+ source_city: dresden
+ source_company: trameri
+ destination_city: frankfurt
+ destination_company: lkwlog
+ timestamp_day: 7
+}
+
+profit_log_entry : _nameless.206.35e5.6388 {
+ revenue: 13283
+ wage: 9328
+ maintenance: 691
+ fuel: 569
+ distance: 378
+ distance_on_job: true
+ cargo_count: 50
+ cargo: air_mails
+ source_city: frankfurt
+ source_company: lkwlog
+ destination_city: dresden
+ destination_company: dfh
+ timestamp_day: 8
+}
+
+profit_log_entry : _nameless.206.35e5.4378 {
+ revenue: 19704
+ wage: 13811
+ maintenance: 1495
+ fuel: 1064
+ distance: 643
+ distance_on_job: true
+ cargo_count: 40
+ cargo: ethane
+ source_city: dresden
+ source_company: ns_oil
+ destination_city: klagenfurt
+ destination_company: trameri
+ timestamp_day: 9
+}
+
+profit_log_entry : _nameless.206.35e5.4498 {
+ revenue: 20293
+ wage: 13850
+ maintenance: 1334
+ fuel: 1032
+ distance: 647
+ distance_on_job: true
+ cargo_count: 47
+ cargo: smokd_eel
+ source_city: klagenfurt
+ source_company: eurogoodies
+ destination_city: dresden
+ destination_company: dfh
+ timestamp_day: 9
+}
+
+profit_log_entry : _nameless.206.35e5.4e28 {
+ revenue: 19951
+ wage: 13440
+ maintenance: 1502
+ fuel: 1181
+ distance: 643
+ distance_on_job: true
+ cargo_count: 40
+ cargo: ethane
+ source_city: dresden
+ source_company: ns_oil
+ destination_city: klagenfurt
+ destination_company: trameri
+ timestamp_day: 10
+}
+
+profit_log_entry : _nameless.206.35e5.4eb8 {
+ revenue: 12232
+ wage: 8512
+ maintenance: 1436
+ fuel: 1008
+ distance: 625
+ distance_on_job: true
+ cargo_count: 34
+ cargo: empty_palet
+ source_city: klagenfurt
+ source_company: sellplan
+ destination_city: dresden
+ destination_company: ns_oil
+ timestamp_day: 11
+}
+
+profit_log_entry : _nameless.206.35e5.5848 {
+ revenue: 13508
+ wage: 9204
+ maintenance: 1649
+ fuel: 931
+ distance: 610
+ distance_on_job: true
+ cargo_count: 33
+ cargo: onion
+ source_city: dresden
+ source_company: euroacres
+ destination_city: lublin
+ destination_company: eurogoodies
+ timestamp_day: 12
+}
+
+profit_log_entry : _nameless.206.35e5.50f8 {
+ revenue: 12247
+ wage: 8227
+ maintenance: 1259
+ fuel: 961
+ distance: 604
+ distance_on_job: true
+ cargo_count: 28
+ cargo: iron_pipes
+ source_city: lublin
+ source_company: lkwlog
+ destination_city: dresden
+ destination_company: dfh
+ timestamp_day: 12
+}
+
+driver_ai : driver.344 {
+ adr: 0
+ long_dist: 1
+ heavy: 1
+ fragile: 1
+ urgent: 0
+ mechanical: 1
+ hometown: dresden
+ current_city: dresden
+ state: 4
+ on_duty_timer: 849
+ extra_maintenance: 0
+ driver_job: null
+ experience_points: 5078
+ training_policy: 1
+ adopted_truck: null
+ assigned_truck: null
+ assigned_truck_efficiency: 1
+ assigned_truck_axle_count: 2
+ assigned_truck_mass: 10000
+ slot_truck_efficiency: 1
+ slot_truck_axle_count: 2
+ slot_truck_mass: 7180
+ adopted_trailer: null
+ assigned_trailer: null
+ old_hometown: ""
+ profit_log: _nameless.206.3987.b058
+}
+
+profit_log : _nameless.206.3987.b058 {
+ stats_data: 8
+ stats_data[0]: _nameless.206.35e5.6ad8
+ stats_data[1]: _nameless.206.35e5.6bf8
+ stats_data[2]: _nameless.206.35e5.69b8
+ stats_data[3]: _nameless.206.35e5.8398
+ stats_data[4]: _nameless.206.35e5.80c8
+ stats_data[5]: _nameless.206.35e5.6ec8
+ stats_data[6]: _nameless.206.35e5.6c88
+ stats_data[7]: _nameless.206.35e5.7978
+ acc_distance_free: 0
+ acc_distance_on_job: 0
+ history_age: 8
+}
+
+profit_log_entry : _nameless.206.35e5.6ad8 {
+ revenue: 6485
+ wage: 4575
+ maintenance: 1016
+ fuel: 689
+ distance: 391
+ distance_on_job: true
+ cargo_count: 33
+ cargo: used_packag
+ source_city: dresden
+ source_company: sellplan
+ destination_city: frankfurt
+ destination_company: lkwlog
+ timestamp_day: 7
+}
+
+profit_log_entry : _nameless.206.35e5.6bf8 {
+ revenue: 7791
+ wage: 5593
+ maintenance: 796
+ fuel: 523
+ distance: 379
+ distance_on_job: true
+ cargo_count: 33
+ cargo: motor_oil
+ source_city: frankfurt
+ source_company: ns_oil
+ destination_city: dresden
+ destination_company: trameri
+ timestamp_day: 8
+}
+
+profit_log_entry : _nameless.206.35e5.69b8 {
+ revenue: 14897
+ wage: 10501
+ maintenance: 1184
+ fuel: 1066
+ distance: 642
+ distance_on_job: true
+ cargo_count: 37
+ cargo: roofing_felt
+ source_city: dresden
+ source_company: trameri
+ destination_city: helsingborg
+ destination_company: gnt
+ timestamp_day: 9
+}
+
+profit_log_entry : _nameless.206.35e5.8398 {
+ revenue: 0
+ wage: 0
+ maintenance: 0
+ fuel: 1039
+ distance: 642
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: helsingborg
+ source_company: gnt
+ destination_city: dresden
+ destination_company: ""
+ timestamp_day: 10
+}
+
+profit_log_entry : _nameless.206.35e5.80c8 {
+ revenue: 14055
+ wage: 9960
+ maintenance: 1279
+ fuel: 905
+ distance: 642
+ distance_on_job: true
+ cargo_count: 1
+ cargo: overweight
+ source_city: dresden
+ source_company: trameri
+ destination_city: helsingborg
+ destination_company: gnt
+ timestamp_day: 10
+}
+
+profit_log_entry : _nameless.206.35e5.6ec8 {
+ revenue: 0
+ wage: 0
+ maintenance: 0
+ fuel: 924
+ distance: 642
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: helsingborg
+ source_company: gnt
+ destination_city: dresden
+ destination_company: ""
+ timestamp_day: 11
+}
+
+profit_log_entry : _nameless.206.35e5.6c88 {
+ revenue: 9954
+ wage: 7194
+ maintenance: 1082
+ fuel: 871
+ distance: 497
+ distance_on_job: true
+ cargo_count: 35
+ cargo: rooflights
+ source_city: dresden
+ source_company: dfh
+ destination_city: lodz
+ destination_company: posped
+ timestamp_day: 12
+}
+
+profit_log_entry : _nameless.206.35e5.7978 {
+ revenue: 3735
+ wage: 2653
+ maintenance: 1317
+ fuel: 755
+ distance: 495
+ distance_on_job: true
+ cargo_count: 15
+ cargo: used_plast_c
+ source_city: lodz
+ source_company: sellplan
+ destination_city: dresden
+ destination_company: dfh
+ timestamp_day: 12
+}
+
+garage : garage.munchen {
+ vehicles: 1
+ vehicles[0]: _nameless.206.398b.b508
+ drivers: 1
+ drivers[0]: driver.1
+ trailers: 0
+ status: 6
+ profit_log: _nameless.206.3988.66c8
+ productivity: &3f2710cb
+}
+
+profit_log : _nameless.206.3988.66c8 {
+ stats_data: 52
+ stats_data[0]: _nameless.206.35e5.7d68
+ stats_data[1]: _nameless.206.35e5.7198
+ stats_data[2]: _nameless.206.35e5.8428
+ stats_data[3]: _nameless.206.35e5.7e88
+ stats_data[4]: _nameless.206.35e5.7738
+ stats_data[5]: _nameless.206.35e5.7df8
+ stats_data[6]: _nameless.206.35e5.81e8
+ stats_data[7]: _nameless.206.35e5.7618
+ stats_data[8]: _nameless.206.35e5.6a48
+ stats_data[9]: _nameless.206.35e5.8548
+ stats_data[10]: _nameless.206.35e5.76a8
+ stats_data[11]: _nameless.206.35e5.6b68
+ stats_data[12]: _nameless.206.35e5.85d8
+ stats_data[13]: _nameless.206.35e5.84b8
+ stats_data[14]: _nameless.206.35e5.7f18
+ stats_data[15]: _nameless.206.35e5.6d18
+ stats_data[16]: _nameless.206.35e5.8668
+ stats_data[17]: _nameless.206.35e5.7858
+ stats_data[18]: _nameless.206.35e5.86f8
+ stats_data[19]: _nameless.206.35e5.6f58
+ stats_data[20]: _nameless.206.35e5.6da8
+ stats_data[21]: _nameless.206.35e5.7228
+ stats_data[22]: _nameless.206.35e5.8308
+ stats_data[23]: _nameless.206.35e5.89c8
+ stats_data[24]: _nameless.206.35e5.6e38
+ stats_data[25]: _nameless.206.35e5.7a08
+ stats_data[26]: _nameless.206.35e5.8ae8
+ stats_data[27]: _nameless.206.35e5.8788
+ stats_data[28]: _nameless.206.35e5.6808
+ stats_data[29]: _nameless.206.35e5.7a98
+ stats_data[30]: _nameless.206.35e5.7fa8
+ stats_data[31]: _nameless.206.35e5.6fe8
+ stats_data[32]: _nameless.206.35e5.8818
+ stats_data[33]: _nameless.206.35e5.7108
+ stats_data[34]: _nameless.206.35e5.6778
+ stats_data[35]: _nameless.206.35e5.77c8
+ stats_data[36]: _nameless.206.35e5.72b8
+ stats_data[37]: _nameless.206.35e5.8038
+ stats_data[38]: _nameless.206.35e5.7078
+ stats_data[39]: _nameless.206.35e5.74f8
+ stats_data[40]: _nameless.206.35e5.7c48
+ stats_data[41]: _nameless.206.35e5.8158
+ stats_data[42]: _nameless.206.35e5.7348
+ stats_data[43]: _nameless.206.35e5.73d8
+ stats_data[44]: _nameless.206.35e5.88a8
+ stats_data[45]: _nameless.206.35e5.8938
+ stats_data[46]: _nameless.206.35e5.7468
+ stats_data[47]: _nameless.206.35e5.7588
+ stats_data[48]: _nameless.206.35e5.78e8
+ stats_data[49]: _nameless.206.35e5.7b28
+ stats_data[50]: _nameless.206.35e5.8a58
+ stats_data[51]: _nameless.207.3a4e.42f8
+ acc_distance_free: 0
+ acc_distance_on_job: 0
+ history_age: 14
+}
+
+profit_log_entry : _nameless.206.35e5.7d68 {
+ revenue: 1410
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 0
+ distance_on_job: true
+ cargo_count: 30
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 0
+}
+
+profit_log_entry : _nameless.206.35e5.7198 {
+ revenue: 1031
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 0
+ distance_on_job: true
+ cargo_count: 15
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 0
+}
+
+profit_log_entry : _nameless.206.35e5.8428 {
+ revenue: 7141
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 336
+ distance_on_job: true
+ cargo_count: 35
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 0
+}
+
+profit_log_entry : _nameless.206.35e5.7e88 {
+ revenue: 7495
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 286
+ distance_on_job: true
+ cargo_count: 35
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 1
+}
+
+profit_log_entry : _nameless.206.35e5.7738 {
+ revenue: 6618
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 240
+ distance_on_job: true
+ cargo_count: 33
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 1
+}
+
+profit_log_entry : _nameless.206.35e5.7df8 {
+ revenue: 0
+ wage: 0
+ maintenance: 331
+ fuel: 0
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 1
+}
+
+profit_log_entry : _nameless.206.35e5.81e8 {
+ revenue: 0
+ wage: 0
+ maintenance: 33702
+ fuel: 0
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 1
+}
+
+profit_log_entry : _nameless.206.35e5.7618 {
+ revenue: 4587
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 156
+ distance_on_job: true
+ cargo_count: 34
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 1
+}
+
+profit_log_entry : _nameless.206.35e5.6a48 {
+ revenue: 0
+ wage: 0
+ maintenance: 0
+ fuel: 1133
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 2
+}
+
+profit_log_entry : _nameless.206.35e5.8548 {
+ revenue: -12000
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 169
+ distance_on_job: true
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 2
+}
+
+profit_log_entry : _nameless.206.35e5.76a8 {
+ revenue: 0
+ wage: 0
+ maintenance: 547
+ fuel: 0
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 3
+}
+
+profit_log_entry : _nameless.206.35e5.6b68 {
+ revenue: 24225
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 854
+ distance_on_job: true
+ cargo_count: 33
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 3
+}
+
+profit_log_entry : _nameless.206.35e5.85d8 {
+ revenue: 0
+ wage: 0
+ maintenance: 794
+ fuel: 0
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 3
+}
+
+profit_log_entry : _nameless.206.35e5.84b8 {
+ revenue: 0
+ wage: 0
+ maintenance: 4556
+ fuel: 0
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 3
+}
+
+profit_log_entry : _nameless.206.35e5.7f18 {
+ revenue: 0
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 100
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 3
+}
+
+profit_log_entry : _nameless.206.35e5.6d18 {
+ revenue: 0
+ wage: 0
+ maintenance: 0
+ fuel: 1044
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 3
+}
+
+profit_log_entry : _nameless.206.35e5.8668 {
+ revenue: 0
+ wage: 0
+ maintenance: 163
+ fuel: 0
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 3
+}
+
+profit_log_entry : _nameless.206.35e5.7858 {
+ revenue: 7600
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 371
+ distance_on_job: true
+ cargo_count: 33
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 3
+}
+
+profit_log_entry : _nameless.206.35e5.86f8 {
+ revenue: 0
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 100
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 3
+}
+
+profit_log_entry : _nameless.206.35e5.6f58 {
+ revenue: 0
+ wage: 0
+ maintenance: 0
+ fuel: 626
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 3
+}
+
+profit_log_entry : _nameless.206.35e5.6da8 {
+ revenue: 3381
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 234
+ distance_on_job: true
+ cargo_count: 30
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 3
+}
+
+profit_log_entry : _nameless.206.35e5.7228 {
+ revenue: 9162
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 373
+ distance_on_job: true
+ cargo_count: 1
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 4
+}
+
+profit_log_entry : _nameless.206.35e5.8308 {
+ revenue: 0
+ wage: 0
+ maintenance: 241
+ fuel: 0
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 4
+}
+
+profit_log_entry : _nameless.206.35e5.89c8 {
+ revenue: 0
+ wage: 0
+ maintenance: 3119
+ fuel: 0
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 4
+}
+
+profit_log_entry : _nameless.206.35e5.6e38 {
+ revenue: 0
+ wage: 0
+ maintenance: 0
+ fuel: 1342
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 5
+}
+
+profit_log_entry : _nameless.206.35e5.7a08 {
+ revenue: 0
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 100
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 7
+}
+
+profit_log_entry : _nameless.206.35e5.8ae8 {
+ revenue: 0
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 100
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 7
+}
+
+profit_log_entry : _nameless.206.35e5.8788 {
+ revenue: 56004
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 598
+ distance_on_job: true
+ cargo_count: 40
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 7
+}
+
+profit_log_entry : _nameless.206.35e5.6808 {
+ revenue: 0
+ wage: 0
+ maintenance: 0
+ fuel: 1208
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 7
+}
+
+profit_log_entry : _nameless.206.35e5.7a98 {
+ revenue: 40520
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 861
+ distance_on_job: true
+ cargo_count: 30
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 8
+}
+
+profit_log_entry : _nameless.206.35e5.7fa8 {
+ revenue: 0
+ wage: 0
+ maintenance: 0
+ fuel: 1077
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 8
+}
+
+profit_log_entry : _nameless.206.35e5.6fe8 {
+ revenue: 0
+ wage: 0
+ maintenance: 185
+ fuel: 0
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 8
+}
+
+profit_log_entry : _nameless.206.35e5.8818 {
+ revenue: 0
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 100
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 8
+}
+
+profit_log_entry : _nameless.206.35e5.7108 {
+ revenue: 23106
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 586
+ distance_on_job: true
+ cargo_count: 34
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 9
+}
+
+profit_log_entry : _nameless.206.35e5.6778 {
+ revenue: 0
+ wage: 0
+ maintenance: 338
+ fuel: 0
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 9
+}
+
+profit_log_entry : _nameless.206.35e5.77c8 {
+ revenue: 0
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 100
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 9
+}
+
+profit_log_entry : _nameless.206.35e5.72b8 {
+ revenue: 0
+ wage: 0
+ maintenance: 0
+ fuel: 835
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 10
+}
+
+profit_log_entry : _nameless.206.35e5.8038 {
+ revenue: 59429
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 1453
+ distance_on_job: true
+ cargo_count: 1
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 10
+}
+
+profit_log_entry : _nameless.206.35e5.7078 {
+ revenue: 0
+ wage: 0
+ maintenance: 33615
+ fuel: 0
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 10
+}
+
+profit_log_entry : _nameless.206.35e5.74f8 {
+ revenue: 3274
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 182
+ distance_on_job: true
+ cargo_count: 1
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 10
+}
+
+profit_log_entry : _nameless.206.35e5.7c48 {
+ revenue: 0
+ wage: 0
+ maintenance: 0
+ fuel: 896
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 11
+}
+
+profit_log_entry : _nameless.206.35e5.8158 {
+ revenue: 0
+ wage: 0
+ maintenance: 162
+ fuel: 0
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 11
+}
+
+profit_log_entry : _nameless.206.35e5.7348 {
+ revenue: 0
+ wage: 0
+ maintenance: 647
+ fuel: 0
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 11
+}
+
+profit_log_entry : _nameless.206.35e5.73d8 {
+ revenue: 0
+ wage: 0
+ maintenance: 116434
+ fuel: 0
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 11
+}
+
+profit_log_entry : _nameless.206.35e5.88a8 {
+ revenue: 6891
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 321
+ distance_on_job: true
+ cargo_count: 33
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 11
+}
+
+profit_log_entry : _nameless.206.35e5.8938 {
+ revenue: 0
+ wage: 0
+ maintenance: 1126
+ fuel: 0
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 11
+}
+
+profit_log_entry : _nameless.206.35e5.7468 {
+ revenue: 0
+ wage: 0
+ maintenance: 38165
+ fuel: 0
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 11
+}
+
+profit_log_entry : _nameless.206.35e5.7588 {
+ revenue: 0
+ wage: 0
+ maintenance: 0
+ fuel: 680
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 11
+}
+
+profit_log_entry : _nameless.206.35e5.78e8 {
+ revenue: 17961
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 659
+ distance_on_job: true
+ cargo_count: 33
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 13
+}
+
+profit_log_entry : _nameless.206.35e5.7b28 {
+ revenue: 0
+ wage: 0
+ maintenance: 0
+ fuel: 1073
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 13
+}
+
+profit_log_entry : _nameless.206.35e5.8a58 {
+ revenue: 13116
+ wage: 0
+ maintenance: 0
+ fuel: 0
+ distance: 474
+ distance_on_job: true
+ cargo_count: 1
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 13
+}
+
+profit_log_entry : _nameless.207.3a4e.42f8 {
+ revenue: 0
+ wage: 0
+ maintenance: 314
+ fuel: 0
+ distance: 0
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: ""
+ source_company: ""
+ destination_city: ""
+ destination_company: ""
+ timestamp_day: 13
+}
+
+garage : garage.dresden {
+ vehicles: 5
+ vehicles[0]: _nameless.206.398b.d488
+ vehicles[1]: null
+ vehicles[2]: null
+ vehicles[3]: _nameless.206.398b.f1c8
+ vehicles[4]: null
+ drivers: 5
+ drivers[0]: driver.148
+ drivers[1]: null
+ drivers[2]: null
+ drivers[3]: driver.344
+ drivers[4]: null
+ trailers: 0
+ status: 3
+ profit_log: _nameless.206.3988.76f8
+ productivity: 0
+}
+
+profit_log : _nameless.206.3988.76f8 {
+ stats_data: 16
+ stats_data[0]: _nameless.206.35e5.8278
+ stats_data[1]: _nameless.206.35e5.6898
+ stats_data[2]: _nameless.206.35e5.6928
+ stats_data[3]: _nameless.206.35e5.7bb8
+ stats_data[4]: _nameless.206.35e5.7cd8
+ stats_data[5]: _nameless.206.35e5.9aa8
+ stats_data[6]: _nameless.206.35e5.92c8
+ stats_data[7]: _nameless.206.35e5.98f8
+ stats_data[8]: _nameless.206.35e5.9d78
+ stats_data[9]: _nameless.206.35e5.a678
+ stats_data[10]: _nameless.206.35e5.a948
+ stats_data[11]: _nameless.206.35e5.9ce8
+ stats_data[12]: _nameless.206.35e5.9988
+ stats_data[13]: _nameless.206.35e5.8c08
+ stats_data[14]: _nameless.206.35e5.9a18
+ stats_data[15]: _nameless.206.35e5.8c98
+ acc_distance_free: 0
+ acc_distance_on_job: 0
+ history_age: 14
+}
+
+profit_log_entry : _nameless.206.35e5.8278 {
+ revenue: 6485
+ wage: 4575
+ maintenance: 1016
+ fuel: 689
+ distance: 391
+ distance_on_job: true
+ cargo_count: 33
+ cargo: used_packag
+ source_city: dresden
+ source_company: sellplan
+ destination_city: frankfurt
+ destination_company: lkwlog
+ timestamp_day: 7
+}
+
+profit_log_entry : _nameless.206.35e5.6898 {
+ revenue: 9242
+ wage: 6462
+ maintenance: 5820
+ fuel: 773
+ distance: 395
+ distance_on_job: true
+ cargo_count: 35
+ cargo: sandwch_pnls
+ source_city: dresden
+ source_company: trameri
+ destination_city: frankfurt
+ destination_company: lkwlog
+ timestamp_day: 7
+}
+
+profit_log_entry : _nameless.206.35e5.6928 {
+ revenue: 7791
+ wage: 5593
+ maintenance: 796
+ fuel: 523
+ distance: 379
+ distance_on_job: true
+ cargo_count: 33
+ cargo: motor_oil
+ source_city: frankfurt
+ source_company: ns_oil
+ destination_city: dresden
+ destination_company: trameri
+ timestamp_day: 8
+}
+
+profit_log_entry : _nameless.206.35e5.7bb8 {
+ revenue: 13283
+ wage: 9328
+ maintenance: 691
+ fuel: 569
+ distance: 378
+ distance_on_job: true
+ cargo_count: 50
+ cargo: air_mails
+ source_city: frankfurt
+ source_company: lkwlog
+ destination_city: dresden
+ destination_company: dfh
+ timestamp_day: 8
+}
+
+profit_log_entry : _nameless.206.35e5.7cd8 {
+ revenue: 19704
+ wage: 13811
+ maintenance: 1495
+ fuel: 1064
+ distance: 643
+ distance_on_job: true
+ cargo_count: 40
+ cargo: ethane
+ source_city: dresden
+ source_company: ns_oil
+ destination_city: klagenfurt
+ destination_company: trameri
+ timestamp_day: 9
+}
+
+profit_log_entry : _nameless.206.35e5.9aa8 {
+ revenue: 14897
+ wage: 10501
+ maintenance: 1184
+ fuel: 1066
+ distance: 642
+ distance_on_job: true
+ cargo_count: 37
+ cargo: roofing_felt
+ source_city: dresden
+ source_company: trameri
+ destination_city: helsingborg
+ destination_company: gnt
+ timestamp_day: 9
+}
+
+profit_log_entry : _nameless.206.35e5.92c8 {
+ revenue: 20293
+ wage: 13850
+ maintenance: 1334
+ fuel: 1032
+ distance: 647
+ distance_on_job: true
+ cargo_count: 47
+ cargo: smokd_eel
+ source_city: klagenfurt
+ source_company: eurogoodies
+ destination_city: dresden
+ destination_company: dfh
+ timestamp_day: 9
+}
+
+profit_log_entry : _nameless.206.35e5.98f8 {
+ revenue: 0
+ wage: 0
+ maintenance: 0
+ fuel: 1039
+ distance: 642
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: helsingborg
+ source_company: gnt
+ destination_city: dresden
+ destination_company: ""
+ timestamp_day: 10
+}
+
+profit_log_entry : _nameless.206.35e5.9d78 {
+ revenue: 19951
+ wage: 13440
+ maintenance: 1502
+ fuel: 1181
+ distance: 643
+ distance_on_job: true
+ cargo_count: 40
+ cargo: ethane
+ source_city: dresden
+ source_company: ns_oil
+ destination_city: klagenfurt
+ destination_company: trameri
+ timestamp_day: 10
+}
+
+profit_log_entry : _nameless.206.35e5.a678 {
+ revenue: 14055
+ wage: 9960
+ maintenance: 1279
+ fuel: 905
+ distance: 642
+ distance_on_job: true
+ cargo_count: 1
+ cargo: overweight
+ source_city: dresden
+ source_company: trameri
+ destination_city: helsingborg
+ destination_company: gnt
+ timestamp_day: 10
+}
+
+profit_log_entry : _nameless.206.35e5.a948 {
+ revenue: 12232
+ wage: 8512
+ maintenance: 1436
+ fuel: 1008
+ distance: 625
+ distance_on_job: true
+ cargo_count: 34
+ cargo: empty_palet
+ source_city: klagenfurt
+ source_company: sellplan
+ destination_city: dresden
+ destination_company: ns_oil
+ timestamp_day: 11
+}
+
+profit_log_entry : _nameless.206.35e5.9ce8 {
+ revenue: 0
+ wage: 0
+ maintenance: 0
+ fuel: 924
+ distance: 642
+ distance_on_job: false
+ cargo_count: 0
+ cargo: ""
+ source_city: helsingborg
+ source_company: gnt
+ destination_city: dresden
+ destination_company: ""
+ timestamp_day: 11
+}
+
+profit_log_entry : _nameless.206.35e5.9988 {
+ revenue: 13508
+ wage: 9204
+ maintenance: 1649
+ fuel: 931
+ distance: 610
+ distance_on_job: true
+ cargo_count: 33
+ cargo: onion
+ source_city: dresden
+ source_company: euroacres
+ destination_city: lublin
+ destination_company: eurogoodies
+ timestamp_day: 12
+}
+
+profit_log_entry : _nameless.206.35e5.8c08 {
+ revenue: 9954
+ wage: 7194
+ maintenance: 1082
+ fuel: 871
+ distance: 497
+ distance_on_job: true
+ cargo_count: 35
+ cargo: rooflights
+ source_city: dresden
+ source_company: dfh
+ destination_city: lodz
+ destination_company: posped
+ timestamp_day: 12
+}
+
+profit_log_entry : _nameless.206.35e5.9a18 {
+ revenue: 12247
+ wage: 8227
+ maintenance: 1259
+ fuel: 961
+ distance: 604
+ distance_on_job: true
+ cargo_count: 28
+ cargo: iron_pipes
+ source_city: lublin
+ source_company: lkwlog
+ destination_city: dresden
+ destination_company: dfh
+ timestamp_day: 12
+}
+
+profit_log_entry : _nameless.206.35e5.8c98 {
+ revenue: 3735
+ wage: 2653
+ maintenance: 1317
+ fuel: 755
+ distance: 495
+ distance_on_job: true
+ cargo_count: 15
+ cargo: used_plast_c
+ source_city: lodz
+ source_company: sellplan
+ destination_city: dresden
+ destination_company: dfh
+ timestamp_day: 12
+}
+
+game_progress : _nameless.206.3988.7fb8 {
+ generic_transports: null
+ undamaged_transports: null
+ clean_transports: null
+ owned_trucks: 3
+ owned_trucks[0]: "vehicle.mercedes.actros"
+ owned_trucks[1]: "vehicle.volvo.fh_2024"
+ owned_trucks[2]: "vehicle.scania.s_2016"
+}
+
+}

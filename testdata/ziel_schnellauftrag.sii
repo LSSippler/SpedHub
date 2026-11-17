@@ -1,0 +1,951 @@
+SiiNunit
+{
+economy : _nameless.20e.298c.1238 {
+ bank: _nameless.20e.2752.4a68
+ player: _nameless.20e.3150.57d8
+ companies: 0
+ garages: 1
+ garages[0]: garage.erfurt
+ garage_ignore_list: 0
+ game_progress: _nameless.20e.3442.0ff8
+ event_queue: null
+ mail_ctrl: null
+ oversize_offer_ctrl: null
+ game_time: 604
+ game_time_secs: &40071f91
+ achievements_added: 600
+ new_game: false
+ experience_points: 0
+ adr: 0
+ long_dist: 0
+ heavy: 0
+ fragile: 0
+ urgent: 0
+ mechanical: 0
+ long_duty: 0
+ tight_schedule: 0
+ satisfaction_decrease: 0
+ low_acceleration: 0
+ satisfaction_increase: 0
+ ecodriving: 0
+ user_colors: 0
+ delivery_log: null
+ ferry_log: null
+ police_offence_log: null
+ stored_camera_mode: 1
+ stored_actor_state: 0
+ stored_high_beam_style: 0
+ stored_actor_windows_state: (0, 0)
+ stored_actor_wiper_mode: 0
+ stored_actor_retarder: 0
+ stored_display_mode_on_dashboard: 0
+ stored_display_mode_on_gps: 0
+ stored_dashboard_map_mode: 1
+ stored_world_map_zoom: 0
+ stored_online_job_id: 0
+ stored_online_gps_behind: 0
+ stored_online_gps_ahead: 0
+ stored_online_gps_behind_waypoints: 0
+ stored_online_gps_ahead_waypoints: 0
+ stored_online_gps_avoid_waypoints: 0
+ stored_online_gps_waypoints_history: 0
+ stored_special_job: null
+ police_ctrl: null
+ stored_map_state: 0
+ stored_gas_pump_money: 0
+ stored_weather_change_timer: &457142bf
+ stored_current_weather: 0
+ stored_rain_wetness: 0
+ time_zone: 120
+ time_zone_name: "@@tz_cest@@"
+ last_ferry_position: (2147483647, 2147483647, 2147483647)
+ stored_show_weigh: false
+ stored_need_to_weigh: false
+ stored_nav_start_pos: (2147483647, 2147483647, 2147483647)
+ stored_nav_end_pos: (2147483647, 2147483647, 2147483647)
+ stored_gps_behind: 0
+ stored_gps_ahead: 0
+ stored_gps_behind_waypoints: 0
+ stored_gps_ahead_waypoints: 0
+ stored_gps_avoid_waypoints: 0
+ stored_gps_waypoints_history: 0
+ stored_start_tollgate_pos: (2147483647, 2147483647, 2147483647)
+ stored_map_actions: 0
+ clean_distance_counter: 1
+ clean_distance_max: 1
+ no_cargo_damage_distance_counter: 1
+ no_cargo_damage_distance_max: 1
+ no_violation_distance_counter: 1
+ no_violation_distance_max: 1
+ visited_cities: 1
+ visited_cities[0]: erfurt
+ visited_cities_count: 1
+ visited_cities_count[0]: 1
+ last_visited_city: erfurt
+ discovered_cutscene_items: 0
+ discovered_cutscene_items_states: 0
+ tourist_atlas_log_units: 0
+ tourist_atlas_log_flags: 0
+ unlocked_dealers: 0
+ unlocked_recruitments: 0
+ total_screeshot_count: 0
+ undamaged_cargo_row: 0
+ service_visit_count: 0
+ last_service_pos: (0, 0, 0)
+ gas_station_visit_count: 0
+ last_gas_station_pos: (0, 0, 0)
+ emergency_call_count: 0
+ ai_crash_count: 0
+ truck_color_change_count: 0
+ red_light_fine_count: 0
+ cancelled_job_count: 0
+ total_fuel_litres: 0
+ total_fuel_price: 0
+ transported_cargo_types: 0
+ achieved_feats: 0
+ discovered_roads: 0
+ discovered_items: 22
+ discovered_items[0]: 5318106299669350478
+ discovered_items[1]: 5318106297953880117
+ discovered_items[2]: 5318106297286985780
+ discovered_items[3]: 5318106298222315560
+ discovered_items[4]: 5318106298612385826
+ discovered_items[5]: 5437254548322713600
+ discovered_items[6]: 5318106297190516791
+ discovered_items[7]: 5318106297584781336
+ discovered_items[8]: 5318106298989873221
+ discovered_items[9]: 5437253465588301824
+ discovered_items[10]: 5318106298889209475
+ discovered_items[11]: 5318106299396720234
+ discovered_items[12]: 5318106297412814392
+ discovered_items[13]: 5319838303684853761
+ discovered_items[14]: 5318106296926275134
+ discovered_items[15]: 5318106299128284735
+ discovered_items[16]: 5318106299216365133
+ discovered_items[17]: 5318106296674616913
+ discovered_items[18]: 5318106298041960016
+ discovered_items[19]: 5318106300139111989
+ discovered_items[20]: 5318106296435541583
+ discovered_items[21]: 5318106299874871384
+ drivers_offer: 0
+ default_training_policy: balanced
+ used_vehicle_assortment: null
+ freelance_truck_offer: null
+ trucks_bought_online: 0
+ special_cargo_timer: 0
+ screen_access_list: 39
+ screen_access_list[0]: "screen.bank"
+ screen_access_list[1]: "screen.mail"
+ screen_access_list[2]: "jobs.company"
+ screen_access_list[3]: "jobs.quick"
+ screen_access_list[4]: "screen.skills"
+ screen_access_list[5]: "overview.compman_w"
+ screen_access_list[6]: "screen.garageman"
+ screen_access_list[7]: "screen.truckman"
+ screen_access_list[8]: "screen.trailerman"
+ screen_access_list[9]: "screen.driverman"
+ screen_access_list[10]: "screen.recruit"
+ screen_access_list[11]: "screen.recruit_map"
+ screen_access_list[12]: "screen.real_estate"
+ screen_access_list[13]: "truck.dealer_map"
+ screen_access_list[14]: "truck.eshop"
+ screen_access_list[15]: "truck.eshop.used_trucks"
+ screen_access_list[16]: "trailer.dealer"
+ screen_access_list[17]: "trailer.eshop"
+ screen_access_list[18]: "jobs.online"
+ screen_access_list[19]: "screen.quick.travel"
+ screen_access_list[20]: "jobs.cargo.market"
+ screen_access_list[21]: "jobs.cargo.market.company_s"
+ screen_access_list[22]: "jobs.external.market.online"
+ screen_access_list[23]: "jobs.external.market.online_s"
+ screen_access_list[24]: "convoy.selector"
+ screen_access_list[25]: "convoy.init.access"
+ screen_access_list[26]: "convoy.sessions"
+ screen_access_list[27]: "convoy.current.session"
+ screen_access_list[28]: "truck.upgrades"
+ screen_access_list[29]: "trailer.upgrades"
+ screen_access_list[30]: "screen.bus.skills"
+ screen_access_list[31]: "jobs.bus.company"
+ screen_access_list[32]: "jobs.bus.tourist.company"
+ screen_access_list[33]: "jobs.car_dispatch"
+ screen_access_list[34]: "bus.garage"
+ screen_access_list[35]: "car.garage"
+ screen_access_list[36]: "trailer.config"
+ screen_access_list[37]: "screen.bus_mode"
+ screen_access_list[38]: "screen.car_mode"
+ screen_visit_list: 38
+ screen_visit_list[0]: "screen.bank"
+ screen_visit_list[1]: "screen.mail"
+ screen_visit_list[2]: "jobs.company"
+ screen_visit_list[3]: "jobs.quick"
+ screen_visit_list[4]: "screen.skills"
+ screen_visit_list[5]: "screen.garageman"
+ screen_visit_list[6]: "screen.truckman"
+ screen_visit_list[7]: "screen.trailerman"
+ screen_visit_list[8]: "screen.driverman"
+ screen_visit_list[9]: "screen.recruit"
+ screen_visit_list[10]: "screen.recruit_map"
+ screen_visit_list[11]: "screen.real_estate"
+ screen_visit_list[12]: "truck.dealer_map"
+ screen_visit_list[13]: "truck.eshop"
+ screen_visit_list[14]: "truck.eshop.used_trucks"
+ screen_visit_list[15]: "trailer.dealer"
+ screen_visit_list[16]: "trailer.eshop"
+ screen_visit_list[17]: "jobs.online"
+ screen_visit_list[18]: "screen.quick.travel"
+ screen_visit_list[19]: "jobs.cargo.market"
+ screen_visit_list[20]: "jobs.cargo.market.company_s"
+ screen_visit_list[21]: "jobs.external.market.online"
+ screen_visit_list[22]: "jobs.external.market.online_s"
+ screen_visit_list[23]: "convoy.selector"
+ screen_visit_list[24]: "convoy.init.access"
+ screen_visit_list[25]: "convoy.sessions"
+ screen_visit_list[26]: "convoy.current.session"
+ screen_visit_list[27]: "truck.upgrades"
+ screen_visit_list[28]: "trailer.upgrades"
+ screen_visit_list[29]: "screen.bus.skills"
+ screen_visit_list[30]: "jobs.car_quick"
+ screen_visit_list[31]: "screen.atlas"
+ screen_visit_list[32]: "car.shop"
+ screen_visit_list[33]: "jobs.car_dispatch"
+ screen_visit_list[34]: "jobs.bus"
+ screen_visit_list[35]: "bus.eshop"
+ screen_visit_list[36]: "jobs.bus.company"
+ screen_visit_list[37]: "jobs.bus.tourist.company"
+ driver_pool: 0
+ total_distance: 0
+ total_distances_by_mode: 3
+ total_distances_by_mode[0]: 1
+ total_distances_by_mode[1]: 0
+ total_distances_by_mode[2]: 0
+ total_real_time: 0
+ real_time_seconds: &41a5a141
+ total_real_times_by_mode: 3
+ total_real_times_by_mode[0]: 1
+ total_real_times_by_mode[1]: 0
+ total_real_times_by_mode[2]: 0
+ game_time_initial: nil
+ total_game_times_by_mode: 3
+ total_game_times_by_mode[0]: 4
+ total_game_times_by_mode[1]: 0
+ total_game_times_by_mode[2]: 0
+ registry: null
+ company_jobs_invitation_sent: false
+ company_check_hash: 697398330909959751
+ relations: 20
+ relations[0]: 188
+ relations[1]: 129
+ relations[2]: 153
+ relations[3]: 111
+ relations[4]: 53
+ relations[5]: 143
+ relations[6]: 103
+ relations[7]: 46
+ relations[8]: 58
+ relations[9]: 129
+ relations[10]: 4
+ relations[11]: 150
+ relations[12]: 83
+ relations[13]: 253
+ relations[14]: 42
+ relations[15]: 111
+ relations[16]: 160
+ relations[17]: 222
+ relations[18]: 102
+ relations[19]: 220
+ car_job_log: null
+ car_job_generator: null
+ bus_stops: 0
+ bus_job_log: null
+ bus_experience_points: 0
+}
+
+bank : _nameless.20e.2752.4a68 {
+ money_account: 2000
+ coinsurance_fixed: 1000
+ coinsurance_ratio: &3dcccccd
+ accident_severity: 0
+ loans: 0
+ app_enabled: false
+ loan_limit: 0
+ payment_timer: &45d96e5c
+ overdraft: false
+ overdraft_timer: 0
+ overdraft_warn_count: 0
+ sell_players_truck_later: false
+ sell_players_trailer_later: false
+}
+
+player : _nameless.20e.3150.57d8 {
+ hq_city: erfurt
+ my_vehicles_mode: none
+ my_vehicles: 3
+ my_vehicles[0]: _nameless.20e.2aa3.9428
+ my_vehicles[1]: _nameless.20e.2aa3.9068
+ my_vehicles[2]: _nameless.20e.2aa3.94c8
+ assigned_vehicles_mode: truck
+ assigned_vehicles: _nameless.20e.2aa3.9f68
+ trailers: 0
+ trailer_utilization_logs: 0
+ trailer_defs: 0
+ buses: 0
+ cars: 0
+ schedule_transfer_to_hq: false
+ schedule_quick_travel: false
+ flags: 4
+ vehicle_mode_flags: 0
+ gas_pump_money_debt: 0
+ current_job: _nameless.20e.3039.9ae8
+ current_bus_job: null
+ current_car_job: null
+ selected_job: null
+ selected_bus_offer: null
+ driving_time: 4
+ last_sleep_time: 0
+ time_since_mandatory_break: 4
+ on_break_time: 0
+ free_roam_distance: 0
+ discovary_distance: &401c65a3
+ dismissed_drivers: 0
+ trucks: 0
+ truck_profit_logs: 0
+ drivers: 1
+ drivers[0]: driver.0
+ driver_flags: 1
+ driver_flags[0]: 0
+ driver_readiness_timer: 1
+ driver_readiness_timer[0]: 0
+ driver_undrivable_truck_timers: 1
+ driver_undrivable_truck_timers[0]: 0
+ driver_quit_warned: 0
+ assigned_truck: null
+ truck_placement: (0, 0, 0) (1; 0, 0, 0)
+ assigned_trailer: null
+ trailer_placement: (0, 0, 0) (1; 0, 0, 0)
+ slave_trailer_placements: 0
+ assigned_trailer_connected: false
+ my_truck: null
+ my_truck_placement: (0, 0, 0) (1; 0, 0, 0)
+ my_truck_placement_valid: false
+ my_trailer: null
+ my_trailer_placement: (0, 0, 0) (1; 0, 0, 0)
+ my_slave_trailer_placements: 0
+ my_trailer_attached: false
+ my_trailer_used: false
+}
+
+player_vehicles : _nameless.20e.2aa3.9428 {
+ vehicle: null
+ stored_vehicle_placement: (0, 0, 0) (1; 0, 0, 0)
+ stored_vehicle_city: null
+ stored_vehicle_country: null
+ trailer: null
+ stored_trailer_placements: 0
+ stored_trailer_attached: false
+}
+
+player_vehicles : _nameless.20e.2aa3.9068 {
+ vehicle: null
+ stored_vehicle_placement: (0, 0, 0) (1; 0, 0, 0)
+ stored_vehicle_city: null
+ stored_vehicle_country: null
+ trailer: null
+ stored_trailer_placements: 0
+ stored_trailer_attached: false
+}
+
+player_vehicles : _nameless.20e.2aa3.94c8 {
+ vehicle: null
+ stored_vehicle_placement: (0, 0, 0) (1; 0, 0, 0)
+ stored_vehicle_city: null
+ stored_vehicle_country: null
+ trailer: null
+ stored_trailer_placements: 0
+ stored_trailer_attached: false
+}
+
+player_vehicles : _nameless.20e.2aa3.9f68 {
+ vehicle: _nameless.20e.37d3.2ba8
+ stored_vehicle_placement: (&452352a1, &42118f21, &c5311760) (&bf7cb3f8; &3a816cd4, &be23cf9c, &b8a039a7)
+ stored_vehicle_city: null
+ stored_vehicle_country: null
+ trailer: _nameless.20e.41fe.ac68
+ stored_trailer_placements: 1
+ stored_trailer_placements[0]: (&45236724, &4211a45e, &c530b0c2) (&bf7f2c0b; &bb6e7d49, &bda46895, &3a0cbcb8)
+ stored_trailer_attached: true
+}
+
+player_job : _nameless.20e.3039.9ae8 {
+ company_truck: _nameless.20e.37d3.2ba8
+ company_trailer: _nameless.20e.41fe.ac68
+ target_placement: (&45d897a8, &42056c00, &c531bac0) (&3f709fc8; &b921e510, &3eaec4c9, &38277bff)
+ target_placement_medium: (&45d93bb0, &42057000, &c531f650) (&3f0028c2; &b916eecc, &3f5d9c4a, &b88ffa49)
+ target_placement_hard: (0, &60ad78ec, 0) (1; 0, 0, 0)
+ target_placement_rigid: (0, &60ad78ec, 0) (1; 0, 0, 0)
+ source_placement: (0, 0, 0) (1; 0, 0, 0)
+ selected_target: nil
+ time_lower_limit: 665
+ time_upper_limit: 1065
+ job_distance: 1
+ fuel_consumed: &3f86fc00
+ last_reported_fuel: &4490de41
+ total_fines: 0
+ is_trailer_loaded: true
+ online_job_id: nil
+ online_job_trailer_model: null
+ autoload_used: true
+ cargo: cargo.stone_wool
+ source_company: null
+ target_company: null
+ cargo_model_index: 1013
+ is_articulated: false
+ is_cargo_market_job: false
+ start_time: 600
+ planned_distance_km: 171
+ ferry_time: 0
+ ferry_price: 0
+ urgency: 0
+ special: null
+ car: null
+ units_count: 33
+ fill_ratio: 1
+}
+
+vehicle : _nameless.20e.37d3.2ba8 {
+ engine_wear: &360637c5
+ transmission_wear: &360637c5
+ cabin_wear: 0
+ engine_wear_unfixable: &3456bfa2
+ transmission_wear_unfixable: &3456bfa2
+ cabin_wear_unfixable: 0
+ fuel_relative: &3f7fc46c
+ rheostat_factor: &3f400000
+ user_mirror_rot: 9
+ user_mirror_rot[0]: (1; 0, 0, 0)
+ user_mirror_rot[1]: (1; 0, 0, 0)
+ user_mirror_rot[2]: (1; 0, 0, 0)
+ user_mirror_rot[3]: (1; 0, 0, 0)
+ user_mirror_rot[4]: (1; 0, 0, 0)
+ user_mirror_rot[5]: (1; 0, 0, 0)
+ user_mirror_rot[6]: (1; 0, 0, 0)
+ user_mirror_rot[7]: (1; 0, 0, 0)
+ user_mirror_rot[8]: (1; 0, 0, 0)
+ user_head_offset: (0, 0, 0)
+ user_fov: 0
+ user_wheel_up_down: 0
+ user_wheel_front_back: 0
+ user_mouse_left_right_default: 0
+ user_mouse_up_down_default: 0
+ purchase_time: 0
+ passenger_mass: 0
+ requested_passenger_mass: 0
+ accessories: 43
+ accessories[0]: _nameless.20e.32af.74f8
+ accessories[1]: _nameless.20e.32af.6f58
+ accessories[2]: _nameless.20e.32af.7558
+ accessories[3]: _nameless.20e.32af.7138
+ accessories[4]: _nameless.20e.32af.7df8
+ accessories[5]: _nameless.20e.32af.7198
+ accessories[6]: _nameless.20e.32af.7cd8
+ accessories[7]: _nameless.20e.31d1.8bf8
+ accessories[8]: _nameless.20e.31d1.8c68
+ accessories[9]: _nameless.20e.31d1.8db8
+ accessories[10]: _nameless.20e.31d1.9448
+ accessories[11]: _nameless.20e.31d1.7c38
+ accessories[12]: _nameless.20e.31d1.94b8
+ accessories[13]: _nameless.20e.31d1.7d18
+ accessories[14]: _nameless.20e.31d1.7d88
+ accessories[15]: _nameless.20b.c887.d248
+ accessories[16]: _nameless.20e.37a2.64b8
+ accessories[17]: _nameless.20e.37a2.61b8
+ accessories[18]: _nameless.20e.37a2.4d78
+ accessories[19]: _nameless.20e.37a2.6938
+ accessories[20]: _nameless.20e.37a2.4778
+ accessories[21]: _nameless.20e.37a2.4178
+ accessories[22]: _nameless.20e.37a2.3b78
+ accessories[23]: _nameless.20e.37a2.5138
+ accessories[24]: _nameless.20e.37a2.66f8
+ accessories[25]: _nameless.20e.37a2.4478
+ accessories[26]: _nameless.20e.37a2.5af8
+ accessories[27]: _nameless.20e.37a2.6038
+ accessories[28]: _nameless.20e.37a2.5bb8
+ accessories[29]: _nameless.20e.37a2.3ff8
+ accessories[30]: _nameless.20e.37a2.3cf8
+ accessories[31]: _nameless.20e.37a2.6338
+ accessories[32]: _nameless.20e.37a2.5c78
+ accessories[33]: _nameless.20e.37a2.4838
+ accessories[34]: _nameless.20e.37a2.49b8
+ accessories[35]: _nameless.20e.37a2.67b8
+ accessories[36]: _nameless.20e.37a2.63f8
+ accessories[37]: _nameless.20e.37a2.69f8
+ accessories[38]: _nameless.20e.37a2.6638
+ accessories[39]: _nameless.20e.37a2.3db8
+ accessories[40]: _nameless.20e.37a2.3e78
+ accessories[41]: _nameless.20e.37a2.40b8
+ accessories[42]: _nameless.20e.37a2.3f38
+ odometer: 1
+ odometer_float_part: &3efc52ef
+ integrity_odometer: 1
+ integrity_odometer_float_part: &3efc52ef
+ trip_fuel_l: 0
+ trip_fuel: &3f73b473
+ trip_recuperation_kwh: 0
+ trip_recuperation: 0
+ trip_distance_km: 1
+ trip_distance: &43f64f21
+ trip_time_min: 2
+ trip_time: &3d1ff890
+ license_plate: "E<offset hshift=4 vshift=-5><img src=/material/ui/lp/germany/b_3.mat color=FFFFFFFF><offset hshift=4 vshift=5>CT 8139|germany"
+ license_plate_type: truck
+ chassis_wear: 0
+ chassis_wear_unfixable: 0
+ wheels_wear: 2
+ wheels_wear[0]: &360637c5
+ wheels_wear[1]: &360637c5
+ wheels_wear_unfixable: 2
+ wheels_wear_unfixable[0]: &37a7c5b6
+ wheels_wear_unfixable[1]: &37a7c5b6
+ sliding_axle_offset: 0
+}
+
+vehicle_accessory : _nameless.20e.32af.74f8 {
+ data_path: "/def/vehicle/truck/man.tgx_euro6/data.sii"
+ refund: 0
+}
+
+vehicle_accessory : _nameless.20e.32af.6f58 {
+ data_path: "/def/vehicle/truck/man.tgx_euro6/chassis/4x2.sii"
+ refund: 0
+}
+
+vehicle_accessory : _nameless.20e.32af.7558 {
+ data_path: "/def/vehicle/truck/man.tgx_euro6/cabin/xxl_cab.sii"
+ refund: 0
+}
+
+vehicle_accessory : _nameless.20e.32af.7138 {
+ data_path: "/def/vehicle/truck/man.tgx_euro6/interior/alu_xxl_2019.sii"
+ refund: 0
+}
+
+vehicle_accessory : _nameless.20e.32af.7df8 {
+ data_path: "/def/vehicle/truck/man.tgx_euro6/engine/d3876_471a.sii"
+ refund: 0
+}
+
+vehicle_accessory : _nameless.20e.32af.7198 {
+ data_path: "/def/vehicle/truck/man.tgx_euro6/transmission/zf_12as3141to.sii"
+ refund: 0
+}
+
+vehicle_accessory : _nameless.20e.32af.7cd8 {
+ data_path: "/def/vehicle/truck/man.tgx_euro6/head_light/standard.sii"
+ refund: 0
+}
+
+vehicle_wheel_accessory : _nameless.20e.31d1.8bf8 {
+ offset: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/f_tire/1.sii"
+ refund: 0
+}
+
+vehicle_wheel_accessory : _nameless.20e.31d1.8c68 {
+ offset: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/f_disc/front_disc_02_matt_gray.sii"
+ refund: 0
+}
+
+vehicle_wheel_accessory : _nameless.20e.31d1.8db8 {
+ offset: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/f_hub/front_hub_01.sii"
+ refund: 0
+}
+
+vehicle_wheel_accessory : _nameless.20e.31d1.9448 {
+ offset: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/f_nuts/front_nuts_01_steel.sii"
+ refund: 0
+}
+
+vehicle_wheel_accessory : _nameless.20e.31d1.7c38 {
+ offset: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/r_tire/1.sii"
+ refund: 0
+}
+
+vehicle_wheel_accessory : _nameless.20e.31d1.94b8 {
+ offset: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/r_disc/rear_disc_01_matt_gray.sii"
+ refund: 0
+}
+
+vehicle_wheel_accessory : _nameless.20e.31d1.7d18 {
+ offset: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/r_hub/rear_hub_01.sii"
+ refund: 0
+}
+
+vehicle_wheel_accessory : _nameless.20e.31d1.7d88 {
+ offset: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/r_nuts/rear_nuts_01_steel.sii"
+ refund: 0
+}
+
+vehicle_paint_job_accessory : _nameless.20b.c887.d248 {
+ mask_r_color: (1, 0, 0)
+ mask_g_color: (0, 1, 0)
+ mask_b_color: (0, 0, 1)
+ flake_color: (&3f69b3d0, &3f5f06f7, &3f69b3d0)
+ flip_color: (&3d690471, &3d5e939f, &3d4afc48)
+ base_color: (&3ebb7e91, &3ebb7e91, &3ebb7e91)
+ data_path: "/def/vehicle/truck/man.tgx_euro6/paint_job/man_9036_m.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.20e.37a2.64b8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/man.tgx_euro6/accessory/doorhndl/stock.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.20e.37a2.61b8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/man.tgx_euro6/accessory/mirror/stock.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.20e.37a2.4d78 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/man.tgx_euro6/accessory/doorstep/shape1.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.20e.37a2.6938 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/man.tgx_euro6/accessory/f_mirror/stock.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.20e.37a2.4778 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/man.tgx_euro6/accessory/s_mirror/stock.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.20e.37a2.4178 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/man.tgx_euro6/badge_b/badge_xx640.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.20e.37a2.3b78 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/man.tgx_euro6/accessory/badge_c/el3.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.20e.37a2.5138 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/man.tgx_euro6/accessory/steering_w/leather_2019.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.20e.37a2.66f8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/man.tgx_euro6/accessory/cor_def/stock.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.20e.37a2.4478 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/man.tgx_euro6/accessory/f_logo/stock.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.20e.37a2.5af8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/man.tgx_euro6/accessory/f_intake_cab/stock.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.20e.37a2.6038 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/man.tgx_euro6/accessory/f_intake_bar/stock_19.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.20e.37a2.5bb8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/man.tgx_euro6/accessory/f_wnd_frame/stock.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.20e.37a2.3ff8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/man.tgx_euro6/accessory/f_light_chs/el3.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.20e.37a2.3cf8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/man.tgx_euro6/accessory/f_bumper/paint_19.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.20e.37a2.6338 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/man.tgx_euro6/accessory/f_fender_cab/stock.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.20e.37a2.5c78 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/man.tgx_euro6/accessory/f_fender_chs/stock.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.20e.37a2.4838 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/man.tgx_euro6/accessory/s_strip/stock.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.20e.37a2.49b8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/man.tgx_euro6/accessory/s_panel/stock.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.20e.37a2.67b8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/man.tgx_euro6/accessory/r_fender/stock_4x2.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.20e.37a2.63f8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/man.tgx_euro6/accessory/trlr_cables/stock.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.20e.37a2.69f8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/man.tgx_euro6/badge_a/badge_18xx.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.20e.37a2.6638 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/man.tgx_euro6/accessory/sunshld/stock_xxl.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.20e.37a2.3db8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/man.tgx_euro6/accessory/r_deflector/cabin_xxl_stock.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.20e.37a2.3e78 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/man.tgx_euro6/accessory/s_deflector/stock.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.20e.37a2.40b8 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/man.tgx_euro6/accessory/sideskirt/stock_4x2.sii"
+ refund: 0
+}
+
+vehicle_addon_accessory : _nameless.20e.37a2.3f38 {
+ slot_name: 0
+ slot_hookup: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/truck/man.tgx_euro6/accessory/r_fendr_top/stock_4x2.sii"
+ refund: 0
+}
+
+trailer : _nameless.20e.41fe.ac68 {
+ trailer_definition: trailer_def.scs.box.single_3.dryvan
+ oversize: false
+ cargo_mass: 5280
+ cargo_damage: 0
+ virtual_rear_wheels_offset: 0
+ slave_trailer: null
+ is_private: false
+ trailer_body_wear: 0
+ trailer_body_wear_unfixable: 0
+ accessories: 6
+ accessories[0]: _nameless.20e.41a8.45e8
+ accessories[1]: _nameless.20e.3871.4b18
+ accessories[2]: _nameless.20e.3871.51a8
+ accessories[3]: _nameless.20e.3871.4648
+ accessories[4]: _nameless.20b.c887.db38
+ accessories[5]: _nameless.20e.41a8.5068
+ odometer: 1
+ odometer_float_part: &3ef4630f
+ integrity_odometer: 1
+ integrity_odometer_float_part: &3ef4630f
+ trip_fuel_l: 0
+ trip_fuel: 0
+ trip_recuperation_kwh: 0
+ trip_recuperation: 0
+ trip_distance_km: 0
+ trip_distance: 0
+ trip_time_min: 0
+ trip_time: 0
+ license_plate: "KI<offset hshift=4 vshift=-5><img src=/material/ui/lp/germany/b_2.mat color=FFFFFFFF><offset hshift=4 vshift=5>NV 925|germany"
+ license_plate_type: ""
+ chassis_wear: 0
+ chassis_wear_unfixable: 0
+ wheels_wear: 3
+ wheels_wear[0]: &360637c5
+ wheels_wear[1]: &360637c5
+ wheels_wear[2]: &360637c5
+ wheels_wear_unfixable: 3
+ wheels_wear_unfixable[0]: &37a7c5b6
+ wheels_wear_unfixable[1]: &37a7c5b6
+ wheels_wear_unfixable[2]: &37a7c5b6
+ sliding_axle_offset: 0
+}
+
+vehicle_accessory : _nameless.20e.41a8.45e8 {
+ data_path: "/def/vehicle/trailer/scs_box/dry_van/chassis_stw.sii"
+ refund: 0
+}
+
+vehicle_wheel_accessory : _nameless.20e.3871.4b18 {
+ offset: 0
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/t_wheel/single_385_55_alu.sii"
+ refund: 0
+}
+
+vehicle_wheel_accessory : _nameless.20e.3871.51a8 {
+ offset: 2
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/t_wheel/single_385_55_alu.sii"
+ refund: 0
+}
+
+vehicle_wheel_accessory : _nameless.20e.3871.4648 {
+ offset: 4
+ paint_color: (1, 1, 1)
+ data_path: "/def/vehicle/t_wheel/single_385_55_alu.sii"
+ refund: 0
+}
+
+vehicle_paint_job_accessory : _nameless.20b.c887.db38 {
+ mask_r_color: (1, 0, 0)
+ mask_g_color: (0, 1, 0)
+ mask_b_color: (0, 0, 1)
+ flake_color: (0, 1, 0)
+ flip_color: (1, 0, 0)
+ base_color: (1, 1, 1)
+ data_path: "/def/vehicle/trailer/scs_box/dry_van/company_paint_job/stokes.sii"
+ refund: 0
+}
+
+vehicle_accessory : _nameless.20e.41a8.5068 {
+ data_path: "/def/vehicle/trailer/scs_box/dry_van/accessory/body.sii"
+ refund: 0
+}
+
+driver_player : driver.0 {
+ profit_log: _nameless.20b.c457.45c8
+}
+
+profit_log : _nameless.20b.c457.45c8 {
+ stats_data: 0
+ acc_distance_free: 0
+ acc_distance_on_job: 0
+ history_age: 8
+}
+
+garage : garage.erfurt {
+ vehicles: 1
+ vehicles[0]: null
+ drivers: 1
+ drivers[0]: driver.0
+ trailers: 0
+ status: 6
+ profit_log: _nameless.20e.3442.4168
+ productivity: 0
+}
+
+profit_log : _nameless.20e.3442.4168 {
+ stats_data: 0
+ acc_distance_free: 0
+ acc_distance_on_job: 0
+ history_age: 14
+}
+
+game_progress : _nameless.20e.3442.0ff8 {
+ generic_transports: null
+ undamaged_transports: null
+ clean_transports: null
+ owned_trucks: 0
+}
+
+}

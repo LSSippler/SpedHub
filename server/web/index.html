@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SpedHub</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --hof: #e3e6e4;       /* Betonhof: Seitenhintergrund */
+    --papier: #fbfbf8;    /* Formulare, Flächen */
+    --plane: #1e2a32;     /* Text */
+    --blass: #5c6870;     /* Nebentext */
+    --eu: #0b3d91;        /* Kennzeichenblau: Aktionen */
+    --frei: #1f7a4d;
+    --weg: #9a5b00;
+    --fehler: #a4262c;
+    --buch: #edf3e6;      /* Kassenbuchpapier */
+    --linie: #bfd0b4;
+    --rand: #b9bfbc;
+    --schrift: Bahnschrift, "DIN Alternate", "Roboto Condensed", "Arial Narrow", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { font-size: 100%; }
+  body {
+    margin: 0; background: var(--hof); color: var(--plane);
+    font-family: var(--schrift); font-size: 1rem; line-height: 1.45;
+    font-variant-numeric: tabular-nums;
+  }
+  h1, h2, h3 { font-stretch: 80%; line-height: 1.15; margin: 0; }
+  h1 { font-size: 1.95rem; font-weight: 700; }
+  h2 { font-size: 1.56rem; font-weight: 600; margin-bottom: .75rem; }
+  h3 { font-size: 1.125rem; font-weight: 600; margin-bottom: .5rem; }
+  p { margin: 0 0 .75rem; max-width: 62ch; }
+  .blass { color: var(--blass); }
+  .klein { font-size: .875rem; }
+
+  .kopf {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: .5rem 1.5rem;
+    padding: 1.25rem clamp(1rem, 4vw, 2.5rem) 1rem; border-bottom: 2px solid var(--plane);
+  }
+  .kopf .wer { margin-left: auto; display: flex; flex-wrap: wrap; align-items: baseline; gap: .5rem 1rem; }
+  main { padding: 1.5rem clamp(1rem, 4vw, 2.5rem) 4rem; }
+
+  /* Formulare */
+  label { display: block; font-size: .875rem; color: var(--blass); margin-bottom: .2rem; }
+  input, select {
+    font: inherit; color: inherit; width: 100%; padding: .5rem .6rem;
+    background: #fff; border: 1px solid var(--rand); border-radius: 3px;
+  }
+  .feld { margin-bottom: .75rem; }
+  .zeile { display: flex; flex-wrap: wrap; gap: .75rem; align-items: flex-end; }
+  .zeile > .feld { flex: 1 1 9rem; margin-bottom: 0; }
+  .zeile > .feld.breit { flex: 2 1 17rem; }
+  button {
+    font: inherit; font-weight: 600; cursor: pointer; padding: .5rem .9rem; white-space: nowrap;
+    background: var(--eu); color: #fff; border: 1px solid var(--eu); border-radius: 3px;
+  }
+  button:hover { background: #082d6c; }
+  button.leise { background: transparent; color: var(--eu); border-color: var(--rand); }
+  button.leise:hover { background: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  :focus-visible { outline: 3px solid #f2b100; outline-offset: 2px; }
+
+  .blatt { background: var(--papier); border: 1px solid var(--rand); padding: 1.25rem; }
+  .schmal { max-width: 26rem; }
+  .stapel > * + * { margin-top: 2.25rem; }
+  .paar { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 1.25rem; }
+
+  /* Firmenansicht */
+  .firma { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(21rem, 1fr); gap: 2.5rem; align-items: start; }
+  @media (max-width: 62rem) {
+    .firma { grid-template-columns: minmax(0, 1fr); }
+    /* Schmal: Kassenstand zuerst, das Journal bleibt kurz und rollt in sich. */
+    .firma > .buch { order: -1; position: static; max-height: none; }
+    .firma > .buch .eintraege { max-height: 15rem; }
+  }
+
+  /* Fuhrpark: jeder Lkw ist sein Kennzeichen */
+  .lkw { display: grid; grid-template-columns: 11.5rem minmax(0, 1fr) auto; gap: .25rem 1.25rem; align-items: center;
+         padding: .85rem 0; border-top: 1px solid var(--rand); }
+  .lkw:last-child { border-bottom: 1px solid var(--rand); }
+  .kz { display: inline-flex; align-items: stretch; background: #fff; border: 2px solid #14181b; border-radius: 6px;
+        font-stretch: 75%; font-weight: 700; font-size: 1.5rem; letter-spacing: .05em; line-height: 1; white-space: nowrap; }
+  .kz::before { content: "D"; display: flex; align-items: flex-end; justify-content: center; width: 1.15rem;
+                padding-bottom: .22rem; background: var(--eu); color: #fff; font-size: .7rem; letter-spacing: 0;
+                border-radius: 3px 0 0 3px; }
+  .kz span { padding: .4rem .65rem .34rem; }
+  .lkw .modell { font-weight: 600; }
+  .stand { font-weight: 600; }
+  .stand.frei { color: var(--frei); }
+  .stand.weg { color: var(--weg); }
+  .rueckgabe { grid-column: 1 / -1; background: var(--papier); border: 1px solid var(--rand); padding: .75rem; margin-top: .5rem; }
+  @media (max-width: 34rem) { .lkw { grid-template-columns: minmax(0, 1fr); } }
+
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: .45rem .75rem .45rem 0; border-bottom: 1px solid var(--rand); }
+  th { font-size: .875rem; font-weight: 400; color: var(--blass); }
+  .zahl { text-align: right; white-space: nowrap; padding-right: 0; }
+  .minus { color: var(--fehler); }
+
+  /* Kassenbuch: liniertes Papier mit zwei Betragsspalten */
+  .buch { background: var(--buch); border: 1px solid var(--linie); position: sticky; top: 1rem;
+          display: flex; flex-direction: column; max-height: calc(100vh - 2rem); }
+  .buch header { padding: 1rem 1rem .75rem; border-bottom: 2px solid var(--plane); }
+  .bestand { font-size: 2.44rem; font-weight: 700; font-stretch: 80%; line-height: 1.1; }
+  .buch table { font-size: .9375rem; }
+  .buch th, .buch td { border-bottom: 1px solid var(--linie); padding: .4rem .6rem; vertical-align: top; }
+  .buch th.zahl, .buch td.zahl { border-left: 1px solid var(--linie); width: 6.25rem; }
+  .buch .wann { color: var(--blass); white-space: nowrap; width: 5.25rem; }
+  .eintraege { overflow: auto; min-height: 0; }
+
+  .code { font-size: 1.56rem; font-weight: 700; letter-spacing: .12em; }
+  details > summary { cursor: pointer; font-weight: 600; font-stretch: 80%; font-size: 1.125rem; }
+  details[open] > summary { margin-bottom: .75rem; }
+
+  #meldung { position: fixed; left: 50%; bottom: 1.25rem; transform: translateX(-50%); max-width: min(34rem, 92vw);
+             padding: .7rem 1rem; background: var(--plane); color: #fff; border-radius: 3px; }
+  #meldung.fehler { background: var(--fehler); }
+  #meldung:empty { display: none; }
+</style>
+</head>
+<body>
+<header class="kopf">
+  <h1 id="titel">SpedHub</h1>
+  <div class="wer" id="wer"></div>
+</header>
+<main id="app"></main>
+<div id="meldung" role="status" aria-live="polite"></div>
+
+<script>
+"use strict";
+
+// ---------------------------------------------------------------- Grundlagen
+
+const $ = (id) => document.getElementById(id);
+
+/** Baut ein Element. Texte landen immer als Text im Dokument, nie als HTML. */
+function h(tag, attrs, ...kinder) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v === false || v == null) continue;
+    if (k === "class") el.className = v;
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else if (k === "value") { el.setAttribute("value", v); el.value = v; }
+    else el.setAttribute(k, v === true ? "" : v);
+  }
+  for (const kind of kinder.flat()) {
+    if (kind == null || kind === false) continue;
+    el.append(kind.nodeType ? kind : document.createTextNode(String(kind)));
+  }
+  return el;
+}
+
+const speicher = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} },
+};
+
+const zustand = { token: speicher.get("token"), ich: null, firmaId: null, firma: null, lkw: [], buch: null, rueckgabe: null };
+let takt = null;
+
+class ApiFehler extends Error { constructor(status, text) { super(text); this.status = status; } }
+
+async function api(methode, pfad, daten) {
+  const kopf = {};
+  if (zustand.token) kopf.Authorization = "Bearer " + zustand.token;
+  if (daten !== undefined) kopf["Content-Type"] = "application/json";
+  let antwort;
+  try {
+    antwort = await fetch(pfad, { method: methode, headers: kopf, body: daten === undefined ? undefined : JSON.stringify(daten) });
+  } catch {
+    throw new ApiFehler(0, "Der Server antwortet nicht. Läuft er noch?");
+  }
+  const json = await antwort.json().catch(() => null);
+  if (!antwort.ok) throw new ApiFehler(antwort.status, (json && json.error) || "Die Anfrage ist fehlgeschlagen (" + antwort.status + ")");
+  return json;
+}
+
+let meldungUhr = null;
+function melde(text, fehler) {
+  const m = $("meldung");
+  m.textContent = text;
+  m.className = fehler ? "fehler" : "";
+  clearTimeout(meldungUhr);
+  meldungUhr = setTimeout(() => { m.textContent = ""; }, fehler ? 8000 : 4000);
+}
+
+/** Führt eine Aktion aus und zeigt Fehler an. Bei abgelaufener Anmeldung geht es zurück zum Anmelden. */
+async function versuche(aktion, knopf) {
+  if (knopf) knopf.disabled = true;
+  try {
+    await aktion();
+  } catch (e) {
+    if (e instanceof ApiFehler && e.status === 401 && zustand.token) {
+      abmeldenLokal();
+      melde("Deine Anmeldung ist abgelaufen. Melde dich neu an.", true);
+    } else {
+      melde(e.message || String(e), true);
+    }
+  } finally {
+    if (knopf) knopf.disabled = false;
+  }
+}
+
+const euro = (n) => new Intl.NumberFormat("de-DE").format(n) + " €";
+const km = (n) => new Intl.NumberFormat("de-DE").format(n) + " km";
+const uhrzeit = (s) => new Date(s * 1000).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
+function wann(s) {
+  const d = new Date(s * 1000);
+  const heute = new Date().toDateString() === d.toDateString();
+  return heute ? uhrzeit(s) : d.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit" }) + " " + uhrzeit(s);
+}
+/** "scania.s_2016" wird zu "Scania S 2016", "volvo.fh_2024" zu "Volvo FH 2024". */
+const modellName = (m) => m.split(/[._]/).filter(Boolean)
+  .map((w) => (w.length <= 3 ? w.toUpperCase() : w[0].toUpperCase() + w.slice(1))).join(" ");
+
+const ARTEN = { lohn: "Lohn", auftrag: "Auftrag", strafe: "Strafe", maut: "Maut", faehre: "Fähre", zug: "Zug",
+                auftrag_abgebrochen: "Auftrag abgebrochen", ueberweisung: "Überweisung" };
+
+function feld(beschriftung, eingabe, klasse) {
+  if (!eingabe.id) eingabe.id = "f" + Math.random().toString(36).slice(2, 9);
+  return h("div", { class: "feld" + (klasse ? " " + klasse : "") }, h("label", { for: eingabe.id }, beschriftung), eingabe);
+}
+
+function formular(beimSenden, ...inhalt) {
+  return h("form", { onsubmit: (e) => { e.preventDefault(); versuche(() => beimSenden(e.target), e.submitter); } }, ...inhalt);
+}
+
+// ---------------------------------------------------------------- Kopfzeile
+
+function zeigeKopf() {
+  $("titel").textContent = zustand.firma ? zustand.firma.name : "SpedHub";
+  document.title = zustand.firma ? zustand.firma.name + ", SpedHub" : "SpedHub";
+  const wer = $("wer");
+  wer.replaceChildren();
+  if (!zustand.ich) return;
+  const rolle = zustand.firma ? (zustand.firma.your_role === "chef" ? "Chef" : "Fahrer") : null;
+  wer.append(h("span", {}, zustand.ich.name, rolle ? ", " + rolle : ""));
+  if (zustand.firma) wer.append(h("button", { class: "leise", onclick: () => versuche(zeigeFirmenwahl) }, "Firma wechseln"));
+  wer.append(h("button", { class: "leise", onclick: (e) => versuche(abmelden, e.target) }, "Abmelden"));
+}
+
+// ---------------------------------------------------------------- Anmelden
+
+function abmeldenLokal() {
+  clearInterval(takt);
+  zustand.token = null; zustand.ich = null; zustand.firma = null; zustand.firmaId = null;
+  speicher.set("token", null); speicher.set("firma", null);
+  zeigeAnmeldung(false);
+}
+
+async function abmelden() {
+  try { await api("POST", "/api/logout"); } catch {}
+  abmeldenLokal();
+}
+
+function zeigeAnmeldung(neu) {
+  zeigeKopf();
+  const name = h("input", { autocomplete: "username", required: true, minlength: 3, maxlength: 32 });
+  const passwort = h("input", { type: "password", required: true, minlength: 8, autocomplete: neu ? "new-password" : "current-password" });
+  const senden = async () => {
+    const r = await api("POST", neu ? "/api/register" : "/api/login", { name: name.value, password: passwort.value });
+    zustand.token = r.token;
+    speicher.set("token", r.token);
+    await start();
+  };
+  $("app").replaceChildren(h("div", { class: "blatt schmal" },
+    h("h2", {}, neu ? "Konto anlegen" : "Anmelden"),
+    formular(senden,
+      feld("Name", name),
+      feld(neu ? "Passwort, mindestens 8 Zeichen" : "Passwort", passwort),
+      h("div", { class: "zeile" },
+        h("button", {}, neu ? "Konto anlegen" : "Anmelden"),
+        h("button", { type: "button", class: "leise", onclick: () => zeigeAnmeldung(!neu) },
+          neu ? "Ich habe schon ein Konto" : "Neues Konto anlegen")))));
+  name.focus();
+}
+
+// ---------------------------------------------------------------- Firmenwahl
+
+async function zeigeFirmenwahl() {
+  clearInterval(takt);
+  zustand.firma = null; zustand.firmaId = null;
+  speicher.set("firma", null);
+  zustand.ich = await api("GET", "/api/me");
+  zeigeKopf();
+
+  const firmen = zustand.ich.companies;
+  const liste = firmen.length
+    ? h("div", { class: "zeile" }, firmen.map((f) =>
+        h("button", { onclick: (e) => versuche(() => oeffneFirma(f.id), e.target) }, f.name)))
+    : h("p", {}, "Du bist noch in keiner Firma. Gründe eine, oder tritt mit einem Einladungscode bei.");
+
+  const fname = h("input", { required: true, minlength: 3, maxlength: 48 });
+  const lohn = h("input", { type: "number", min: 0, max: 100, value: 30, required: true });
+  const code = h("input", { required: true, autocapitalize: "characters" });
+
+  $("app").replaceChildren(h("div", { class: "stapel" },
+    h("section", {}, h("h2", {}, "Deine Firmen"), liste),
+    h("div", { class: "paar" },
+      h("section", { class: "blatt" },
+        h("h3", {}, "Firma gründen"),
+        formular(async () => {
+            const f = await api("POST", "/api/companies", { name: fname.value, wage_percent: Number(lohn.value) });
+            await oeffneFirma(f.id);
+            melde("Firma gegründet. Den Einladungscode findest du im Büro.");
+          },
+          feld("Name der Firma", fname),
+          feld("Lohnanteil der Fahrer in Prozent", lohn),
+          h("button", {}, "Firma gründen"))),
+      h("section", { class: "blatt" },
+        h("h3", {}, "Einer Firma beitreten"),
+        formular(async () => {
+            const f = await api("POST", "/api/companies/join", { invite_code: code.value });
+            await oeffneFirma(f.company_id);
+            melde("Du fährst jetzt für " + f.name + ".");
+          },
+          feld("Einladungscode vom Chef", code),
+          h("button", {}, "Beitreten"))))));
+}
+
+// ---------------------------------------------------------------- Firma
+
+async function ladeFirma() {
+  const id = zustand.firmaId;
+  const [firma, lkw, buch] = await Promise.all([
+    api("GET", "/api/companies/" + id),
+    api("GET", "/api/companies/" + id + "/trucks"),
+    api("GET", "/api/companies/" + id + "/ledger?limit=100"),
+  ]);
+  if (id !== zustand.firmaId) return;
+  zustand.firma = firma; zustand.lkw = lkw.trucks; zustand.buch = buch;
+}
+
+async function oeffneFirma(id) {
+  clearInterval(takt);
+  zustand.firmaId = id; zustand.rueckgabe = null;
+  await ladeFirma();
+  speicher.set("firma", String(id));
+  baueFirma();
+  takt = setInterval(() => { if (!document.hidden) auffrischen(true); }, 5000);
+}
+
+/** Holt neue Daten und zeichnet nur die Teile neu, in denen niemand gerade tippt. */
+async function auffrischen(still) {
+  try {
+    await ladeFirma();
+    zeichneDaten();
+  } catch (e) {
+    if (e instanceof ApiFehler && e.status === 401) { abmeldenLokal(); melde("Deine Anmeldung ist abgelaufen. Melde dich neu an.", true); }
+    else if (!still) throw e;
+  }
+}
+
+function baueFirma() {
+  zeigeKopf();
+  const chef = zustand.firma.your_role === "chef";
+  $("app").replaceChildren(h("div", { class: "firma" },
+    h("div", { class: "stapel" },
+      h("section", {},
+        h("h2", {}, "Fuhrpark"),
+        h("p", { class: "blass klein" }, "Ausleihen sperrt den Lkw für alle anderen. In den Spielstand schreibt ihn später der Launcher."),
+        h("div", { id: "fuhrpark" })),
+      h("section", {}, h("h2", {}, "Fahrer"), h("div", { id: "fahrer" })),
+      chef ? baueBuero() : null,
+      baueTestbuchung()),
+    h("aside", { class: "buch", id: "buch" })));
+  zeichneDaten();
+}
+
+function zeichneDaten() {
+  if (!zustand.firma || !$("fuhrpark")) return;
+  zeigeKopf();
+  if (zustand.rueckgabe == null) zeichneFuhrpark();
+  zeichneFahrer();
+  zeichneBuch();
+  fuelleFahrerwahl();
+}
+
+// ---- Fuhrpark
+
+function zeichneFuhrpark() {
+  const chef = zustand.firma.your_role === "chef";
+  const box = $("fuhrpark");
+  if (!zustand.lkw.length) {
+    box.replaceChildren(h("p", {}, chef
+      ? "Noch kein Lkw im Fuhrpark. Leg unten im Büro den ersten an."
+      : "Noch kein Lkw im Fuhrpark. Der Chef legt die Lkw an."));
+    return;
+  }
+  box.replaceChildren(...zustand.lkw.map((t) => {
+    const bei = t.leased_by;
+    const meiner = bei && bei.user_id === zustand.ich.user_id;
+    let knopf = null;
+    if (!bei) {
+      knopf = h("button", { onclick: (e) => versuche(async () => {
+        await api("POST", "/api/trucks/" + t.id + "/checkout");
+        await auffrischen();
+        melde(t.plate + " ist jetzt an dich verliehen.");
+      }, e.target) }, "Ausleihen");
+    } else if (meiner || chef) {
+      knopf = h("button", { class: "leise", onclick: () => { zustand.rueckgabe = t.id; zeichneFuhrpark(); } },
+        meiner ? "Zurückgeben" : "Zurücknehmen");
+    }
+    const zeile = h("div", { class: "lkw" },
+      h("div", {}, h("span", { class: "kz" }, h("span", {}, t.plate))),
+      h("div", {},
+        h("div", { class: "modell" }, modellName(t.model)),
+        h("div", { class: "klein" }, km(t.odometer_km), ", ",
+          bei ? h("span", { class: "stand weg" }, meiner ? "bei dir" : "bei " + bei.name, " seit " + wann(bei.since))
+              : h("span", { class: "stand frei" }, "frei"))),
+      h("div", {}, zustand.rueckgabe === t.id ? null : knopf));
+    if (zustand.rueckgabe === t.id) zeile.append(baueRueckgabe(t));
+    return zeile;
+  }));
+}
+
+function baueRueckgabe(t) {
+  const stand = h("input", { type: "number", min: t.odometer_km, value: t.odometer_km, required: true });
+  const zu = () => { zustand.rueckgabe = null; zeichneFuhrpark(); };
+  const form = formular(async () => {
+      const r = await api("POST", "/api/trucks/" + t.id + "/checkin", { odometer_km: Number(stand.value) });
+      zustand.rueckgabe = null;
+      await auffrischen();
+      melde(t.plate + " ist zurück, " + km(r.driven_km) + " gefahren.");
+    },
+    h("div", { class: "zeile" },
+      feld("Kilometerstand bei Rückgabe", stand),
+      h("button", {}, "Rückgabe buchen"),
+      h("button", { type: "button", class: "leise", onclick: zu }, "Abbrechen")));
+  setTimeout(() => stand.select(), 0);
+  return h("div", { class: "rueckgabe" }, form);
+}
+
+// ---- Fahrer
+
+function zeichneFahrer() {
+  $("fahrer").replaceChildren(h("table", {},
+    h("thead", {}, h("tr", {}, h("th", {}, "Name"), h("th", {}, "Rolle"), h("th", { class: "zahl" }, "Lohnkonto"))),
+    h("tbody", {}, zustand.firma.members.map((m) => h("tr", {},
+      h("td", {}, m.name),
+      h("td", {}, m.role === "chef" ? "Chef" : "Fahrer"),
+      h("td", { class: "zahl" + (m.wallet < 0 ? " minus" : "") }, euro(m.wallet)))))));
+}
+
+// ---- Kassenbuch
+
+function zeichneBuch() {
+  const ich = zustand.firma.members.find((m) => m.user_id === zustand.ich.user_id);
+  const eintraege = zustand.buch.entries;
+  const zeilen = eintraege.map((e) => {
+    const betrag = h("span", { class: e.amount < 0 ? "minus" : "" }, (e.amount > 0 ? "+" : "") + euro(e.amount));
+    const text = [ARTEN[e.kind] || e.kind, e.user ? ", " + e.user : "", e.note ? " (" + e.note + ")" : ""].join("");
+    return h("tr", {},
+      h("td", { class: "wann" }, wann(e.created_at)),
+      h("td", {}, text),
+      h("td", { class: "zahl" }, e.account === "firma" ? betrag : ""),
+      h("td", { class: "zahl" }, e.account === "fahrer" ? betrag : ""));
+  });
+  $("buch").replaceChildren(
+    h("header", {},
+      h("h2", {}, "Kassenbuch"),
+      h("div", { class: "bestand" + (zustand.firma.balance < 0 ? " minus" : "") }, euro(zustand.firma.balance)),
+      h("div", {}, "in der Firmenkasse"),
+      ich ? h("div", { class: "klein blass" }, "Dein Lohnkonto: " + euro(ich.wallet) + ", Lohnanteil " + zustand.firma.wage_percent + " %") : null),
+    eintraege.length
+      ? h("div", { class: "eintraege" }, h("table", {},
+          h("thead", {}, h("tr", {}, h("th", {}, "Wann"), h("th", {}, "Was"), h("th", { class: "zahl" }, "Kasse"), h("th", { class: "zahl" }, "Lohnkonto"))),
+          h("tbody", {}, zeilen)))
+      : h("p", { style: "padding: 1rem" }, "Noch keine Buchungen. Die erste kommt mit dem ersten abgelieferten Auftrag."));
+}
+
+// ---- Büro (nur Chef)
+
+function fuelleFahrerwahl() {
+  const wahl = $("fahrerwahl");
+  if (!wahl) return;
+  const neu = JSON.stringify(zustand.firma.members.map((m) => [m.user_id, m.name]));
+  if (wahl.dataset.stand === neu) return;
+  const vorher = wahl.value;
+  wahl.replaceChildren(...zustand.firma.members.map((m) => h("option", { value: m.user_id }, m.name)));
+  if (vorher) wahl.value = vorher;
+  wahl.dataset.stand = neu;
+}
+
+function baueBuero() {
+  const id = zustand.firmaId;
+  const lohn = h("input", { type: "number", min: 0, max: 100, value: zustand.firma.wage_percent, required: true });
+  const kz = h("input", { required: true, maxlength: 12, placeholder: "SPED 001" });
+  const modell = h("input", { required: true, placeholder: "scania.s_2016" });
+  const stand = h("input", { type: "number", min: 0, value: 0, required: true });
+  const wer = h("select", {});
+  wer.id = "fahrerwahl";
+  const richtung = h("select", {}, h("option", { value: "1" }, "Aus der Kasse an den Fahrer"), h("option", { value: "-1" }, "Vom Fahrer in die Kasse"));
+  const betrag = h("input", { type: "number", min: 1, required: true });
+  const notiz = h("input", { maxlength: 80, placeholder: "zum Beispiel Vorschuss" });
+  const code = zustand.firma.invite_code;
+
+  return h("section", {},
+    h("h2", {}, "Büro"),
+    h("div", { class: "paar" },
+      h("div", { class: "blatt" },
+        h("h3", {}, "Fahrer einladen"),
+        h("p", { class: "klein" }, "Mit diesem Code tritt ein Fahrer deiner Firma bei."),
+        h("div", { class: "zeile" },
+          h("span", { class: "code" }, code),
+          h("button", { class: "leise", onclick: () => navigator.clipboard.writeText(code).then(
+            () => melde("Einladungscode kopiert."), () => melde("Kopieren ging nicht. Markier den Code von Hand.", true)) }, "Code kopieren"))),
+      h("div", { class: "blatt" },
+        h("h3", {}, "Lohnanteil"),
+        formular(async () => {
+            await api("PATCH", "/api/companies/" + id, { wage_percent: Number(lohn.value) });
+            await auffrischen();
+            melde("Lohnanteil gespeichert. Er gilt ab dem nächsten Auftrag.");
+          },
+          feld("So viel Prozent vom Erlös bekommt der Fahrer", lohn),
+          h("button", {}, "Lohnanteil speichern"))),
+      h("div", { class: "blatt" },
+        h("h3", {}, "Lkw anlegen"),
+        formular(async (f) => {
+            await api("POST", "/api/companies/" + id + "/trucks", { plate: kz.value, model: modell.value, odometer_km: Number(stand.value) });
+            const name = kz.value;
+            f.reset();
+            await auffrischen();
+            melde(name + " steht jetzt im Fuhrpark.");
+          },
+          feld("Kennzeichen", kz),
+          feld("Modell, so wie es im Spiel heißt", modell),
+          feld("Kilometerstand", stand),
+          h("button", {}, "Lkw anlegen"))),
+      h("div", { class: "blatt" },
+        h("h3", {}, "Geld überweisen"),
+        formular(async (f) => {
+            const summe = Number(betrag.value) * Number(richtung.value);
+            await api("POST", "/api/companies/" + id + "/transfer", { user_id: Number(wer.value), amount: summe, note: notiz.value });
+            f.reset();
+            await auffrischen();
+            melde("Überweisung gebucht.");
+          },
+          feld("Fahrer", wer),
+          feld("Richtung", richtung),
+          feld("Betrag in Euro", betrag),
+          feld("Notiz", notiz),
+          h("button", {}, "Überweisen")))));
+}
+
+// ---- Buchen von Hand, solange es noch kein Plugin gibt
+
+function baueTestbuchung() {
+  const id = zustand.firmaId;
+  const art = h("select", {},
+    h("option", { value: "job_delivered" }, "Auftrag abgeliefert (Erlös)"),
+    h("option", { value: "job_cancelled" }, "Auftrag abgebrochen (zahlt der Fahrer)"),
+    h("option", { value: "fined" }, "Strafe (zahlt der Fahrer)"),
+    h("option", { value: "tollgate" }, "Maut (zahlt die Firma)"),
+    h("option", { value: "ferry" }, "Fähre (zahlt die Firma)"),
+    h("option", { value: "train" }, "Zug (zahlt die Firma)"));
+  const betrag = h("input", { type: "number", min: 0, required: true });
+  const notiz = h("input", { maxlength: 80 });
+  return h("details", {},
+    h("summary", {}, "Ereignis von Hand buchen"),
+    h("p", { class: "klein blass" }, "Zum Testen ohne Spiel. Später meldet das Plugin diese Ereignisse von selbst. Gebucht wird auf dich als Fahrer."),
+    formular(async (f) => {
+        const ereignis = "hand-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+        await api("POST", "/api/companies/" + id + "/events", { event_id: ereignis, type: art.value, amount: Number(betrag.value), note: notiz.value });
+        f.reset();
+        await auffrischen();
+        melde("Gebucht.");
+      },
+      h("div", { class: "zeile" }, feld("Was ist passiert", art, "breit"), feld("Betrag in Euro", betrag), feld("Notiz", notiz), h("button", {}, "Buchen"))));
+}
+
+// ---------------------------------------------------------------- Start
+
+async function start() {
+  if (!zustand.token) return zeigeAnmeldung(false);
+  try {
+    zustand.ich = await api("GET", "/api/me");
+  } catch (e) {
+    if (e.status === 401) { speicher.set("token", null); zustand.token = null; return zeigeAnmeldung(false); }
+    $("app").replaceChildren(h("p", {}, e.message));
+    return;
+  }
+  const gemerkt = Number(speicher.get("firma"));
+  if (gemerkt && zustand.ich.companies.some((f) => f.id === gemerkt)) return oeffneFirma(gemerkt);
+  if (zustand.ich.companies.length === 1) return oeffneFirma(zustand.ich.companies[0].id);
+  return zeigeFirmenwahl();
+}
+
+versuche(start);
+</script>
+</body>
+</html>
