@@ -231,3 +231,19 @@ pub fn send_raw(
     assert!(res.status().is_success(), "{url}: {}", res.status());
     res.body_mut().read_json().unwrap()
 }
+
+/// Direkte GET-Anfrage an den Server, etwa für das Kassenbuch.
+pub fn get_raw(url: &str, token: &str) -> serde_json::Value {
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .proxy(None)
+        .build()
+        .into();
+    let mut res = agent
+        .get(url)
+        .header("Authorization", &format!("Bearer {token}"))
+        .call()
+        .unwrap();
+    assert!(res.status().is_success(), "{url}: {}", res.status());
+    res.body_mut().read_json().unwrap()
+}

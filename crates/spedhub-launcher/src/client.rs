@@ -101,6 +101,32 @@ pub struct Truck {
     /// Was eine Reparatur jetzt kosten würde, in Euro
     #[serde(default)]
     pub repair_cost: i64,
+    /// Ausgemustert oder verkauft: nicht mehr ausleihbar, steht nur noch für die Geschichte
+    /// in der Liste. Ältere Server liefern das nicht.
+    #[serde(default)]
+    pub retired: Option<Retired>,
+}
+
+/// Wann und warum ein Lkw den Fuhrpark verlassen hat.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Retired {
+    /// `ausgemustert` oder `verkauft`
+    pub reason: String,
+    pub at: i64,
+    /// Erlös in Euro, nur beim Verkauf
+    #[serde(default)]
+    pub sale_price: Option<i64>,
+}
+
+impl Retired {
+    /// Für die Liste, etwa `verkauft für 30000 Euro` oder `ausgemustert`.
+    pub fn text(&self) -> String {
+        match (self.reason.as_str(), self.sale_price) {
+            ("verkauft", Some(p)) if p > 0 => format!("verkauft für {p} Euro"),
+            ("verkauft", _) => "verkauft".into(),
+            _ => "ausgemustert".into(),
+        }
+    }
 }
 
 impl Truck {
@@ -180,6 +206,9 @@ pub struct SyncResult {
     pub unexplained: Option<Unexplained>,
     pub wallet: i64,
     pub advance: i64,
+    /// Rest eines offenen Anschaffungsbudgets, nur beim Chef. Steckt in `write_money`.
+    #[serde(default)]
+    pub budget: i64,
     /// Das kommt in den Spielstand
     pub write_money: i64,
     #[serde(default)]
@@ -236,6 +265,56 @@ pub struct Checkin {
     /// Über der Schadensgrenze: Der Lkw steht jetzt in der Werkstatt
     #[serde(default)]
     pub in_workshop: bool,
+}
+
+/// Eine Betriebskosten-Buchung des Chefs, die noch mit keinem Lkw verknüpft ist. Daraus wählt
+/// er nach "Lkw übernehmen" den Kauf.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct PurchaseCandidate {
+    /// Die Buchung im Kassenbuch
+    pub id: i64,
+    pub created_at: i64,
+    /// Negativ, wie gebucht
+    pub amount: i64,
+    #[serde(default)]
+    pub note: String,
+}
+
+impl PurchaseCandidate {
+    /// Für die Auswahl, etwa `45000 Euro, vor 2 Stunden (Abgleich: erwartet ...)`. `now` in
+    /// Unix-Sekunden.
+    pub fn label(&self, now: i64) -> String {
+        let mut text = format!("{} Euro, {}", -self.amount, age_text(now - self.created_at));
+        if !self.note.is_empty() {
+            text.push_str(&format!(" ({})", self.note));
+        }
+        text
+    }
+}
+
+/// Wie lange etwas her ist: `gerade eben`, `vor 5 Minuten`, `vor 1 Stunde`, `vor 3 Tagen`.
+pub fn age_text(secs: i64) -> String {
+    let (n, one, many) = match secs.max(0) {
+        s if s < 60 => return "gerade eben".into(),
+        s if s < 3600 => (s / 60, "Minute", "Minuten"),
+        s if s < 86_400 => (s / 3600, "Stunde", "Stunden"),
+        s => (s / 86_400, "Tag", "Tagen"),
+    };
+    format!("vor {n} {}", if n == 1 { one } else { many })
+}
+
+#[derive(Deserialize)]
+struct CandidateList {
+    entries: Vec<PurchaseCandidate>,
+}
+
+/// Antwort beim Verknüpfen eines Kaufs.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct LinkedPurchase {
+    pub ledger_id: i64,
+    pub truck_id: i64,
+    /// Aktuelles Kennzeichen des Lkw, so steht es im Kassenbuch
+    pub truck_plate: String,
 }
 
 pub struct Client {
@@ -410,6 +489,28 @@ impl Client {
             &body,
         )?;
         Ok(())
+    }
+
+    /// Betriebskosten-Buchungen des Chefs, die noch mit keinem Lkw verknüpft sind, neueste
+    /// zuerst. Nur für den Chef.
+    pub fn purchase_candidates(&self, company_id: i64) -> Result<Vec<PurchaseCandidate>> {
+        let list: CandidateList =
+            self.get(&format!("/api/companies/{company_id}/purchase-candidates"))?;
+        Ok(list.entries)
+    }
+
+    /// Eine Betriebskosten-Buchung als Kauf dieses Lkw verknüpfen (nur Chef). Die Buchung
+    /// bleibt, wie sie ist, im Kassenbuch steht dann "Lkw-Kauf <Kennzeichen>".
+    pub fn link_purchase(
+        &self,
+        company_id: i64,
+        ledger_id: i64,
+        truck_id: i64,
+    ) -> Result<LinkedPurchase> {
+        self.post(
+            &format!("/api/companies/{company_id}/ledger/{ledger_id}/link-truck"),
+            &json!({ "truck_id": truck_id }),
+        )
     }
 
     fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T> {

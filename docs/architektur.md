@@ -26,7 +26,7 @@ Nicht Teil des Projekts: ein eigener Multiplayer, Eingriffe in den Arbeitsspeich
 
 | Baustein | Aufgabe | Stand |
 |---|---|---|
-| Server (`server/`) | Accounts, Firma, Kasse, Fuhrpark, Leihen, tägliche Lohnabrechnung, Geldabgleich, Schaden und Werkstatt | läuft |
+| Server (`server/`) | Accounts, Firma, Kasse, Fuhrpark, Leihen, tägliche Lohnabrechnung, Geldabgleich, Schaden und Werkstatt, Anschaffungen | läuft |
 | Dashboard (`server/web/`) | Weboberfläche für Chef und Fahrer | läuft |
 | Save-Bibliothek (`crates/spedhub-save`) | Spielstand lesen und schreiben, Lkw exportieren, einsetzen, entfernen, Kontostand setzen | erste Fassung, im Spiel noch nicht geprüft |
 | Launcher (`crates/spedhub-launcher`) | Anmelden, Abgleich, Spielstand vorbereiten, Spiel starten, Abgleich beim Beenden | erste Fassung: Anmelden, Fuhrpark, Ausleihen und Zurückgeben, Lkw in den Spielstand schreiben, Geldabgleich, `plugin.json`, Spiel starten. Aufräumen des Profils: offen |
@@ -131,7 +131,7 @@ Das Konto im Spiel ist nur eine Anzeige: Lohnkonto plus Betriebsvorschuss (je Fi
 2. Erwarteter Stand = Stand nach dem letzten Abgleich plus `game_amount` aller Ereignisse dieses Fahrers im Fenster des Abgleichs (siehe unten). Der Erlösfaktor zählt hier nicht, im Spiel kam ja der gemeldete Betrag an.
 3. Fehlt Geld, bucht die Firma die Differenz als Betriebskosten.
 4. Ist mehr Geld da als erklärbar, wird nichts gutgeschrieben. Es entsteht ein ungeklärter Betrag, den der Chef im Dashboard sieht und schließt.
-5. Der Server antwortet mit dem neuen Kontostand: Lohnkonto plus Vorschuss, nie unter 0. Der Launcher schreibt ihn in `bank.money_account` und `info_money_account` eines neuen Speicherplatzes, abgesichert wie beim Einsetzen, und meldet danach, dass er geschrieben hat.
+5. Der Server antwortet mit dem neuen Kontostand: Lohnkonto plus Vorschuss, beim Chef plus der Rest eines offenen Anschaffungsbudgets (siehe Anschaffungen), nie unter 0. Der Launcher schreibt ihn in `bank.money_account` und `info_money_account` eines neuen Speicherplatzes, abgesichert wie beim Einsetzen, und meldet danach, dass er geschrieben hat.
 
 Der erste Abgleich eines Fahrers bucht nichts und setzt nur den Stand. Strafen und Abbrüche zahlt der Fahrer aus dem Lohnkonto, Maut, Fähre und Zug die Firma.
 
@@ -149,6 +149,19 @@ Kommt ein Ereignis an, dessen Zeitpunkt in einem schon abgeglichenen Fenster lie
 
 Ein Ereignis ohne plausiblen eigenen Zeitpunkt (älteres Plugin, Dashboard) zählt nach dem Empfang: im ersten Abgleich, der nach ihm beim Server ankommt. Der Server vergleicht dafür nur die Reihenfolge des Empfangs, nie seine Uhr mit der des Fahrer-PCs, und ein solches Ereignis korrigiert nie einen alten Abgleich.
 
+### Anschaffungen
+
+Kauft der Chef im Spiel einen Lkw, bezahlt er ihn mit Geld aus dem Spiel, und der Geldabgleich bucht den Kaufpreis wie Tanken als Betriebskosten aus der Firmenkasse. Damit er dafür im Spiel genug Geld hat:
+
+- **Anschaffungsbudget:** Der Chef gibt im Büro des Dashboards einen Betrag frei. Die Kasse muss ihn decken, gebucht wird aber nichts. Höchstens ein Budget je Firma ist offen. Beim Geldabgleich des Chefs kommt der Rest des Budgets zusätzlich zu Lohnkonto und Vorschuss in den Spielstand.
+- **Rest:** Betrag minus alle Betriebskosten des Chefs, die nach der Freigabe gebucht wurden (abzüglich Korrekturen), nie unter 0. Spät gebuchte Betriebskosten und Korrekturen zählen nur, wenn ihr Abgleich nach der Freigabe lag. Auch Tanken und Reparaturen nach der Freigabe zählen. So kommt ein schon ausgegebener Teil nie ein zweites Mal ins Spiel.
+- **Kein Doppelabzug:** Der nächste Abgleich rechnet vom geschriebenen Stand inklusive Budget. Was der Chef ausgibt, fehlt dort genau einmal und wird genau einmal als Betriebskosten gebucht. Danach sinkt der Rest um denselben Betrag, und der neu geschriebene Stand stimmt mit dem im Spiel überein.
+- **Schließen:** bucht nichts. Der nächste Abgleich findet im Spiel den erwarteten Stand, bucht also keine Betriebskosten, und schreibt ohne den Rest.
+- **Lkw-Kauf verknüpfen:** Übernimmt der Chef den gekauften Lkw im Launcher, verknüpft er die Betriebskosten-Buchung des Kaufs mit dem Lkw (auch im Kassenbuch des Dashboards). Die Buchung bleibt, wie sie ist, das Kassenbuch zeigt "Lkw-Kauf SPED 004". Die Verknüpfung liegt getrennt vom Journal in `purchase_links`.
+- **Verkaufen und ausmustern:** Der Chef nimmt einen Lkw, der nicht verliehen ist, aus dem Fuhrpark. Beim Verkauf geht der Erlös als `lkw_verkauf` in die Kasse. Solche Lkw lassen sich nicht mehr ausleihen, bleiben aber mit Buchungen und alten Kennzeichen in der Liste und zählen beim Herzschlag nicht mehr als Firmen-Lkw. Ihr Kennzeichen darf ein neuer Lkw bekommen, beim alten wandert es zu den früheren Kennzeichen.
+
+Rechenweg, Schnittstelle und Beispiel in `server/README.md`, Abschnitt "Anschaffungen".
+
 ## Das Lkw-Paket
 
 So liegt ein Firmen-Lkw auf dem Server (`trucks.package` und `trucks.state`):
@@ -165,7 +178,7 @@ So liegt ein Firmen-Lkw auf dem Server (`trucks.package` und `trucks.state`):
 2. Save-Bibliothek in Rust
 3. Launcher mit Leihe vor dem Start, Plugin für Telemetrie, Geldabgleich
 4. Lkw-Wechsel im laufenden Spiel, Overlay
-5. Convoy-Server, Lkw-Kauf für die Firma, Wirtschafts-Mod
+5. Convoy-Server, Lkw-Kauf für die Firma (Anschaffungsbudget, Kauf verknüpfen, Verkauf: erste Fassung), Wirtschafts-Mod
 6. Härten: Versionssperre, Backups, Mod-Lkw
 
 ## Offene Tests im Spiel

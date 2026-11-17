@@ -122,8 +122,13 @@ pub fn describe(sync: &SyncResult) -> String {
             parts.push("Kontostand passt, nichts gebucht".into());
         }
     }
+    let budget = if sync.budget > 0 {
+        format!(" plus Anschaffungsbudget {}", euro(sync.budget))
+    } else {
+        String::new()
+    };
     parts.push(format!(
-        "Neuer Kontostand im Spiel: {} (Lohnkonto {} plus Vorschuss {})",
+        "Neuer Kontostand im Spiel: {} (Lohnkonto {} plus Vorschuss {}{budget})",
         euro(sync.write_money),
         euro(sync.wallet),
         euro(sync.advance)

@@ -23,12 +23,12 @@ Unter http://127.0.0.1:8787 liegt die Weboberfläche. Dort kannst du:
 
 - ein Konto anlegen und dich anmelden
 - eine Firma gründen oder mit einem Einladungscode beitreten
-- den Fuhrpark sehen, Lkw ausleihen und zurückgeben
+- den Fuhrpark sehen, Lkw ausleihen und zurückgeben, darunter eingeklappt die ausgemusterten und verkauften Lkw
 - bei den Fahrern sehen, wer gerade online ist (grüner Punkt), mit welchem Lkw, in welcher Stadt und mit welchem Auftrag, dazu Level, Firmenkilometer, Lohnstufe, Lohnkonto und offenen Lohn
 - im Fuhrpark sehen, ob ein verliehener Lkw gerade gefahren wird, wie viel Schaden jeder Lkw hat (reparierbar und dauerhaft) und welcher in der Werkstatt steht
 - in der Kopfzeile das Passwort ändern
 - im Kassenbuch alle Buchungen sehen, die Lohnabrechnungen als eine Zeile je Abrechnung zum Aufklappen
-- als Chef: sehen, wer einen Firmen-Lkw fährt, ohne ihn geliehen zu haben, einen Lkw ohne Kilometerstand mit dem letzten bekannten Zustand zurücknehmen, Lkw anlegen, Lkw reparieren lassen, Tagespauschale, Uhrzeit der Abrechnung, Betriebsvorschuss, Erlösfaktor, Lohnstufen, Schadensgrenze, Satz der Werkstatt und Haftung einstellen, Geld zwischen Kasse und Fahrern überweisen, ungeklärte Beträge aus dem Geldabgleich sehen und schließen
+- als Chef: sehen, wer einen Firmen-Lkw fährt, ohne ihn geliehen zu haben, einen Lkw ohne Kilometerstand mit dem letzten bekannten Zustand zurücknehmen, Lkw anlegen, Lkw reparieren lassen, Lkw verkaufen (mit Erlös) und ausmustern, im Büro ein Anschaffungsbudget freigeben und schließen, im Kassenbuch Betriebskosten als Lkw-Kauf mit einem Lkw verknüpfen, Tagespauschale, Uhrzeit der Abrechnung, Betriebsvorschuss, Erlösfaktor, Lohnstufen, Schadensgrenze, Satz der Werkstatt und Haftung einstellen, Geld zwischen Kasse und Fahrern überweisen, ungeklärte Beträge aus dem Geldabgleich sehen und schließen
 - im Testbereich "Ereignis von Hand buchen" Ereignisse mit Strecke buchen, einen Geldabgleich durchspielen, einen Herzschlag senden und die Lohnabrechnung sofort auslösen. Im Spiel melden Ereignisse und Herzschlag das Plugin aus `crates/spedhub-plugin` und den Abgleich der Launcher
 
 Die Seite holt sich alle 5 Sekunden den neuen Stand. Sie steckt als eine einzelne Datei in `server/web/index.html` und wird beim Bauen fest in die .exe eingebaut. Nach einer Änderung an der Datei also neu starten:
@@ -100,22 +100,30 @@ Alle Anfragen und Antworten sind JSON. Außer bei `register`, `login` und `healt
 | `POST /api/me/password` | angemeldet | Passwort ändern: `old_password`, `new_password` (mindestens 8 Zeichen). Alle anderen Tokens des Nutzers werden ungültig, der benutzte bleibt. Liefert `other_tokens_removed`. Falsches altes Passwort: 403 |
 | `POST /api/companies` | angemeldet | Firma gründen: `name`. Wer gründet, ist Chef. Die Firma bekommt die fünf Standard-Lohnstufen |
 | `POST /api/companies/join` | angemeldet | Beitreten mit `invite_code`, Rolle Fahrer |
-| `GET /api/companies/{id}` | Mitglied | Kassenstand, Einstellungen (darunter `damage_limit`, `repair_rate`, `liability_percent`), Lohnstufen, Mitglieder mit Lohnkonto, offenem Lohn, Erfahrung, Level, Firmenkilometern und Lohnstufe. Je Mitglied außerdem `online` und `last_seen`, solange online auch `plate`, `near_city`, `speed_kmh`, `job` und `truck_id` (der eigene geliehene Lkw), siehe Online. Einladungscode, Zahl der offenen ungeklärten Beträge und `foreign_truck` sieht nur der Chef |
+| `GET /api/companies/{id}` | Mitglied | Kassenstand, Einstellungen (darunter `damage_limit`, `repair_rate`, `liability_percent`), Lohnstufen, Mitglieder mit Lohnkonto, offenem Lohn, Erfahrung, Level, Firmenkilometern und Lohnstufe. Je Mitglied außerdem `online` und `last_seen`, solange online auch `plate`, `near_city`, `speed_kmh`, `job` und `truck_id` (der eigene geliehene Lkw), siehe Online. Einladungscode, Zahl der offenen ungeklärten Beträge, `foreign_truck` und `budget` (das offene Anschaffungsbudget mit Restbetrag oder `null`) sieht nur der Chef |
 | `PATCH /api/companies/{id}` | Chef | Einstellungen ändern, alle optional: `revenue_factor`, `daily_flat`, `payroll_time` (wie `04:00`), `advance`, `damage_limit` (Schadensgrenze in Prozent, 0 bis 100, Standard 25), `repair_rate` (Euro je Prozentpunkt Schaden, 0 bis 1000000, Standard 150), `liability_percent` (Haftung in Prozent, 0 bis 100, Standard 0). Außerhalb der Grenzen 400 |
 | `PUT /api/companies/{id}/wage-levels` | Chef | Lohnstufen ersetzen: `levels`, eine Liste aus `min_level`, `min_km`, `cents_per_km`. 1 bis 20 Stufen |
-| `GET /api/companies/{id}/trucks` | Mitglied | Fuhrpark mit Info, wer was gerade geliehen hat, und `old_plates` (frühere Kennzeichen, älteste zuerst). Dazu `driving` (der Ausleiher ist online und meldet genau diesen Lkw), dann auch `speed_kmh` und `near_city`, und `last_known` (`at`, `odometer_km`) mit dem letzten bekannten Zustand. Je Lkw außerdem `damage` und `damage_unfixable` (Prozent, siehe Schaden und Werkstatt), `in_workshop` und `repair_cost` (was eine Reparatur jetzt kosten würde). Der Chef bekommt `foreign_drivers`: wer den Lkw gerade fährt, ohne ihn geliehen zu haben |
-| `POST /api/companies/{id}/trucks` | Chef | Lkw anlegen: `plate`, `model`, optional `package`, `odometer_km`, `state` |
-| `POST /api/trucks/{id}/checkout` | Mitglied | Ausleihen. Liefert Bauplan und Zustand. 409, wenn schon verliehen oder in der Werkstatt. Merkt sich den Schaden beim Ausleihen |
+| `GET /api/companies/{id}/trucks` | Mitglied | Fuhrpark mit Info, wer was gerade geliehen hat, und `old_plates` (frühere Kennzeichen, älteste zuerst). Dazu `driving` (der Ausleiher ist online und meldet genau diesen Lkw), dann auch `speed_kmh` und `near_city`, und `last_known` (`at`, `odometer_km`) mit dem letzten bekannten Zustand. Je Lkw außerdem `damage` und `damage_unfixable` (Prozent, siehe Schaden und Werkstatt), `in_workshop` und `repair_cost` (was eine Reparatur jetzt kosten würde). `retired` ist `null` oder `{ reason, at, sale_price }` für ausgemusterte (`reason` `ausgemustert`) und verkaufte Lkw (`verkauft`, mit Erlös); sie stehen hinter den aktiven. Der Chef bekommt `foreign_drivers`: wer den Lkw gerade fährt, ohne ihn geliehen zu haben |
+| `POST /api/companies/{id}/trucks` | Chef | Lkw anlegen: `plate`, `model`, optional `package`, `odometer_km`, `state`. 409, wenn ein aktiver Lkw der Firma das Kennzeichen trägt. Trägt es ein ausgemusterter oder verkaufter, bekommt der neue es trotzdem, siehe Anschaffungen |
+| `POST /api/trucks/{id}/checkout` | Mitglied | Ausleihen. Liefert Bauplan und Zustand. 409, wenn schon verliehen, in der Werkstatt, ausgemustert oder verkauft. Merkt sich den Schaden beim Ausleihen |
 | `GET /api/trucks/{id}/lease` | Ausleiher oder Chef | Die laufende Leihe noch einmal: `lease_id`, `user_id`, `taken_at` und `truck` wie beim Ausleihen, mit Bauplan, Zustand und Kennzeichen. 403 für alle anderen, 409, wenn der Lkw nicht verliehen ist |
 | `POST /api/trucks/{id}/checkin` | Ausleiher oder Chef | Zurückgeben: `odometer_km`, optional `state` und `plate`. Mit `plate` bekommt der Lkw ein neues Kennzeichen, das alte kommt in `old_plates`. 409, wenn ein anderer Lkw der Firma das Kennzeichen gerade hat. Ohne `odometer_km` nimmt der Chef den Lkw mit dem letzten bekannten Zustand zurück, die Antwort sagt unter `from_last_known.at`, von wann er ist. Ohne letzten Zustand 409, ein Fahrer ohne Kilometerstand bekommt 400. Die Antwort enthält außerdem `damage`, `damage_unfixable`, `damage_out` (beim Ausleihen), `damage_new` (dazugekommen), `liability` (was der Ausleiher zahlt), `liability_user_id`, `damage_limit` und `in_workshop` |
-| `POST /api/trucks/{id}/repair` | Chef | Lkw reparieren lassen, siehe Schaden und Werkstatt. 409, wenn er verliehen ist, keinen Schaden hat oder die Kasse nicht reicht. Liefert `cost`, `damage_before`, `damage`, `damage_unfixable`, `rev`, `in_workshop` und den neuen Kassenstand `balance` |
+| `POST /api/trucks/{id}/retire` | Chef | Lkw ausmustern, siehe Anschaffungen. Gebucht wird nichts. 409, wenn er verliehen oder schon ausgemustert oder verkauft ist. Liefert `retired` und `balance` |
+| `POST /api/trucks/{id}/sell` | Chef | Lkw verkaufen: `price` (Erlös in Euro, 0 bis 1000000000, sonst 400). Wie ausmustern, dazu bucht der Server den Erlös als `lkw_verkauf` in die Firmenkasse, bei 0 nichts. Liefert `retired` und `balance` |
+| `POST /api/trucks/{id}/repair` | Chef | Lkw reparieren lassen, siehe Schaden und Werkstatt. 409, wenn er verliehen, ausgemustert oder verkauft ist, keinen Schaden hat oder die Kasse nicht reicht. Liefert `cost`, `damage_before`, `damage`, `damage_unfixable`, `rev`, `in_workshop` und den neuen Kassenstand `balance` |
 | `POST /api/companies/{id}/heartbeat` | Mitglied | Herzschlag aus dem Spiel, siehe Online: `plate`, optional `odometer_km`, `wear` (`engine`, `transmission`, `cabin`, `chassis`, `wheels`, je 0 bis 1), `fuel_relative` (0 bis 1), `fuel_liters`, `near_city`, `speed_kmh`, `job` (`cargo`, `source_city`, `target_city`) oder `null`. Ohne Kennzeichen oder mit unplausiblen Zahlen 400. Liefert `last_seen` und `leased_truck_id`, wenn das Kennzeichen zum eigenen geliehenen Lkw passt |
 | `POST /api/companies/{id}/events` | Mitglied | Ereignis aus dem Spiel buchen: `event_id`, `type`, `amount`, optional `distance_km`, `note` und `occurred_at` (wann es im Spiel passiert ist, Unix-Sekunden). Bei `job_delivered` optional `cargo`, `source_city` und `target_city` (höchstens 64 Zeichen, ohne Steuerzeichen). War es vor einem schon abgeglichenen Spielstand passiert, korrigiert der Server diesen Abgleich, die Antwort sagt das unter `late`. Die Antwort enthält `occurred_at`, leer ohne plausiblen Zeitpunkt |
-| `GET /api/companies/{id}/ledger` | Mitglied | Die letzten Buchungen, `?limit=50`. Jede mit `game_amount` (Betrag im Spiel), `distance_km`, `payroll_id`, `event_id`, `occurred_at` (leer, wenn der Client keinen plausiblen Zeitpunkt geschickt hat) und bei Aufträgen `cargo`, `source_city`, `target_city` (leer bei alten Buchungen) |
+| `GET /api/companies/{id}/ledger` | Mitglied | Die letzten Buchungen, `?limit=50`. Jede mit `game_amount` (Betrag im Spiel), `distance_km`, `payroll_id`, `event_id`, `occurred_at` (leer, wenn der Client keinen plausiblen Zeitpunkt geschickt hat) und bei Aufträgen `cargo`, `source_city`, `target_city` (leer bei alten Buchungen). Als Lkw-Kauf verknüpfte Buchungen tragen `truck_id` und `truck_plate` (das aktuelle Kennzeichen), alle anderen `null` |
+| `POST /api/companies/{id}/ledger/{entry}/link-truck` | Chef | Betriebskosten-Buchung als Kauf eines Lkw verknüpfen: `truck_id`. Die Buchung bleibt unverändert. 404, wenn es die Buchung in der Firma oder den Lkw in der Firma nicht gibt, 400, wenn die Buchung keine `betriebskosten` der Firmenkasse ist, 409, wenn sie schon verknüpft ist |
+| `DELETE /api/companies/{id}/ledger/{entry}/link-truck` | Chef | Verknüpfung lösen. 404, wenn die Buchung nicht verknüpft ist |
+| `GET /api/companies/{id}/purchase-candidates` | Chef | Die letzten unverknüpften `betriebskosten` des Chefs, neueste zuerst, `?limit=10`: `id`, `created_at`, `amount`, `note` |
+| `GET /api/companies/{id}/budgets` | Chef | Alle Anschaffungsbudgets, neueste zuerst, und unter `open` das offene oder `null`. Je Budget `id`, `user_id`, `amount`, `note`, `created_at`, `closed_at`, `closed_by`, `consumed` und `rest` |
+| `POST /api/companies/{id}/budgets` | Chef | Anschaffungsbudget freigeben: `amount` (1 bis 1000000000, sonst 400), optional `note`. Gebucht wird nichts. 409, wenn schon eins offen ist oder die Kasse den Betrag nicht deckt |
+| `POST /api/companies/{id}/budgets/{bid}/close` | Chef | Budget schließen. Gebucht wird nichts. Die Antwort sagt unter `budget.rest`, was entfällt. 409, wenn es schon geschlossen ist |
 | `POST /api/companies/{id}/transfer` | Chef | Geld verschieben: `user_id`, `amount`, optional `note`. Positiv geht aus der Kasse an den Fahrer, negativ zurück |
 | `GET /api/companies/{id}/payrolls` | Mitglied | Die letzten Lohnabrechnungen mit einer Zeile je Fahrer, `?limit=30` |
 | `POST /api/companies/{id}/payrolls/run` | Chef | Lohn sofort abrechnen: erst fällige Tage, dann alles seit der letzten Abrechnung |
-| `POST /api/companies/{id}/sync` | Mitglied | Geldabgleich: `ingame_money`, optional `xp` und `saved_at` (Änderungszeit des gelesenen Spielstands, Unix-Sekunden). Liefert unter anderem `sync_id`, `expected`, `booked`, `unexplained`, `write_money` und `saved_at` |
+| `POST /api/companies/{id}/sync` | Mitglied | Geldabgleich: `ingame_money`, optional `xp` und `saved_at` (Änderungszeit des gelesenen Spielstands, Unix-Sekunden). Liefert unter anderem `sync_id`, `expected`, `booked`, `unexplained`, `budget` (Rest eines offenen Anschaffungsbudgets, nur beim Chef, sonst 0), `write_money` und `saved_at` |
 | `POST /api/companies/{id}/sync/{sync_id}/written` | wer abgeglichen hat | Der Betrag aus dem Abgleich steht jetzt im Spielstand. Optional `written_at`: wann der Launcher geschrieben hat, Unix-Sekunden. Nur für den neuesten eigenen Abgleich |
 | `GET /api/companies/{id}/unexplained` | Chef | Offene ungeklärte Beträge, mit `?all=true` auch die geschlossenen |
 | `POST /api/companies/{id}/unexplained/{eid}/close` | Chef | Ungeklärten Betrag schließen, optional mit `note`. Gebucht wird nichts |
@@ -170,6 +178,14 @@ Und aus Werkstatt und Haftung (siehe Schaden und Werkstatt):
 | `haftung` | Lohnkonto des Ausleihers | negativ | Rückgabe mit neuem Schaden, Haftung über 0. Im Kassenbuch "Haftung" |
 | `haftung` | Firmenkasse, `user_id` ist der Ausleiher | positiv | dieselbe Rückgabe, gleicher Betrag. Notiz wie "Haftung SPED 001, 6 Prozentpunkte neuer Schaden" |
 
+Und aus dem Fuhrpark (siehe Anschaffungen):
+
+| `kind` | Konto | Betrag | Wann |
+|---|---|---|---|
+| `lkw_verkauf` | Firmenkasse, `user_id` ist der Chef | positiv | Der Chef verkauft einen Lkw mit Erlös über 0. Notiz wie "Verkauf SPED 002". Im Kassenbuch "Lkw-Verkauf" |
+
+Einen Lkw-Kauf gibt es nicht als eigene Buchungsart: Der Kauf ist eine `betriebskosten`-Buchung aus dem Geldabgleich, die der Chef mit dem Lkw verknüpft. Das Kassenbuch zeigt sie dann als "Lkw-Kauf SPED 004".
+
 Die Typen entsprechen den Gameplay-Events aus dem Telemetrie-SDK. Jede `event_id` wird pro Firma nur einmal gebucht. Schickt der Client ein Ereignis doppelt, kommt `duplicate: true` zurück und es passiert nichts.
 
 Bei einer Überweisung kann die Kasse nicht ins Minus gehen. Ein Lohnkonto schon, das sind dann Schulden beim Chef.
@@ -213,7 +229,7 @@ Das Fenster reicht vom letzten Abgleich bis `saved_at`: Es zählen die Ereigniss
 - Ist mehr da, wird nichts gutgeschrieben. Es entsteht ein ungeklärter Betrag, den der Chef sieht und schließt.
 - Der erste Abgleich eines Fahrers bucht nichts und setzt nur den Stand.
 
-Die Antwort sagt in `write_money`, was in den Spielstand kommt: Lohnkonto plus Vorschuss, nie unter 0. Hat der Launcher das geschrieben, meldet er es über `.../written`, mit `written_at`. Ab dann rechnet der nächste Abgleich von diesem Betrag, und sein Fenster beginnt bei `written_at`. Kam keine Meldung, etwa weil das Spiel inzwischen lief, rechnet er vom vorgefundenen Kontostand weiter, und das Fenster beginnt bei `saved_at`.
+Die Antwort sagt in `write_money`, was in den Spielstand kommt: Lohnkonto plus Vorschuss, beim Chef plus der Rest eines offenen Anschaffungsbudgets (siehe Anschaffungen), nie unter 0. Hat der Launcher das geschrieben, meldet er es über `.../written`, mit `written_at`. Ab dann rechnet der nächste Abgleich von diesem Betrag, und sein Fenster beginnt bei `written_at`. Kam keine Meldung, etwa weil das Spiel inzwischen lief, rechnet er vom vorgefundenen Kontostand weiter, und das Fenster beginnt bei `saved_at`.
 
 Zeitpunkte: `occurred_at`, `saved_at` und `written_at` kommen alle von der Uhr des Fahrer-PCs. Liegt einer vor 2020 oder mehr als einen Tag nach der Serveruhr, wird er nicht abgelehnt, sondern behandelt, als fehlte er. Fehlt `saved_at` oder `written_at`, gilt der Empfang beim Server. `saved_at` gilt nie früher als der Beginn des Fensters, damit sich Fenster nicht überlappen, wenn Abgleiche mit verschiedenen Uhren kommen (Launcher und Dashboard). Fehlt `occurred_at`, zählt das Ereignis nach der Reihenfolge des Empfangs im nächsten Abgleich und korrigiert nie einen alten.
 
@@ -249,9 +265,45 @@ Ein ganz verschlissener Lkw hat also 100 Prozent Schaden. Fehlende Felder und We
 
 Gebucht wird vom Lohnkonto des Ausleihers in die Firmenkasse, beides `haftung` und in derselben Transaktion wie die Rückgabe. Das zahlt immer der Ausleiher, auch wenn der Chef den Lkw zurücknimmt. Schaden, der beim Ausleihen schon da war, zählt nicht. Bei 0 wird nichts gebucht. Das Lohnkonto darf dabei ins Minus. Leihen von vor dieser Fassung haben kein `damage_out`, dann gilt der gespeicherte Zustand, der sich während einer Leihe nicht ändert.
 
+## Anschaffungen
+
+Kauft der Chef im Spiel einen Lkw, bezahlt er mit Geld aus dem Spiel, und der Geldabgleich bucht den Kaufpreis als Betriebskosten aus der Firmenkasse. Im Spiel hat er aber nur Lohnkonto plus Vorschuss. Dafür gibt es das Anschaffungsbudget.
+
+**Budget freigeben.** `POST /api/companies/{id}/budgets` mit `amount` und optional `note`, nur der Chef. Es gibt höchstens ein offenes Budget je Firma (ein zweites gibt 409), es gehört dem Chef, der es freigibt. Die Kasse muss den Betrag decken: `amount` höchstens Kassenstand minus die Restbeträge aller offenen Budgets, und weil es höchstens eins gibt, heißt das: höchstens der Kassenstand. Gebucht wird bei der Freigabe nichts, die Kasse bleibt, wie sie ist.
+
+**Restbetrag.** So viel vom Budget ist noch nicht ausgegeben:
+
+    verbraucht = -(Summe betriebskosten und betriebskosten_korrektur des Chefs in der Firmenkasse
+                   nach der Freigabe), begrenzt auf 0 bis amount
+    Rest       = amount - verbraucht
+
+"Nach der Freigabe" heißt: Buchungen mit einer größeren id als die größte bei der Freigabe (`purchase_budgets.ledger_from`). Beim Schließen merkt sich das Budget die größte id (`ledger_to`), was danach kommt, zählt nicht mehr. Damit zählen auch Tanken und Reparaturen des Chefs nach der Freigabe als verbraucht, ebenso alle Betriebskosten, die der erste Abgleich nach der Freigabe bucht, selbst wenn das Geld im Spiel schon vorher ausgegeben wurde. Das Budget wird so nie zu groß, höchstens zu klein.
+
+Spät gemeldete Ereignisse rechnen das Fenster eines früheren Abgleichs neu (siehe oben). Die Buchungen dazu tragen diesen Abgleich in `ledger.sync_id` und zählen nur, wenn er nach der Freigabe lag (`sync_id` größer als `purchase_budgets.sync_from`, der größte Abgleich bei der Freigabe). Dann gilt: Eine spät gemeldete Maut, Fähre oder Zugfahrt gibt Betriebskosten mit `betriebskosten_korrektur` zurück und macht den Rest wieder größer. Ein spät gemeldeter Auftrag bucht weitere `betriebskosten` und macht ihn kleiner. Betrifft die späte Meldung einen Abgleich von vor der Freigabe, ändert sie den Rest nicht: Dessen Betriebskosten waren nie vom Budget abgezogen, eine Gutschrift dafür darf also auch nichts zurückgeben.
+
+**Geldabgleich.** Für den Chef ist `write_money = max(0, Lohnkonto + Vorschuss + Rest)`, die Antwort nennt den Rest unter `budget`. Der Rest wird nach den Betriebskosten berechnet, die dieser Abgleich gerade gebucht hat.
+
+**Kein Doppelabzug.** Ein Beispiel mit Lohnkonto 0, Vorschuss 2000 und Budget 60000:
+
+1. Freigabe: nichts gebucht. Der nächste Abgleich findet 2000 im Spiel, erwartet 2000, bucht nichts und schreibt 62000.
+2. Der Chef kauft im Spiel für 45000. Der nächste Abgleich rechnet vom geschriebenen Stand 62000, findet 17000 und bucht 45000 Betriebskosten, einmal. Der Rest ist jetzt 15000, geschrieben werden 2000 + 15000 = 17000, also genau, was im Spiel steht.
+3. Ohne weitere Ausgaben findet der nächste Abgleich 17000, erwartet 17000 und bucht nichts. Der Kauf wird kein zweites Mal abgezogen, und der ausgegebene Teil kommt nicht erneut ins Spiel.
+
+**Schließen.** `POST /api/companies/{id}/budgets/{bid}/close`, nur der Chef. Gebucht wird nichts. Der nächste Abgleich rechnet weiter vom geschriebenen Stand (im Beispiel 17000), findet ihn im Spiel und bucht deshalb auch keine Betriebskosten. Er schreibt nur noch Lohnkonto plus Vorschuss (2000), der Rest entfällt so im Spiel. Danach lässt sich ein neues Budget freigeben.
+
+**Lkw-Kauf verknüpfen.** Übernimmt der Chef den gekauften Lkw im Launcher in den Fuhrpark, bietet der Launcher an, die Betriebskosten-Buchung des Kaufs mit dem Lkw zu verknüpfen (`GET .../purchase-candidates`, `POST .../ledger/{entry}/link-truck`). Im Dashboard geht das im Kassenbuch an jeder unverknüpften Betriebskosten-Buchung. Die Verknüpfung liegt in `purchase_links`, die Buchung selbst bleibt unverändert (die Kasse ist ein Journal). Im Kassenbuch steht dann "Lkw-Kauf SPED 004" mit dem aktuellen Kennzeichen. Hat ein Abgleich Kauf und Tanken zusammen gebucht, steht beides in derselben Buchung. Eine Verknüpfung lässt sich wieder lösen.
+
+**Verkaufen und ausmustern.** Nur der Chef, nur für Lkw, die nicht verliehen sind (sonst 409). Ausmustern (`POST /api/trucks/{id}/retire`) bucht nichts. Verkaufen (`POST /api/trucks/{id}/sell` mit `price`) bucht den Erlös in derselben Transaktion als `lkw_verkauf` in die Firmenkasse, bei 0 Euro nichts. Danach steht in `trucks` `retired_at`, `retired_reason` (`ausgemustert` oder `verkauft`) und `sale_price`. Solche Lkw:
+
+- lassen sich nicht mehr ausleihen und nicht reparieren (409), und nicht noch einmal ausmustern oder verkaufen
+- stehen weiter in der Fuhrparkliste, hinter den aktiven, mit `retired`. Das Dashboard zeigt sie eingeklappt unter "Ausgemustert und verkauft", der Launcher ebenso, ohne Knöpfe
+- behalten ihre Geschichte: Buchungen, Notizen und alte Kennzeichen bleiben
+- zählen beim Herzschlag nicht als Firmen-Lkw. Fährt jemand einen verkauften Lkw, der noch in seinem Spielstand steht, ist er nicht als fremd gefahren markiert
+
+**Kennzeichen.** Kennzeichen bleiben je Firma eindeutig, auch über ausgemusterte Lkw. Ein neuer Lkw darf das Kennzeichen eines ausgemusterten oder verkauften trotzdem bekommen, beim Anlegen und bei der Rückgabe mit neuem Kennzeichen vom Spiel: Das Kennzeichen wandert beim alten Lkw zu `old_plates`, und der alte heißt danach `SPED 001 (Lkw 7)` mit seiner id. Eine Rückgabe scheitert so nie an einem Lkw, den es nicht mehr gibt. Trägt ein aktiver Lkw das Kennzeichen, bleibt es bei 409.
+
 ## Was noch fehlt
 
-- Lkw-Kauf für die Firma
 - Firma gründen und beitreten im Launcher, bisher nur im Dashboard. Launcher, Save-Bibliothek und Spiel-Plugin gibt es in einer ersten Fassung
 
 ## Aufbau
@@ -263,6 +315,7 @@ Gebucht wird vom Lohnkonto des Ausleihers in die Firmenkasse, beides `haftung` u
 | `src/presence.rs` | Herzschlag, Online, Kennzeichen vergleichen, letzter bekannter Zustand |
 | `src/damage.rs` | Schaden aus dem Zustand, Gewichtung, Kosten der Werkstatt, Haftung |
 | `src/reconcile.rs` | Abgleichfenster, Zeitpunkte und Korrektur bei spät gemeldeten Ereignissen |
+| `src/purchases.rs` | Anschaffungsbudget: Restbetrag und Verbrauch |
 | `src/payroll.rs` | Tägliche Lohnabrechnung |
 | `src/levels.rs` | Level aus Erfahrungspunkten, Lohnstufen |
 | `src/clock.rs` | Uhr, in Tests stellbar, und Kalendertage in Europe/Berlin |

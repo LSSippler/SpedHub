@@ -4,12 +4,12 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 use eframe::egui;
-use spedhub_launcher::client::{Client, Company, Me, Truck, format_percent};
+use spedhub_launcher::client::{Client, Company, Me, PurchaseCandidate, Truck, format_percent};
 use spedhub_launcher::flows::{describe, lease_package, sync_and_write};
 use spedhub_launcher::profiles::{Profile, SaveSlot, find_profiles, list_slots};
 use spedhub_launcher::savegame::{
     FoundBy, ReturnData, SaveTruck, new_truck_from_save, package_from_checkout, read_for_return,
-    trucks_in_save,
+    trucks_in_save, unix_seconds,
 };
 use spedhub_launcher::settings::{
     AppPaths, DEFAULT_SERVER, Settings, remove_plugin_config, write_plugin_config,
@@ -68,6 +68,14 @@ enum Done {
         problem: Option<String>,
     },
     SaveTrucks(Vec<SaveTruck>),
+    /// Lkw übernommen. Gibt es Betriebskosten-Buchungen, fragt der Launcher, ob eine davon
+    /// der Kauf dieses Lkw war.
+    Imported {
+        text: String,
+        truck_id: i64,
+        plate: String,
+        candidates: Vec<PurchaseCandidate>,
+    },
     PasswordChanged,
     LoggedOut,
     Failed(Error),
@@ -79,6 +87,15 @@ struct ReturnDialog {
     data: Option<ReturnData>,
     problem: Option<String>,
     manual_km: String,
+}
+
+/// Nach "Lkw übernehmen": Betriebskosten-Buchung als Kauf dieses Lkw verknüpfen?
+struct LinkDialog {
+    truck_id: i64,
+    plate: String,
+    candidates: Vec<PurchaseCandidate>,
+    /// Gewählte Buchung
+    chosen: Option<i64>,
 }
 
 struct Message {
@@ -114,6 +131,7 @@ struct App {
     import_plate: Option<String>,
 
     returning: Option<ReturnDialog>,
+    linking: Option<LinkDialog>,
     message: Option<Message>,
     busy: Option<String>,
     tx: Sender<Done>,
@@ -150,6 +168,7 @@ impl App {
             import_trucks: Vec::new(),
             import_plate: None,
             returning: None,
+            linking: None,
             message: None,
             busy: None,
             tx,
@@ -310,6 +329,27 @@ impl App {
                 self.import_plate = None;
                 self.import_trucks = trucks;
             }
+            Done::Imported {
+                text,
+                truck_id,
+                plate,
+                candidates,
+            } => {
+                if candidates.is_empty() {
+                    self.info(text);
+                } else {
+                    self.info(format!(
+                        "{text}. Hast du ihn im Spiel gekauft? Dann verknüpfe über dem Fuhrpark die Buchung des Kaufs"
+                    ));
+                    self.linking = Some(LinkDialog {
+                        truck_id,
+                        plate,
+                        candidates,
+                        chosen: None,
+                    });
+                }
+                self.refresh(ctx);
+            }
             Done::PasswordChanged => {
                 self.pw_old.clear();
                 self.pw_new.clear();
@@ -318,6 +358,7 @@ impl App {
             }
             Done::LoggedOut => {
                 self.token = None;
+                self.linking = None;
                 self.pw_old.clear();
                 self.pw_new.clear();
                 self.pw_repeat.clear();
@@ -578,10 +619,38 @@ impl App {
         let client = self.client();
         self.run(ctx, "Lkw wird übernommen", move || {
             let truck = new_truck_from_save(&game, &plate)?;
-            client.add_truck(company, &truck)?;
+            let truck_id = client.add_truck(company, &truck)?;
+            // Ohne Kandidaten (oder wenn die Abfrage scheitert) gibt es nichts zu verknüpfen
+            let candidates = client.purchase_candidates(company).unwrap_or_default();
+            Ok(Done::Imported {
+                text: format!(
+                    "{} ({}, {} km) ist jetzt im Fuhrpark",
+                    truck.plate, truck.model, truck.odometer_km
+                ),
+                truck_id,
+                plate: truck.plate,
+                candidates,
+            })
+        });
+    }
+
+    /// Die gewählte Betriebskosten-Buchung als Kauf des gerade übernommenen Lkw verknüpfen.
+    fn link_purchase(&mut self, ctx: &egui::Context) {
+        let (Some(dialog), Some(company)) = (&self.linking, self.company.as_ref().map(|c| c.id))
+        else {
+            return;
+        };
+        let Some(ledger_id) = dialog.chosen else {
+            return;
+        };
+        let truck_id = dialog.truck_id;
+        self.linking = None;
+        let client = self.client();
+        self.run(ctx, "Kauf wird verknüpft", move || {
+            let l = client.link_purchase(company, ledger_id, truck_id)?;
             Ok(Done::Info(format!(
-                "{} ({}, {} km) ist jetzt im Fuhrpark",
-                truck.plate, truck.model, truck.odometer_km
+                "Verknüpft. Im Kassenbuch steht jetzt Lkw-Kauf {}",
+                l.truck_plate
             )))
         });
     }
@@ -759,7 +828,10 @@ impl App {
             ));
         });
         ui.add_space(4.0);
-        if self.trucks.is_empty() {
+        // Ausgemusterte und verkaufte Lkw stehen unten für sich, ohne Knöpfe
+        let (active, retired): (Vec<&Truck>, Vec<&Truck>) =
+            self.trucks.iter().partition(|t| t.retired.is_none());
+        if active.is_empty() {
             ui.label("Noch keine Lkw im Fuhrpark");
         }
         let mut action: Option<(&'static str, Truck)> = None;
@@ -775,7 +847,7 @@ impl App {
                 ui.strong("Fährt gerade");
                 ui.strong("");
                 ui.end_row();
-                for t in &self.trucks {
+                for t in &active {
                     ui.label(&t.plate);
                     ui.label(&t.model);
                     ui.label(t.odometer_km.to_string());
@@ -810,26 +882,39 @@ impl App {
                                 })
                                 .clicked()
                             {
-                                action = Some(("ausleihen", t.clone()));
+                                action = Some(("ausleihen", (*t).clone()));
                             }
                         } else if mine {
                             if ui
                                 .add_enabled(idle, egui::Button::new("In Spielstand schreiben"))
                                 .clicked()
                             {
-                                action = Some(("schreiben", t.clone()));
+                                action = Some(("schreiben", (*t).clone()));
                             }
                             if ui
                                 .add_enabled(idle, egui::Button::new("Zurückgeben"))
                                 .clicked()
                             {
-                                action = Some(("zurueck", t.clone()));
+                                action = Some(("zurueck", (*t).clone()));
                             }
                         }
                     });
                     ui.end_row();
                 }
             });
+        if !retired.is_empty() {
+            egui::CollapsingHeader::new(format!("Ausgemustert und verkauft ({})", retired.len()))
+                .default_open(false)
+                .show(ui, |ui| {
+                    for t in &retired {
+                        let why = t.retired.as_ref().map(|r| r.text()).unwrap_or_default();
+                        ui.label(format!(
+                            "{}, {}, {} km, {why}",
+                            t.plate, t.model, t.odometer_km
+                        ));
+                    }
+                });
+        }
         match action {
             Some(("ausleihen", t)) => self.checkout(ui.ctx(), &t),
             Some(("schreiben", t)) => self.write_to_save(ui.ctx(), &t),
@@ -889,6 +974,45 @@ impl App {
             self.returning = None;
         } else if confirm {
             self.finish_return(ui.ctx());
+        }
+    }
+
+    fn link_view(&mut self, ui: &mut egui::Ui) {
+        let mut skip = false;
+        let mut confirm = false;
+        let idle = self.busy.is_none();
+        let Some(dialog) = &mut self.linking else {
+            return;
+        };
+        let now = unix_seconds(SystemTime::now()) as i64;
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.strong(format!("Kauf von {} verknüpfen", dialog.plate));
+            ui.label(format!(
+                "Hast du {} im Spiel gekauft, hat der Geldabgleich den Kaufpreis als Betriebskosten gebucht. Wähle die Buchung, dann steht im Kassenbuch Lkw-Kauf {} statt Betriebskosten. Die Buchung selbst bleibt, wie sie ist",
+                dialog.plate, dialog.plate
+            ));
+            for c in &dialog.candidates {
+                ui.radio_value(&mut dialog.chosen, Some(c.id), c.label(now));
+            }
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(
+                        idle && dialog.chosen.is_some(),
+                        egui::Button::new("Als Lkw-Kauf verknüpfen"),
+                    )
+                    .clicked()
+                {
+                    confirm = true;
+                }
+                if ui.button("Nicht verknüpfen").clicked() {
+                    skip = true;
+                }
+            });
+        });
+        if skip {
+            self.linking = None;
+        } else if confirm {
+            self.link_purchase(ui.ctx());
         }
     }
 
@@ -1017,6 +1141,7 @@ impl eframe::App for App {
                 ui.colored_label(egui::Color32::from_rgb(200, 120, 0), UNCONFIRMED);
                 ui.separator();
                 self.return_view(ui);
+                self.link_view(ui);
                 self.fleet_view(ui);
                 ui.add_space(12.0);
                 self.import_view(ui);

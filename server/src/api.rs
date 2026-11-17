@@ -6,6 +6,7 @@ use crate::{
     levels::{WageLevel, standing, wage_levels},
     payroll,
     presence::{self, HeartbeatReq},
+    purchases::{self, Budget},
     reconcile::{client_time, correct_late, kind_label, last_point, plausible_time, window_sum},
 };
 use argon2::{
@@ -73,6 +74,22 @@ pub fn router_with(db: Db, clock: Clock) -> Router {
         .route("/api/companies/{id}/events", post(post_event))
         .route("/api/companies/{id}/heartbeat", post(heartbeat))
         .route("/api/companies/{id}/ledger", get(get_ledger))
+        .route(
+            "/api/companies/{id}/ledger/{entry}/link-truck",
+            post(link_truck).delete(unlink_truck),
+        )
+        .route(
+            "/api/companies/{id}/purchase-candidates",
+            get(purchase_candidates),
+        )
+        .route(
+            "/api/companies/{id}/budgets",
+            get(list_budgets).post(create_budget),
+        )
+        .route(
+            "/api/companies/{id}/budgets/{budget}/close",
+            post(close_budget),
+        )
         .route("/api/companies/{id}/transfer", post(transfer))
         .route("/api/companies/{id}/payrolls", get(list_payrolls))
         .route("/api/companies/{id}/payrolls/run", post(run_payroll_now))
@@ -90,6 +107,8 @@ pub fn router_with(db: Db, clock: Clock) -> Router {
         .route("/api/trucks/{id}/checkin", post(checkin))
         .route("/api/trucks/{id}/lease", get(get_lease))
         .route("/api/trucks/{id}/repair", post(repair))
+        .route("/api/trucks/{id}/retire", post(retire))
+        .route("/api/trucks/{id}/sell", post(sell))
         .with_state(AppState { db, clock })
 }
 
@@ -581,6 +600,10 @@ async fn get_company(
             |r| r.get(0),
         )?;
         out["open_unexplained"] = json!(open);
+        // Das offene Anschaffungsbudget mit Restbetrag, sonst null
+        out["budget"] = purchases::open_budget(&conn, id)?
+            .as_ref()
+            .map_or(Value::Null, Budget::json);
     }
     Ok(Json(out))
 }
@@ -788,9 +811,13 @@ async fn add_truck(
         return Err(ApiError::bad("Der Kilometerstand darf nicht negativ sein"));
     }
     let state = b.state.unwrap_or_else(|| json!({})).to_string();
-    let conn = db.lock().unwrap();
-    require_chef(&conn, company_id, user.id)?;
-    match conn.execute(
+    let now = clock.now();
+    let mut conn = db.lock().unwrap();
+    let tx = conn.transaction()?;
+    require_chef(&tx, company_id, user.id)?;
+    // Ein ausgemusterter oder verkaufter Lkw gibt sein Kennzeichen ab
+    free_retired_plate(&tx, company_id, plate, now)?;
+    match tx.execute(
         "INSERT INTO trucks (company_id, plate, model, package, odometer_km, state, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
@@ -800,7 +827,7 @@ async fn add_truck(
             b.package,
             b.odometer_km,
             state,
-            clock.now()
+            now
         ],
     ) {
         Ok(_) => {}
@@ -811,10 +838,45 @@ async fn add_truck(
         }
         Err(e) => return Err(e.into()),
     }
+    let id = tx.last_insert_rowid();
+    tx.commit()?;
     Ok(Json(json!({
-        "id": conn.last_insert_rowid(), "plate": plate, "model": model,
+        "id": id, "plate": plate, "model": model,
         "odometer_km": b.odometer_km, "rev": 1
     })))
+}
+
+/// Gibt das Kennzeichen `plate` frei, wenn es gerade ein ausgemusterter oder verkaufter Lkw
+/// der Firma trägt. Kennzeichen sind je Firma eindeutig, auch über ausgemusterte Lkw. Damit
+/// ein neuer Lkw (oder ein Lkw, dem das Spiel bei der Rückgabe ein neues gegeben hat) es
+/// bekommen kann, wandert es beim alten Lkw zu den früheren Kennzeichen, und der alte heißt
+/// danach `<Kennzeichen> (Lkw <id>)`. Seine Buchungen und Notizen bleiben unverändert. Trägt
+/// ein aktiver Lkw das Kennzeichen, passiert nichts, der Aufrufer meldet dann 409.
+fn free_retired_plate(
+    conn: &Connection,
+    company_id: i64,
+    plate: &str,
+    now: i64,
+) -> rusqlite::Result<()> {
+    let retired: Option<i64> = conn
+        .query_row(
+            "SELECT id FROM trucks
+             WHERE company_id = ?1 AND plate = ?2 AND retired_at IS NOT NULL",
+            params![company_id, plate],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if let Some(id) = retired {
+        conn.execute(
+            "INSERT INTO truck_plates (truck_id, plate, replaced_at) VALUES (?1, ?2, ?3)",
+            params![id, plate, now],
+        )?;
+        conn.execute(
+            "UPDATE trucks SET plate = ?1 WHERE id = ?2",
+            params![format!("{plate} (Lkw {id})"), id],
+        )?;
+    }
+    Ok(())
 }
 
 async fn list_trucks(
@@ -838,11 +900,12 @@ async fn list_trucks(
         .collect::<Result<_, _>>()?;
     let mut stmt = conn.prepare(
         "SELECT t.id, t.plate, t.model, t.odometer_km, t.rev, u.id, u.name, l.taken_at,
-                t.last_seen_at, t.last_odometer_km, t.state, t.in_workshop
+                t.last_seen_at, t.last_odometer_km, t.state, t.in_workshop,
+                t.retired_at, t.retired_reason, t.sale_price
          FROM trucks t
          LEFT JOIN leases l ON l.truck_id = t.id AND l.returned_at IS NULL
          LEFT JOIN users u ON u.id = l.user_id
-         WHERE t.company_id = ?1 ORDER BY t.plate",
+         WHERE t.company_id = ?1 ORDER BY t.retired_at IS NOT NULL, t.plate",
     )?;
     // Frühere Kennzeichen je Lkw, älteste zuerst
     let mut old: std::collections::HashMap<i64, Vec<String>> = std::collections::HashMap::new();
@@ -861,6 +924,7 @@ async fn list_trucks(
             let holder: Option<i64> = r.get(5)?;
             let id: i64 = r.get(0)?;
             let last_seen_at: Option<i64> = r.get(8)?;
+            let retired_at: Option<i64> = r.get(12)?;
             // Schaden aus dem gespeicherten Zustand, also dem bei der letzten Rückgabe
             let d = damage::damage_of(&r.get::<_, String>(10)?);
             // Der Ausleiher ist online und meldet genau diesen Lkw
@@ -882,7 +946,16 @@ async fn list_trucks(
                 })),
                 "damage": d.fixable, "damage_unfixable": d.unfixable,
                 "in_workshop": r.get::<_, i64>(11)? != 0,
-                "repair_cost": damage::repair_cost(d.fixable, ds.rate)
+                "repair_cost": damage::repair_cost(d.fixable, ds.rate),
+                // Ausgemustert oder verkauft: nicht mehr ausleihbar, bleibt in der Geschichte
+                "retired": match retired_at {
+                    Some(at) => json!({
+                        "reason": r.get::<_, Option<String>>(13)?,
+                        "at": at,
+                        "sale_price": r.get::<_, Option<i64>>(14)?
+                    }),
+                    None => Value::Null,
+                }
             });
             if let Some(p) = driving {
                 t["speed_kmh"] = p.speed_kmh();
@@ -944,15 +1017,27 @@ async fn checkout(
 ) -> ApiResult<Json<Value>> {
     let mut conn = db.lock().unwrap();
     let tx = conn.transaction()?;
-    let (company_id, rev, state, in_workshop): (i64, i64, String, bool) = tx
+    type Row = (i64, i64, String, bool, Option<String>);
+    let (company_id, rev, state, in_workshop, retired): Row = tx
         .query_row(
-            "SELECT company_id, rev, state, in_workshop FROM trucks WHERE id = ?1",
+            "SELECT company_id, rev, state, in_workshop, retired_reason FROM trucks WHERE id = ?1",
             [truck_id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get::<_, i64>(3)? != 0)),
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get::<_, i64>(3)? != 0,
+                    r.get(4)?,
+                ))
+            },
         )
         .optional()?
         .ok_or_else(|| ApiError::not_found("Diesen Lkw gibt es nicht"))?;
     role_in(&tx, company_id, user.id)?;
+    if let Some(reason) = retired {
+        return Err(retired_error(&reason, "lässt sich nicht mehr ausleihen"));
+    }
     let holder: Option<String> = tx
         .query_row(
             "SELECT u.name FROM leases l JOIN users u ON u.id = l.user_id
@@ -1124,6 +1209,7 @@ async fn checkin(
         Some(p) => Some(p.to_string()),
     };
     if let Some(p) = &new_plate {
+        free_retired_plate(&tx, company_id, p, clock.now())?;
         match tx.execute(
             "UPDATE trucks SET plate = ?1 WHERE id = ?2",
             params![p, truck_id],
@@ -1214,15 +1300,18 @@ async fn repair(
 ) -> ApiResult<Json<Value>> {
     let mut conn = db.lock().unwrap();
     let tx = conn.transaction()?;
-    let (company_id, plate, state): (i64, String, String) = tx
+    let (company_id, plate, state, retired): (i64, String, String, Option<String>) = tx
         .query_row(
-            "SELECT company_id, plate, state FROM trucks WHERE id = ?1",
+            "SELECT company_id, plate, state, retired_reason FROM trucks WHERE id = ?1",
             [truck_id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
         .optional()?
         .ok_or_else(|| ApiError::not_found("Diesen Lkw gibt es nicht"))?;
     require_chef(&tx, company_id, user.id)?;
+    if let Some(reason) = retired {
+        return Err(retired_error(&reason, "kommt nicht mehr in die Werkstatt"));
+    }
     let holder: Option<String> = tx
         .query_row(
             "SELECT u.name FROM leases l JOIN users u ON u.id = l.user_id
@@ -1276,6 +1365,116 @@ async fn repair(
         "damage": after.fixable, "damage_unfixable": after.unfixable, "rev": rev,
         "in_workshop": false, "balance": balance
     })))
+}
+
+/// 409 für einen ausgemusterten oder verkauften Lkw: "Der Lkw ist verkauft und `what`".
+fn retired_error(reason: &str, what: &str) -> ApiError {
+    let state = if reason == "verkauft" {
+        "verkauft"
+    } else {
+        "ausgemustert"
+    };
+    ApiError::conflict(&format!("Der Lkw ist {state} und {what}"))
+}
+
+#[derive(Deserialize)]
+struct SellReq {
+    /// Erlös in Euro, 0 oder mehr. Geht in die Firmenkasse.
+    price: i64,
+}
+
+/// Lkw ausmustern: Er lässt sich nicht mehr ausleihen, bleibt aber mit seinen Buchungen und
+/// alten Kennzeichen in der Fuhrparkliste. Nur der Chef, nur wenn er nicht verliehen ist.
+async fn retire(
+    State(db): State<Db>,
+    State(clock): State<Clock>,
+    user: AuthUser,
+    Path(truck_id): Path<i64>,
+) -> ApiResult<Json<Value>> {
+    let mut conn = db.lock().unwrap();
+    retire_truck(&mut conn, clock.now(), user.id, truck_id, None).map(Json)
+}
+
+/// Lkw verkaufen: wie ausmustern, dazu geht der Erlös als `lkw_verkauf` in die Firmenkasse,
+/// in derselben Transaktion. Bei 0 Euro wird nichts gebucht.
+async fn sell(
+    State(db): State<Db>,
+    State(clock): State<Clock>,
+    user: AuthUser,
+    Path(truck_id): Path<i64>,
+    Json(b): Json<SellReq>,
+) -> ApiResult<Json<Value>> {
+    if !(0..=1_000_000_000).contains(&b.price) {
+        return Err(ApiError::bad(
+            "Der Erlös muss zwischen 0 und 1000000000 Euro liegen",
+        ));
+    }
+    let mut conn = db.lock().unwrap();
+    retire_truck(&mut conn, clock.now(), user.id, truck_id, Some(b.price)).map(Json)
+}
+
+/// Ausmustern (`price` leer) oder verkaufen.
+fn retire_truck(
+    conn: &mut Connection,
+    now: i64,
+    user_id: i64,
+    truck_id: i64,
+    price: Option<i64>,
+) -> ApiResult<Value> {
+    let tx = conn.transaction()?;
+    let (company_id, plate, retired): (i64, String, Option<String>) = tx
+        .query_row(
+            "SELECT company_id, plate, retired_reason FROM trucks WHERE id = ?1",
+            [truck_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()?
+        .ok_or_else(|| ApiError::not_found("Diesen Lkw gibt es nicht"))?;
+    require_chef(&tx, company_id, user_id)?;
+    if let Some(reason) = retired {
+        return Err(retired_error(&reason, "steht nicht mehr im Fuhrpark"));
+    }
+    let verb = if price.is_some() {
+        "verkaufen"
+    } else {
+        "ausmustern"
+    };
+    let holder: Option<String> = tx
+        .query_row(
+            "SELECT u.name FROM leases l JOIN users u ON u.id = l.user_id
+             WHERE l.truck_id = ?1 AND l.returned_at IS NULL",
+            [truck_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if let Some(name) = holder {
+        return Err(ApiError::conflict(&format!(
+            "Der Lkw ist gerade an {name} verliehen. Erst zurückgeben, dann {verb}"
+        )));
+    }
+    let reason = if price.is_some() {
+        "verkauft"
+    } else {
+        "ausgemustert"
+    };
+    tx.execute(
+        "UPDATE trucks SET retired_at = ?1, retired_reason = ?2, sale_price = ?3 WHERE id = ?4",
+        params![now, reason, price, truck_id],
+    )?;
+    if let Some(p) = price.filter(|&p| p > 0) {
+        tx.execute(
+            "INSERT INTO ledger (company_id, account, user_id, kind, amount, note, created_at)
+             VALUES (?1, 'firma', ?2, 'lkw_verkauf', ?3, ?4, ?5)",
+            params![company_id, user_id, p, purchases::sale_note(&plate), now],
+        )?;
+    }
+    let balance = company_balance(&tx, company_id)?;
+    tx.commit()?;
+    Ok(json!({
+        "id": truck_id, "plate": plate,
+        "retired": { "reason": reason, "at": now, "sale_price": price },
+        "balance": balance
+    }))
 }
 
 // ---------------------------------------------------------------- Herzschlag
@@ -1533,8 +1732,10 @@ async fn get_ledger(
     let mut stmt = conn.prepare(
         "SELECT l.id, l.account, u.name, l.kind, l.amount, l.note, l.created_at, l.user_id,
                 l.game_amount, l.distance_km, l.payroll_id, l.occurred_at, l.event_id,
-                l.cargo, l.source_city, l.target_city
+                l.cargo, l.source_city, l.target_city, pl.truck_id, tr.plate
          FROM ledger l LEFT JOIN users u ON u.id = l.user_id
+         LEFT JOIN purchase_links pl ON pl.ledger_id = l.id
+         LEFT JOIN trucks tr ON tr.id = pl.truck_id
          WHERE l.company_id = ?1 ORDER BY l.id DESC LIMIT ?2",
     )?;
     let entries = stmt
@@ -1551,13 +1752,246 @@ async fn get_ledger(
                 "event_id": r.get::<_, Option<String>>(12)?,
                 "cargo": r.get::<_, Option<String>>(13)?,
                 "source_city": r.get::<_, Option<String>>(14)?,
-                "target_city": r.get::<_, Option<String>>(15)?
+                "target_city": r.get::<_, Option<String>>(15)?,
+                // Als Lkw-Kauf verknüpft: der Lkw und sein aktuelles Kennzeichen
+                "truck_id": r.get::<_, Option<i64>>(16)?,
+                "truck_plate": r.get::<_, Option<String>>(17)?
             }))
         })?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Json(
         json!({ "balance": company_balance(&conn, company_id)?, "entries": entries }),
     ))
+}
+
+#[derive(Deserialize)]
+struct LinkReq {
+    truck_id: i64,
+}
+
+/// Eine Betriebskosten-Buchung als Kauf eines Lkw verknüpfen. Nur der Chef. Die Buchung bleibt
+/// unverändert, im Kassenbuch steht dann "Lkw-Kauf <Kennzeichen>".
+async fn link_truck(
+    State(db): State<Db>,
+    State(clock): State<Clock>,
+    user: AuthUser,
+    Path((company_id, entry)): Path<(i64, i64)>,
+    Json(b): Json<LinkReq>,
+) -> ApiResult<Json<Value>> {
+    let mut conn = db.lock().unwrap();
+    let tx = conn.transaction()?;
+    require_chef(&tx, company_id, user.id)?;
+    let (kind, account): (String, String) = tx
+        .query_row(
+            "SELECT kind, account FROM ledger WHERE id = ?1 AND company_id = ?2",
+            [entry, company_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?
+        .ok_or_else(|| ApiError::not_found("Diese Buchung gibt es nicht"))?;
+    if kind != "betriebskosten" || account != "firma" {
+        return Err(ApiError::bad(
+            "Als Lkw-Kauf lässt sich nur eine Betriebskosten-Buchung der Firmenkasse verknüpfen",
+        ));
+    }
+    let linked: Option<String> = tx
+        .query_row(
+            "SELECT t.plate FROM purchase_links p JOIN trucks t ON t.id = p.truck_id
+             WHERE p.ledger_id = ?1",
+            [entry],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if let Some(plate) = linked {
+        return Err(ApiError::conflict(&format!(
+            "Die Buchung ist schon als Kauf von {plate} verknüpft"
+        )));
+    }
+    let plate: String = tx
+        .query_row(
+            "SELECT plate FROM trucks WHERE id = ?1 AND company_id = ?2",
+            [b.truck_id, company_id],
+            |r| r.get(0),
+        )
+        .optional()?
+        .ok_or_else(|| ApiError::not_found("Diesen Lkw gibt es in der Firma nicht"))?;
+    tx.execute(
+        "INSERT INTO purchase_links (ledger_id, truck_id, linked_by, created_at)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![entry, b.truck_id, user.id, clock.now()],
+    )?;
+    tx.commit()?;
+    Ok(Json(json!({
+        "ledger_id": entry, "truck_id": b.truck_id, "truck_plate": plate
+    })))
+}
+
+/// Verknüpfung lösen, etwa wenn der Chef den falschen Lkw gewählt hat. Die Buchung steht
+/// danach wieder als Betriebskosten im Kassenbuch.
+async fn unlink_truck(
+    State(db): State<Db>,
+    user: AuthUser,
+    Path((company_id, entry)): Path<(i64, i64)>,
+) -> ApiResult<Json<Value>> {
+    let conn = db.lock().unwrap();
+    require_chef(&conn, company_id, user.id)?;
+    let removed = conn.execute(
+        "DELETE FROM purchase_links WHERE ledger_id = ?1
+           AND ledger_id IN (SELECT id FROM ledger WHERE company_id = ?2)",
+        [entry, company_id],
+    )?;
+    if removed == 0 {
+        return Err(ApiError::not_found(
+            "Die Buchung ist mit keinem Lkw verknüpft",
+        ));
+    }
+    Ok(Json(json!({ "ledger_id": entry, "unlinked": true })))
+}
+
+#[derive(Deserialize)]
+struct CandidateQuery {
+    limit: Option<i64>,
+}
+
+/// Betriebskosten-Buchungen des Chefs, die noch mit keinem Lkw verknüpft sind, neueste zuerst.
+/// Daraus wählt der Chef nach "Lkw übernehmen" den Kauf.
+async fn purchase_candidates(
+    State(db): State<Db>,
+    user: AuthUser,
+    Path(company_id): Path<i64>,
+    Query(q): Query<CandidateQuery>,
+) -> ApiResult<Json<Value>> {
+    let limit = q.limit.unwrap_or(10).clamp(1, 100);
+    let conn = db.lock().unwrap();
+    require_chef(&conn, company_id, user.id)?;
+    let entries: Vec<Value> = conn
+        .prepare(
+            "SELECT l.id, l.created_at, l.amount, l.note FROM ledger l
+             WHERE l.company_id = ?1 AND l.account = 'firma' AND l.kind = 'betriebskosten'
+               AND l.user_id = ?2
+               AND NOT EXISTS (SELECT 1 FROM purchase_links p WHERE p.ledger_id = l.id)
+             ORDER BY l.id DESC LIMIT ?3",
+        )?
+        .query_map(params![company_id, user.id, limit], |r| {
+            Ok(json!({
+                "id": r.get::<_, i64>(0)?, "created_at": r.get::<_, i64>(1)?,
+                "amount": r.get::<_, i64>(2)?, "note": r.get::<_, String>(3)?
+            }))
+        })?
+        .collect::<Result<_, _>>()?;
+    Ok(Json(json!({ "entries": entries })))
+}
+
+// ---------------------------------------------------------------- Anschaffungsbudget
+
+#[derive(Deserialize)]
+struct BudgetReq {
+    amount: i64,
+    #[serde(default)]
+    note: Option<String>,
+}
+
+/// Anschaffungsbudget freigeben, siehe [`crate::purchases`]. Nur der Chef. Höchstens ein offenes
+/// Budget je Firma. Die Kasse muss den Betrag decken, gebucht wird aber nichts.
+async fn create_budget(
+    State(db): State<Db>,
+    State(clock): State<Clock>,
+    user: AuthUser,
+    Path(company_id): Path<i64>,
+    Json(b): Json<BudgetReq>,
+) -> ApiResult<Json<Value>> {
+    if !(1..=1_000_000_000).contains(&b.amount) {
+        return Err(ApiError::bad(
+            "Der Betrag muss zwischen 1 und 1000000000 Euro liegen",
+        ));
+    }
+    let note = presence::clean_text(b.note.as_deref(), 80).unwrap_or_default();
+    let mut conn = db.lock().unwrap();
+    let tx = conn.transaction()?;
+    require_chef(&tx, company_id, user.id)?;
+    // Gäbe es mehrere offene Budgets, müsste die Kasse auch deren Reste decken. Es gibt aber
+    // höchstens eins, also reicht der Kassenstand.
+    if purchases::open_budget(&tx, company_id)?.is_some() {
+        return Err(ApiError::conflict(
+            "Es gibt schon ein offenes Anschaffungsbudget. Schließ es zuerst, dann lässt sich ein neues freigeben",
+        ));
+    }
+    let balance = company_balance(&tx, company_id)?;
+    if b.amount > balance {
+        return Err(ApiError::conflict(&format!(
+            "In der Kasse ist nicht genug Geld für das Budget: nötig {} €, da sind {balance} €",
+            b.amount
+        )));
+    }
+    tx.execute(
+        "INSERT INTO purchase_budgets (company_id, user_id, amount, note, created_at, ledger_from,
+                                       sync_from)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            company_id,
+            user.id,
+            b.amount,
+            note,
+            clock.now(),
+            purchases::max_ledger_id(&tx)?,
+            purchases::max_sync_id(&tx)?
+        ],
+    )?;
+    let id = tx.last_insert_rowid();
+    let budget = purchases::budget(&tx, company_id, id)?
+        .ok_or_else(|| ApiError::not_found("Dieses Budget gibt es nicht"))?;
+    tx.commit()?;
+    Ok(Json(json!({ "budget": budget.json(), "balance": balance })))
+}
+
+/// Alle Anschaffungsbudgets der Firma mit Restbetrag, das offene unter `open`. Nur der Chef.
+async fn list_budgets(
+    State(db): State<Db>,
+    user: AuthUser,
+    Path(company_id): Path<i64>,
+) -> ApiResult<Json<Value>> {
+    let conn = db.lock().unwrap();
+    require_chef(&conn, company_id, user.id)?;
+    let all = purchases::budgets(&conn, company_id)?;
+    let open = all
+        .iter()
+        .find(|b| b.closed_at.is_none())
+        .map_or(Value::Null, Budget::json);
+    Ok(Json(json!({
+        "open": open,
+        "budgets": all.iter().map(Budget::json).collect::<Vec<_>>()
+    })))
+}
+
+/// Budget schließen. Gebucht wird nichts. Beim nächsten Abgleich kommt der Rest nicht mehr in
+/// den Spielstand. Die Antwort sagt unter `rest`, wie viel damit entfällt.
+async fn close_budget(
+    State(db): State<Db>,
+    State(clock): State<Clock>,
+    user: AuthUser,
+    Path((company_id, budget_id)): Path<(i64, i64)>,
+) -> ApiResult<Json<Value>> {
+    let mut conn = db.lock().unwrap();
+    let tx = conn.transaction()?;
+    require_chef(&tx, company_id, user.id)?;
+    let budget = purchases::budget(&tx, company_id, budget_id)?
+        .ok_or_else(|| ApiError::not_found("Dieses Budget gibt es nicht"))?;
+    if budget.closed_at.is_some() {
+        return Err(ApiError::conflict("Das Budget ist schon geschlossen"));
+    }
+    tx.execute(
+        "UPDATE purchase_budgets SET closed_at = ?1, closed_by = ?2, ledger_to = ?3 WHERE id = ?4",
+        params![
+            clock.now(),
+            user.id,
+            purchases::max_ledger_id(&tx)?,
+            budget_id
+        ],
+    )?;
+    let budget = purchases::budget(&tx, company_id, budget_id)?
+        .ok_or_else(|| ApiError::not_found("Dieses Budget gibt es nicht"))?;
+    tx.commit()?;
+    Ok(Json(json!({ "budget": budget.json() })))
 }
 
 // ---------------------------------------------------------------- Lohnabrechnung
@@ -1629,7 +2063,8 @@ struct SyncReq {
 /// Betrag für den Chef angelegt. Der erste Abgleich bucht nichts.
 ///
 /// Zurück kommt, was der Launcher in den Spielstand schreiben soll: Lohnkonto plus
-/// Betriebsvorschuss, nie unter 0. Hat er es geschrieben, meldet er das über `.../written`.
+/// Betriebsvorschuss, beim Chef plus der Rest eines offenen Anschaffungsbudgets (siehe
+/// [`crate::purchases`]), nie unter 0. Hat er es geschrieben, meldet er das über `.../written`.
 async fn sync(
     State(db): State<Db>,
     State(clock): State<Clock>,
@@ -1699,7 +2134,9 @@ async fn sync(
         |r| r.get(0),
     )?;
     let my_wallet = wallet(&tx, company_id, user.id)?;
-    let write_money = (my_wallet + advance).max(0);
+    // Anschaffungsbudget des Chefs: der Rest nach den gerade gebuchten Betriebskosten
+    let budget = purchases::open_rest_for(&tx, company_id, user.id)?;
+    let write_money = (my_wallet + advance + budget).max(0);
     let last_ledger_id: i64 =
         tx.query_row("SELECT COALESCE(MAX(id), 0) FROM ledger", [], |r| r.get(0))?;
     tx.execute(
@@ -1739,7 +2176,7 @@ async fn sync(
         "sync_id": sync_id, "first": last.is_none(), "ingame_money": b.ingame_money,
         "expected": expected, "events": events, "booked": booked, "unexplained": unexplained,
         "saved_at": cutoff,
-        "wallet": my_wallet, "advance": advance, "write_money": write_money,
+        "wallet": my_wallet, "advance": advance, "budget": budget, "write_money": write_money,
         "xp": s.xp, "game_level": s.game_level, "stage": s.stage.map(|w| w.position)
     })))
 }

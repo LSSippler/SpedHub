@@ -212,6 +212,10 @@ pub fn job_json(j: &Job) -> Value {
 /// Der Launcher setzt einen Lkw mit dem Kennzeichen aus dem Bauplan ein. Hat das Spiel das
 /// Kennzeichen einmal ersetzt, fährt der Lkw also wieder mit seinem alten, das inzwischen
 /// ein anderer Lkw als aktuelles tragen kann.
+///
+/// Ausgemusterte und verkaufte Lkw zählen nicht. Steht ein verkaufter Lkw noch in einem
+/// Spielstand und wird gefahren, ist das kein Firmen-Lkw mehr und wird nicht als fremd
+/// gefahren markiert.
 pub fn find_truck(
     conn: &Connection,
     company_id: i64,
@@ -224,13 +228,16 @@ pub fn find_truck(
     }
     // Erst die aktuellen Kennzeichen, dann die alten, das zuletzt ersetzte zuerst
     let current: Vec<(i64, String)> = conn
-        .prepare("SELECT id, plate FROM trucks WHERE company_id = ?1 ORDER BY id")?
+        .prepare(
+            "SELECT id, plate FROM trucks WHERE company_id = ?1 AND retired_at IS NULL ORDER BY id",
+        )?
         .query_map([company_id], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<Result<_, _>>()?;
     let old: Vec<(i64, String)> = conn
         .prepare(
             "SELECT p.truck_id, p.plate FROM truck_plates p JOIN trucks t ON t.id = p.truck_id
-             WHERE t.company_id = ?1 ORDER BY p.replaced_at DESC, p.rowid DESC",
+             WHERE t.company_id = ?1 AND t.retired_at IS NULL
+             ORDER BY p.replaced_at DESC, p.rowid DESC",
         )?
         .query_map([company_id], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<Result<_, _>>()?;

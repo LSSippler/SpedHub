@@ -3674,3 +3674,711 @@ async fn einstellungen_fuer_werkstatt_und_haftung() {
     let (s, _) = f.patch(&f.chef, json!({ "damage_limit": 100 })).await;
     assert_eq!(s, StatusCode::OK);
 }
+
+// ------------------------------------------------------------ Anschaffungen
+
+impl Firma {
+    async fn budget(&self, token: &str, body: Value) -> (StatusCode, Value) {
+        self.post(token, &format!("/api/companies/{}/budgets", self.id), body)
+            .await
+    }
+
+    async fn close_budget(&self, token: &str, budget: &Value) -> (StatusCode, Value) {
+        self.post(
+            token,
+            &format!("/api/companies/{}/budgets/{}/close", self.id, budget["id"]),
+            json!({}),
+        )
+        .await
+    }
+
+    /// Alle Budgets, neueste zuerst, wie die Chefin sie sieht
+    async fn budgets(&self) -> Value {
+        let (s, b) = self
+            .get(&self.chef, &format!("/api/companies/{}/budgets", self.id))
+            .await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+        b
+    }
+
+    /// Abgleich der Chefin um `m` + 1 Minuten mit einem Spielstand von Minute `m`, bestätigt
+    async fn chef_sync(&self, money: i64, m: i64) -> Value {
+        self.clock.set(t(m + 1));
+        let r = self.sync_at(&self.chef, money, None, Some(t(m))).await;
+        let (s, w) = self.written_at(&self.chef, &r, Some(t(m + 1))).await;
+        assert_eq!(s, StatusCode::OK, "{w}");
+        r
+    }
+
+    async fn link(&self, token: &str, entry: i64, truck: i64) -> (StatusCode, Value) {
+        self.post(
+            token,
+            &format!("/api/companies/{}/ledger/{entry}/link-truck", self.id),
+            json!({ "truck_id": truck }),
+        )
+        .await
+    }
+
+    async fn candidates(&self, token: &str) -> (StatusCode, Value) {
+        self.get(
+            token,
+            &format!("/api/companies/{}/purchase-candidates", self.id),
+        )
+        .await
+    }
+
+    /// Eine Buchung aus dem Kassenbuch
+    async fn entry(&self, id: i64) -> Value {
+        self.ledger()
+            .await
+            .into_iter()
+            .find(|e| e["id"] == id)
+            .unwrap_or_else(|| panic!("keine Buchung {id}"))
+    }
+}
+
+/// Die Kasse bekommt 100000 € aus einem Auftrag des Fahrers. Seine Ereignisse zählen nicht für
+/// den Abgleich der Chefin.
+async fn full_cash(f: &Firma) {
+    f.event(&f.fahrer, "job-kasse", "job_delivered", 100_000, None)
+        .await;
+    assert_eq!(f.balance().await, 100_000);
+}
+
+#[tokio::test]
+async fn budget_freigeben() {
+    let f = Firma::new().await;
+    full_cash(&f).await;
+    let before = f.ledger().await.len();
+
+    // Nur die Chefin, der Fahrer bekommt 403
+    let (s, v) = f.budget(&f.fahrer, json!({ "amount": 1000 })).await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "{v}");
+    let (s, _) = f
+        .get(&f.fahrer, &format!("/api/companies/{}/budgets", f.id))
+        .await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+
+    // Unsinnige Beträge
+    for amount in [0, -5] {
+        let (s, v) = f.budget(&f.chef, json!({ "amount": amount })).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    }
+    // Größer als die Kasse: 409 mit Meldung, nichts angelegt
+    let (s, v) = f.budget(&f.chef, json!({ "amount": 100_001 })).await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    assert_eq!(
+        v["error"],
+        "In der Kasse ist nicht genug Geld für das Budget: nötig 100001 €, da sind 100000 €"
+    );
+    assert_eq!(f.company(&f.chef).await["budget"], Value::Null);
+
+    // Freigeben: nichts gebucht, Kasse unverändert
+    let (s, v) = f
+        .budget(
+            &f.chef,
+            json!({ "amount": 60_000, "note": "  Neuer Scania\n " }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let b = &v["budget"];
+    assert_eq!(
+        (n(&b["amount"]), n(&b["rest"]), n(&b["consumed"])),
+        (60_000, 60_000, 0)
+    );
+    assert_eq!(b["note"], "Neuer Scania");
+    assert_eq!(b["closed_at"], Value::Null);
+    assert_eq!(f.ledger().await.len(), before, "nichts gebucht");
+    assert_eq!(f.balance().await, 100_000);
+
+    // Die Chefin sieht das offene Budget, der Fahrer nicht
+    let c = f.company(&f.chef).await;
+    assert_eq!(c["budget"]["id"], b["id"]);
+    assert_eq!(n(&c["budget"]["rest"]), 60_000);
+    assert!(f.company(&f.fahrer).await.get("budget").is_none());
+    let list = f.budgets().await;
+    assert_eq!(list["open"]["id"], b["id"]);
+    assert_eq!(list["budgets"].as_array().unwrap().len(), 1);
+
+    // Höchstens ein offenes Budget je Firma
+    let (s, v) = f.budget(&f.chef, json!({ "amount": 1 })).await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    assert!(
+        v["error"]
+            .as_str()
+            .unwrap()
+            .contains("schon ein offenes Anschaffungsbudget")
+    );
+}
+
+#[tokio::test]
+async fn abgleich_mit_budget_und_kauf() {
+    let f = Firma::new().await;
+    full_cash(&f).await;
+
+    // Erster Abgleich der Chefin vor dem Budget: Lohnkonto 0 plus Vorschuss 2000
+    let r = f.chef_sync(2000, -1).await;
+    assert_eq!((r["first"].as_bool(), n(&r["budget"])), (Some(true), 0));
+    assert_eq!(n(&r["write_money"]), 2000);
+
+    f.clock.set(t(5));
+    let (s, v) = f.budget(&f.chef, json!({ "amount": 60_000 })).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+
+    // Nächster Abgleich schreibt Lohnkonto plus Vorschuss plus Budget, bucht nichts
+    let r = f.chef_sync(2000, 10).await;
+    assert_eq!(n(&r["expected"]), 2000);
+    assert_eq!(r["booked"], json!([]));
+    assert_eq!(
+        (n(&r["wallet"]), n(&r["advance"]), n(&r["budget"])),
+        (0, 2000, 60_000)
+    );
+    assert_eq!(n(&r["write_money"]), 62_000);
+    assert_eq!(f.balance().await, 100_000);
+
+    // Der Fahrer bekommt das Budget der Chefin nicht
+    let r = f.sync(&f.fahrer, 2000, None).await;
+    assert_eq!((n(&r["budget"]), n(&r["write_money"])), (0, 2000));
+
+    // Im Spiel kauft die Chefin einen Lkw für 45000 €: genau einmal Betriebskosten
+    let r = f.chef_sync(62_000 - 45_000, 30).await;
+    assert_eq!(n(&r["expected"]), 62_000);
+    assert_eq!(
+        r["booked"],
+        json!([{ "account": "firma", "kind": "betriebskosten", "amount": -45_000 }])
+    );
+    assert_eq!(n(&r["budget"]), 15_000, "Rest sinkt um den Kauf");
+    assert_eq!(n(&r["write_money"]), 2000 + 15_000);
+    assert_eq!(f.balance().await, 55_000);
+    assert_eq!(f.costs().await, -45_000);
+    let b = &f.budgets().await["open"];
+    assert_eq!((n(&b["consumed"]), n(&b["rest"])), (45_000, 15_000));
+    assert_eq!(n(&f.company(&f.chef).await["budget"]["rest"]), 15_000);
+
+    // Ohne weitere Ausgaben bleibt alles, wie es ist: kein zweiter Abzug
+    let r = f.chef_sync(17_000, 40).await;
+    assert_eq!(r["booked"], json!([]));
+    assert_eq!(r["unexplained"], Value::Null);
+    assert_eq!((n(&r["budget"]), n(&r["write_money"])), (15_000, 17_000));
+    assert_eq!(f.balance().await, 55_000);
+
+    // Tanken der Chefin nach der Freigabe verbraucht das Budget ebenfalls
+    let r = f.chef_sync(17_000 - 300, 50).await;
+    assert_eq!(n(&r["booked"][0]["amount"]), -300);
+    assert_eq!((n(&r["budget"]), n(&r["write_money"])), (14_700, 16_700));
+    assert_eq!(f.costs().await, -45_300);
+    assert_eq!(f.balance().await, 100_000 - 45_300);
+
+    // Mehr als der Rest ausgegeben: Die Firma zahlt alles, der Rest ist 0, nie negativ
+    let r = f.chef_sync(16_700 - 20_000, 60).await;
+    assert_eq!(n(&r["booked"][0]["amount"]), -20_000);
+    assert_eq!((n(&r["budget"]), n(&r["write_money"])), (0, 2000));
+    let b = &f.budgets().await["open"];
+    assert_eq!((n(&b["consumed"]), n(&b["rest"])), (60_000, 0));
+}
+
+#[tokio::test]
+async fn spaet_gemeldeter_auftrag_verbraucht_budget() {
+    let f = Firma::new().await;
+    full_cash(&f).await;
+    f.chef_sync(2000, -1).await;
+    f.clock.set(t(5));
+    f.budget(&f.chef, json!({ "amount": 50_000 })).await;
+    f.chef_sync(2000, 10).await;
+
+    // Im Spiel: Kauf für 40000 €, dazu ein Auftrag über 1000 €, den das Plugin erst nach dem
+    // Abgleich meldet. Der Abgleich bucht deshalb erst 39000 €.
+    let r = f.chef_sync(52_000 - 40_000 + 1000, 30).await;
+    assert_eq!(n(&r["booked"][0]["amount"]), -39_000);
+    assert_eq!((n(&r["budget"]), n(&r["write_money"])), (11_000, 13_000));
+    f.clock.set(t(35));
+    let e = f
+        .event_at(
+            &f.chef,
+            "job-spaet",
+            "job_delivered",
+            1000,
+            None,
+            Some(t(20)),
+        )
+        .await;
+    assert_eq!(n(&e["late"]["booked"][0]["amount"]), -1000);
+    // Der Auftrag gehört der Firma, im Spiel bleiben nur Lohnkonto, Vorschuss und Rest
+    let r = f.chef_sync(13_000, 40).await;
+    assert_eq!(r["booked"], json!([]));
+    assert_eq!((n(&r["budget"]), n(&r["write_money"])), (10_000, 12_000));
+    assert_eq!(f.costs().await, -40_000);
+    assert_eq!(f.balance().await, 100_000 + 1000 - 40_000);
+}
+
+/// Eine spät gemeldete Maut aus einem Abgleich nach der Freigabe: Der Abgleich hat sie als
+/// Betriebskosten gebucht und vom Budget abgezogen, die Gutschrift gibt sie zurück.
+#[tokio::test]
+async fn spaet_gemeldete_maut_gibt_budget_zurueck() {
+    let f = Firma::new().await;
+    full_cash(&f).await;
+    f.chef_sync(2000, -1).await;
+    f.clock.set(t(5));
+    f.budget(&f.chef, json!({ "amount": 50_000 })).await;
+    let r = f.chef_sync(2000, 10).await;
+    assert_eq!(n(&r["write_money"]), 52_000);
+
+    // Im Spiel: Kauf für 40000 € und 1000 € Maut um t(20), die das Plugin erst später meldet
+    let r = f.chef_sync(52_000 - 41_000, 30).await;
+    assert_eq!(n(&r["booked"][0]["amount"]), -41_000);
+    assert_eq!((n(&r["budget"]), n(&r["write_money"])), (9000, 11_000));
+    f.clock.set(t(35));
+    let e = f
+        .event_at(&f.chef, "maut-spaet", "tollgate", 1000, None, Some(t(20)))
+        .await;
+    assert_eq!(e["late"]["booked"][0]["kind"], "betriebskosten_korrektur");
+    assert_eq!(n(&e["late"]["booked"][0]["amount"]), 1000);
+
+    // Die Maut zahlt die Firma, verbraucht ist nur der Kauf
+    let r = f.chef_sync(11_000, 40).await;
+    assert_eq!(r["booked"], json!([]));
+    assert_eq!((n(&r["budget"]), n(&r["write_money"])), (10_000, 12_000));
+    assert_eq!(f.costs().await, -40_000);
+}
+
+/// Eine Gutschrift für einen Abgleich von vor der Freigabe macht das Budget nicht größer als
+/// freigegeben: Die Betriebskosten dieses Abgleichs waren nie vom Budget abgezogen.
+#[tokio::test]
+async fn korrektur_von_vor_der_freigabe_vergroessert_budget_nicht() {
+    let f = Firma::new().await;
+    full_cash(&f).await;
+    f.chef_sync(2000, -1).await;
+    // 1000 € Maut um t(5), das Plugin meldet sie erst nach dem Abgleich
+    let r = f.chef_sync(1000, 10).await;
+    assert_eq!(n(&r["booked"][0]["amount"]), -1000);
+
+    f.clock.set(t(12));
+    f.budget(&f.chef, json!({ "amount": 50_000 })).await;
+    f.clock.set(t(13));
+    let e = f
+        .event_at(&f.chef, "maut-1", "tollgate", 1000, None, Some(t(5)))
+        .await;
+    assert_eq!(e["late"]["booked"][0]["kind"], "betriebskosten_korrektur");
+    let budget = f.company(&f.chef).await["budget"].clone();
+    assert_eq!(n(&budget["rest"]), 50_000, "{budget}");
+
+    let r = f.chef_sync(2000, 20).await;
+    assert_eq!(n(&r["write_money"]), 52_000);
+    // Kauf für genau das Budget: danach ist nichts mehr übrig
+    let r = f.chef_sync(2000, 30).await;
+    assert_eq!(n(&r["booked"][0]["amount"]), -50_000);
+    assert_eq!((n(&r["budget"]), n(&r["write_money"])), (0, 2000));
+    // Nach der Freigabe sind genau 50000 € als Betriebskosten gebucht
+    assert_eq!(f.costs().await, -1000 + 1000 - 50_000);
+}
+
+#[tokio::test]
+async fn budget_schliessen() {
+    let f = Firma::new().await;
+    full_cash(&f).await;
+    f.chef_sync(2000, -1).await;
+    f.clock.set(t(5));
+    let (_, v) = f
+        .budget(&f.chef, json!({ "amount": 50_000, "note": "Volvo" }))
+        .await;
+    let budget = v["budget"].clone();
+    let r = f.chef_sync(2000, 10).await;
+    assert_eq!(n(&r["write_money"]), 52_000);
+    let r = f.chef_sync(52_000 - 30_000, 30).await;
+    assert_eq!(n(&r["booked"][0]["amount"]), -30_000);
+    assert_eq!(n(&r["write_money"]), 22_000);
+
+    // Nur die Chefin schließt
+    let (s, _) = f.close_budget(&f.fahrer, &budget).await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    let (s, _) = f.close_budget(&f.chef, &json!({ "id": 999 })).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+
+    // Schließen bucht nichts und sagt, wie viel entfällt
+    let ledger = f.ledger().await.len();
+    let balance = f.balance().await;
+    f.clock.set(t(40));
+    let (s, v) = f.close_budget(&f.chef, &budget).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(
+        (n(&v["budget"]["rest"]), n(&v["budget"]["consumed"])),
+        (20_000, 30_000)
+    );
+    assert_eq!(n(&v["budget"]["closed_at"]), t(40));
+    assert_eq!(v["budget"]["closed_by"], "Chefin");
+    assert_eq!(f.ledger().await.len(), ledger, "nichts gebucht");
+    assert_eq!(f.balance().await, balance);
+    assert_eq!(f.company(&f.chef).await["budget"], Value::Null);
+    let (s, _) = f.close_budget(&f.chef, &budget).await;
+    assert_eq!(s, StatusCode::CONFLICT);
+
+    // Nächster Abgleich: Im Spiel steht noch der Stand mit Budget. Das ist genau der erwartete
+    // Stand, also keine Betriebskosten. Geschrieben wird ohne Budget.
+    let r = f.chef_sync(22_000, 50).await;
+    assert_eq!(n(&r["expected"]), 22_000);
+    assert_eq!(r["booked"], json!([]));
+    assert_eq!(r["unexplained"], Value::Null);
+    assert_eq!((n(&r["budget"]), n(&r["write_money"])), (0, 2000));
+    // Und danach rechnet der Abgleich vom neuen Stand
+    let r = f.chef_sync(2000, 60).await;
+    assert_eq!(n(&r["expected"]), 2000);
+    assert_eq!(r["booked"], json!([]));
+    assert_eq!(f.costs().await, -30_000, "nur der Kauf");
+    assert_eq!(f.balance().await, 70_000);
+
+    // Was nach dem Schließen gebucht wird, zählt nicht mehr zum alten Budget
+    f.chef_sync(2000 - 500, 70).await;
+    let list = f.budgets().await;
+    assert_eq!(list["open"], Value::Null);
+    let old = &list["budgets"][0];
+    assert_eq!((n(&old["consumed"]), n(&old["rest"])), (30_000, 20_000));
+    assert_eq!(old["note"], "Volvo");
+
+    // Danach geht ein neues Budget, die Kasse muss es decken
+    let (s, v) = f.budget(&f.chef, json!({ "amount": 69_500 })).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(
+        n(&v["budget"]["rest"]),
+        69_500,
+        "die 500 € von vorher zählen nicht"
+    );
+    assert_eq!(f.budgets().await["budgets"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn lkw_kauf_verknuepfen() {
+    let f = Firma::new().await;
+    full_cash(&f).await;
+    f.chef_sync(2000, -1).await;
+    f.clock.set(t(5));
+    f.budget(&f.chef, json!({ "amount": 50_000 })).await;
+    f.chef_sync(2000, 10).await;
+    f.chef_sync(52_000 - 45_000, 30).await;
+    // Auch der Fahrer hat Betriebskosten. Die stehen nicht unter den Kandidaten der Chefin.
+    f.sync(&f.fahrer, 2000, None).await;
+    f.sync(&f.fahrer, 1800, None).await;
+
+    let (s, _) = f.candidates(&f.fahrer).await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    let (s, c) = f.candidates(&f.chef).await;
+    assert_eq!(s, StatusCode::OK, "{c}");
+    let c = c["entries"].as_array().unwrap().clone();
+    assert_eq!(c.len(), 1, "{c:?}");
+    assert_eq!(n(&c[0]["amount"]), -45_000);
+    assert_eq!(n(&c[0]["created_at"]), t(31));
+    assert!(c[0]["note"].as_str().unwrap().starts_with("Abgleich"));
+    let kauf = n(&c[0]["id"]);
+
+    // Die Chefin übernimmt den Lkw in den Fuhrpark und verknüpft den Kauf
+    let truck = f.truck("SPED 004", 1000, json!({})).await;
+    let (s, _) = f.link(&f.fahrer, kauf, truck).await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    let (s, v) = f.link(&f.chef, kauf, truck).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["truck_plate"], "SPED 004");
+    let e = f.entry(kauf).await;
+    assert_eq!(
+        (n(&e["truck_id"]), &e["truck_plate"]),
+        (truck, &json!("SPED 004"))
+    );
+    // Die Buchung selbst bleibt, wie sie war
+    assert_eq!(
+        (&e["kind"], n(&e["amount"])),
+        (&json!("betriebskosten"), -45_000)
+    );
+    assert_eq!(f.balance().await, 100_000 - 45_000 - 200);
+    let (_, c) = f.candidates(&f.chef).await;
+    assert!(c["entries"].as_array().unwrap().is_empty());
+
+    // Doppelt: 409
+    let (s, v) = f.link(&f.chef, kauf, truck).await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    assert_eq!(
+        v["error"],
+        "Die Buchung ist schon als Kauf von SPED 004 verknüpft"
+    );
+    // Falsche Art: 400
+    let auftrag = n(&f.entries("auftrag").await[0]["id"]);
+    let (s, v) = f.link(&f.chef, auftrag, truck).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    // Unbekannte Buchung: 404
+    let (s, _) = f.link(&f.chef, 999_999, truck).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    // Lkw einer anderen Firma: 404
+    let fremd = register(&f.app, "Fremder").await;
+    let (_, andere) = f
+        .post(&fremd, "/api/companies", json!({ "name": "Südfracht" }))
+        .await;
+    let (s, fremder_lkw) = f
+        .post(
+            &fremd,
+            &format!("/api/companies/{}/trucks", andere["id"]),
+            json!({ "plate": "SUED 1", "model": "volvo.fh16_2012" }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    let fahrer_kosten = n(&f.entries("betriebskosten").await[0]["id"]);
+    let (s, v) = f.link(&f.chef, fahrer_kosten, n(&fremder_lkw["id"])).await;
+    assert_eq!(s, StatusCode::NOT_FOUND, "{v}");
+    assert_eq!(v["error"], "Diesen Lkw gibt es in der Firma nicht");
+    // Eine Buchung dieser Firma aus der anderen heraus: 404
+    let (s, _) = f
+        .post(
+            &fremd,
+            &format!("/api/companies/{}/ledger/{kauf}/link-truck", andere["id"]),
+            json!({ "truck_id": n(&fremder_lkw["id"]) }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+
+    // Das Kassenbuch zeigt immer das aktuelle Kennzeichen
+    f.checkout(&f.fahrer, truck).await;
+    let (s, _) = f
+        .checkin(
+            &f.fahrer,
+            truck,
+            json!({ "odometer_km": 1100, "plate": "EF AB 123" }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(f.entry(kauf).await["truck_plate"], "EF AB 123");
+
+    // Verknüpfung lösen: wieder Betriebskosten und wieder Kandidat
+    let unlink = format!("/api/companies/{}/ledger/{kauf}/link-truck", f.id);
+    let (s, _) = call(&f.app, "DELETE", &unlink, Some(&f.fahrer), None).await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    let (s, v) = call(&f.app, "DELETE", &unlink, Some(&f.chef), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let e = f.entry(kauf).await;
+    assert_eq!(
+        (&e["truck_id"], &e["truck_plate"]),
+        (&Value::Null, &Value::Null)
+    );
+    let (s, _) = call(&f.app, "DELETE", &unlink, Some(&f.chef), None).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    let (_, c) = f.candidates(&f.chef).await;
+    assert_eq!(n(&c["entries"][0]["id"]), kauf);
+}
+
+impl Firma {
+    async fn retire(&self, token: &str, truck: i64) -> (StatusCode, Value) {
+        self.post(token, &format!("/api/trucks/{truck}/retire"), json!({}))
+            .await
+    }
+
+    async fn sell(&self, token: &str, truck: i64, price: i64) -> (StatusCode, Value) {
+        self.post(
+            token,
+            &format!("/api/trucks/{truck}/sell"),
+            json!({ "price": price }),
+        )
+        .await
+    }
+}
+
+#[tokio::test]
+async fn lkw_ausmustern() {
+    let f = Firma::new().await;
+    full_cash(&f).await;
+    let alt = f
+        .truck(
+            "SPED 001",
+            1000,
+            worn(1000, 0.0, 0.0, 0.0, 0.2, &[0.0, 0.0]),
+        )
+        .await;
+    let anderer = f.truck("SPED 002", 1000, json!({})).await;
+    // Vorgeschichte: Werkstatt und ein verknüpfter Kauf
+    let (s, _) = f.repair(&f.chef, alt).await;
+    assert_eq!(s, StatusCode::OK);
+    f.chef_sync(2000, -1).await;
+    f.chef_sync(1000, 10).await;
+    let kauf = n(&f.entries("betriebskosten").await[0]["id"]);
+    f.link(&f.chef, kauf, alt).await;
+
+    // Verliehen: erst zurückgeben
+    f.checkout(&f.fahrer, alt).await;
+    let (s, v) = f.retire(&f.chef, alt).await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    assert_eq!(
+        v["error"],
+        "Der Lkw ist gerade an Fahrer verliehen. Erst zurückgeben, dann ausmustern"
+    );
+    f.checkin(&f.fahrer, alt, json!({ "odometer_km": 1200 }))
+        .await;
+    let (s, _) = f.retire(&f.fahrer, alt).await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+
+    let ledger = f.ledger().await;
+    f.clock.set(t(30));
+    let (s, v) = f.retire(&f.chef, alt).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["retired"]["reason"], "ausgemustert");
+    assert_eq!(f.ledger().await, ledger, "nichts gebucht, alles bleibt");
+
+    // Bleibt in der Liste, hinter den aktiven, mit Grund und Datum
+    let (_, l) = f
+        .get(&f.fahrer, &format!("/api/companies/{}/trucks", f.id))
+        .await;
+    let ids: Vec<i64> = l["trucks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| n(&t["id"]))
+        .collect();
+    assert_eq!(ids, vec![anderer, alt]);
+    let t1 = f.truck_as(&f.fahrer, alt).await;
+    assert_eq!(
+        t1["retired"],
+        json!({ "reason": "ausgemustert", "at": t(30), "sale_price": null })
+    );
+    assert_eq!(n(&t1["odometer_km"]), 1200);
+    assert_eq!(f.truck_as(&f.fahrer, anderer).await["retired"], Value::Null);
+
+    // Nicht mehr ausleihbar, nicht reparierbar, nicht noch einmal ausmustern oder verkaufen
+    for token in [&f.fahrer, &f.chef] {
+        let (s, v) = f
+            .post(token, &format!("/api/trucks/{alt}/checkout"), json!({}))
+            .await;
+        assert_eq!(s, StatusCode::CONFLICT, "{v}");
+        assert_eq!(
+            v["error"],
+            "Der Lkw ist ausgemustert und lässt sich nicht mehr ausleihen"
+        );
+    }
+    let (s, _) = f.repair(&f.chef, alt).await;
+    assert_eq!(s, StatusCode::CONFLICT);
+    let (s, _) = f.retire(&f.chef, alt).await;
+    assert_eq!(s, StatusCode::CONFLICT);
+    let (s, _) = f.sell(&f.chef, alt, 100).await;
+    assert_eq!(s, StatusCode::CONFLICT);
+
+    // Ein Herzschlag mit seinem Kennzeichen markiert niemanden als fremd gefahren
+    f.clock.set(t(31));
+    let (s, hb) = f.beat(&f.fahrer, json!({ "plate": "SPED 001" })).await;
+    assert_eq!(s, StatusCode::OK, "{hb}");
+    assert_eq!(hb["leased_truck_id"], Value::Null);
+    let m = f.member_as(&f.chef, f.fahrer_id).await;
+    assert!(m.get("foreign_truck").is_none(), "{m}");
+    assert_eq!(f.truck_as(&f.chef, alt).await["foreign_drivers"], json!([]));
+
+    // Ein neuer Lkw darf das Kennzeichen bekommen. Der alte behält es bei den früheren.
+    let neu = f.truck("SPED 001", 5000, json!({})).await;
+    let t1 = f.truck_as(&f.chef, alt).await;
+    let freed = format!("SPED 001 (Lkw {alt})");
+    assert_eq!(t1["plate"], freed);
+    assert_eq!(t1["old_plates"], json!(["SPED 001"]));
+    assert_eq!(f.truck_as(&f.chef, neu).await["plate"], "SPED 001");
+    // Der Herzschlag gehört jetzt zum neuen
+    f.checkout(&f.fahrer, neu).await;
+    let (_, hb) = f.beat(&f.fahrer, json!({ "plate": "SPED 001" })).await;
+    assert_eq!(n(&hb["leased_truck_id"]), neu);
+    // Die Geschichte bleibt: Werkstatt mit altem Kennzeichen, Kauf zeigt das aktuelle
+    assert_eq!(
+        f.entries("werkstatt").await[0]["note"],
+        "Werkstatt SPED 001, 5 %"
+    );
+    assert_eq!(f.entry(kauf).await["truck_plate"], freed);
+    // Ein aktiver Lkw gibt sein Kennzeichen weiter nicht her
+    let (s, v) = f
+        .post(
+            &f.chef,
+            &format!("/api/companies/{}/trucks", f.id),
+            json!({ "plate": "SPED 002", "model": "scania.s_2016" }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+}
+
+#[tokio::test]
+async fn rueckgabe_mit_kennzeichen_eines_ausgemusterten_lkw() {
+    let f = Firma::new().await;
+    let alt = f.truck("SPED 001", 1000, json!({})).await;
+    let neu = f.truck("SPED 002", 1000, json!({})).await;
+    f.retire(&f.chef, alt).await;
+    // Das Spiel gibt dem geliehenen Lkw das Kennzeichen des ausgemusterten
+    f.checkout(&f.fahrer, neu).await;
+    let (s, v) = f
+        .checkin(
+            &f.fahrer,
+            neu,
+            json!({ "odometer_km": 1100, "plate": "SPED 001" }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(f.truck_as(&f.chef, neu).await["plate"], "SPED 001");
+    assert_eq!(
+        f.truck_as(&f.chef, alt).await["plate"],
+        format!("SPED 001 (Lkw {alt})")
+    );
+}
+
+#[tokio::test]
+async fn lkw_verkaufen() {
+    let f = Firma::new().await;
+    full_cash(&f).await;
+    let a = f.truck("SPED 002", 1000, json!({})).await;
+    let b = f.truck("SPED 003", 1000, json!({})).await;
+
+    // Verliehen: 409
+    f.checkout(&f.fahrer, a).await;
+    let (s, v) = f.sell(&f.chef, a, 30_000).await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    assert_eq!(
+        v["error"],
+        "Der Lkw ist gerade an Fahrer verliehen. Erst zurückgeben, dann verkaufen"
+    );
+    f.checkin(&f.fahrer, a, json!({ "odometer_km": 1500 }))
+        .await;
+    let (s, _) = f.sell(&f.fahrer, a, 30_000).await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    let (s, _) = f.sell(&f.chef, a, -1).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    assert_eq!(f.balance().await, 100_000);
+
+    // Verkauf: Erlös in die Kasse
+    f.clock.set(t(20));
+    let (s, v) = f.sell(&f.chef, a, 30_000).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(n(&v["balance"]), 130_000);
+    assert_eq!(f.balance().await, 130_000);
+    let e = &f.entries("lkw_verkauf").await[0];
+    assert_eq!(
+        (&e["account"], n(&e["amount"]), &e["note"], &e["user"]),
+        (
+            &json!("firma"),
+            30_000,
+            &json!("Verkauf SPED 002"),
+            &json!("Chefin")
+        )
+    );
+    let t1 = f.truck_as(&f.fahrer, a).await;
+    assert_eq!(
+        t1["retired"],
+        json!({ "reason": "verkauft", "at": t(20), "sale_price": 30_000 })
+    );
+    let (s, v) = f
+        .post(&f.fahrer, &format!("/api/trucks/{a}/checkout"), json!({}))
+        .await;
+    assert_eq!(s, StatusCode::CONFLICT);
+    assert_eq!(
+        v["error"],
+        "Der Lkw ist verkauft und lässt sich nicht mehr ausleihen"
+    );
+    let (s, v) = f.sell(&f.chef, a, 1).await;
+    assert_eq!(s, StatusCode::CONFLICT);
+    assert_eq!(
+        v["error"],
+        "Der Lkw ist verkauft und steht nicht mehr im Fuhrpark"
+    );
+
+    // Für 0 Euro: verkauft, aber nichts gebucht
+    let (s, _) = f.sell(&f.chef, b, 0).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(f.entries("lkw_verkauf").await.len(), 1);
+    assert_eq!(f.balance().await, 130_000);
+    assert_eq!(
+        f.truck_as(&f.chef, b).await["retired"]["sale_price"],
+        json!(0)
+    );
+}

@@ -177,6 +177,35 @@ CREATE TABLE IF NOT EXISTS presence (
     own_lease   INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (company_id, user_id)
 );
+-- Anschaffungsbudget: Der Chef gibt einen Betrag aus der Kasse frei, der beim Geldabgleich
+-- zusätzlich in seinen Spielstand kommt. Das ist kein Journal und bucht nichts. Verbraucht ist,
+-- was danach als Betriebskosten des Chefs gebucht wird: Buchungen mit einer id über
+-- `ledger_from` (größte Buchung bei der Freigabe) und, wenn geschlossen, bis `ledger_to`.
+-- Spät gebuchte Betriebskosten und Korrekturen zählen nur, wenn ihr Abgleich (`ledger.sync_id`)
+-- nach der Freigabe lag, also eine id über `sync_from` (größter Abgleich bei der Freigabe) hat.
+CREATE TABLE IF NOT EXISTS purchase_budgets (
+    id           INTEGER PRIMARY KEY,
+    company_id   INTEGER NOT NULL REFERENCES companies(id),
+    user_id      INTEGER NOT NULL REFERENCES users(id),
+    amount       INTEGER NOT NULL CHECK (amount > 0),
+    note         TEXT NOT NULL DEFAULT '',
+    created_at   INTEGER NOT NULL,
+    ledger_from  INTEGER NOT NULL,
+    sync_from    INTEGER NOT NULL DEFAULT 0,
+    closed_at    INTEGER,
+    closed_by    INTEGER REFERENCES users(id),
+    ledger_to    INTEGER
+);
+-- Höchstens ein offenes Budget je Firma
+CREATE UNIQUE INDEX IF NOT EXISTS one_open_budget ON purchase_budgets(company_id) WHERE closed_at IS NULL;
+-- Eine Betriebskosten-Buchung ist der Kauf dieses Lkw. Die Buchung selbst bleibt, wie sie ist,
+-- die Verknüpfung ändert nur die Anzeige im Kassenbuch.
+CREATE TABLE IF NOT EXISTS purchase_links (
+    ledger_id   INTEGER PRIMARY KEY REFERENCES ledger(id),
+    truck_id    INTEGER NOT NULL REFERENCES trucks(id),
+    linked_by   INTEGER NOT NULL REFERENCES users(id),
+    created_at  INTEGER NOT NULL
+);
 "#;
 
 /// Spalten, die nach der ersten Fassung dazukamen. `CREATE TABLE IF NOT EXISTS` legt sie in einer
@@ -219,6 +248,9 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("ledger", "cargo", "TEXT"),
     ("ledger", "source_city", "TEXT"),
     ("ledger", "target_city", "TEXT"),
+    // Bei Buchungen aus einem spät gemeldeten Ereignis (`betriebskosten` und
+    // `betriebskosten_korrektur`): der Abgleich, dessen Fenster neu gerechnet wurde. Sonst leer.
+    ("ledger", "sync_id", "INTEGER"),
     // Abgleich: Zeitpunkt des gelesenen Spielstands. Der Kontostand darin enthält die
     // Ereignisse bis hier.
     ("sync_points", "cutoff", "INTEGER"),
@@ -251,6 +283,11 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     // Schaden in Prozent beim Ausleihen. Leer bei Leihen von vor der Werkstatt, dann gilt der
     // gespeicherte Zustand, der sich während einer Leihe nicht ändert.
     ("leases", "damage_out", "REAL"),
+    // Ausgemustert oder verkauft: wann, warum ('ausgemustert' oder 'verkauft') und beim Verkauf
+    // der Erlös. Solche Lkw lassen sich nicht mehr ausleihen, bleiben aber in der Geschichte.
+    ("trucks", "retired_at", "INTEGER"),
+    ("trucks", "retired_reason", "TEXT"),
+    ("trucks", "sale_price", "INTEGER"),
 ];
 
 /// Fünf Lohnstufen von 40 bis 80 Cent je Kilometer: (Level im Spiel, Firmenkilometer, Cent je km).

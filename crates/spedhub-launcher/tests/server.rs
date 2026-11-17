@@ -839,3 +839,165 @@ fn schaden_als_text() {
     t.damage_unfixable = 3.0;
     assert_eq!(t.damage_text(), "12,5 %, dauerhaft 3 %");
 }
+
+#[test]
+fn uebernommenen_lkw_als_kauf_verknuepfen() {
+    let dir = temp_dir("kauf");
+    let s = setup(&dir);
+    let url = s.server.url();
+    let docs = documents("kauf-docs");
+    let company = s.company;
+
+    // Kasse füllen, dann Anschaffungsbudget freigeben
+    post_raw(
+        &format!("{url}/api/companies/{company}/events"),
+        s.fahrer.token().unwrap(),
+        json!({ "event_id": "job-1", "type": "job_delivered", "amount": 100000 }),
+    );
+    let first = s.chef.sync(company, 2000, None, None).unwrap();
+    assert_eq!((first.budget, first.write_money), (0, 2000));
+    s.chef.sync_written(company, first.sync_id, None).unwrap();
+    post_raw(
+        &format!("{url}/api/companies/{company}/budgets"),
+        &s.chef_token,
+        json!({ "amount": 60000, "note": "Neuer Scania" }),
+    );
+
+    // Der Abgleich schreibt Lohnkonto plus Vorschuss plus Budget
+    let r = s.chef.sync(company, 2000, None, None).unwrap();
+    assert_eq!((r.budget, r.write_money), (60000, 62000));
+    assert!(
+        describe(&r).contains(
+            "Neuer Kontostand im Spiel: 62000 € (Lohnkonto 0 € plus Vorschuss 2000 € plus Anschaffungsbudget 60000 €)"
+        ),
+        "{}",
+        describe(&r)
+    );
+    s.chef.sync_written(company, r.sync_id, None).unwrap();
+
+    // Im Spiel für 45000 € gekauft: genau einmal Betriebskosten, der Rest sinkt
+    let r = s.chef.sync(company, 62000 - 45000, None, None).unwrap();
+    assert_eq!(r.booked.len(), 1);
+    assert_eq!(
+        (r.booked[0].kind.as_str(), r.booked[0].amount),
+        ("betriebskosten", -45000)
+    );
+    assert_eq!((r.budget, r.write_money), (15000, 17000));
+    s.chef.sync_written(company, r.sync_id, None).unwrap();
+
+    // Lkw übernehmen, dann den Kauf verknüpfen, wie es der Launcher nach "Lkw übernehmen" anbietet
+    let quelle = docs.nordfracht.join("save").join("1").join("game.sii");
+    let truck_id = s
+        .chef
+        .add_truck(company, &new_truck_from_save(&quelle, "SPED 001").unwrap())
+        .unwrap();
+    let candidates = s.chef.purchase_candidates(company).unwrap();
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].amount, -45000);
+    let now = unix(SystemTime::now());
+    assert!(
+        candidates[0]
+            .label(now)
+            .starts_with("45000 Euro, gerade eben (Abgleich: erwartet 62000 €"),
+        "{}",
+        candidates[0].label(now)
+    );
+    let e = s.fahrer.purchase_candidates(company).unwrap_err();
+    assert_eq!(e.to_string(), "Server: Das darf nur der Chef");
+
+    let linked = s
+        .chef
+        .link_purchase(company, candidates[0].id, truck_id)
+        .unwrap();
+    assert_eq!(
+        (
+            linked.ledger_id,
+            linked.truck_id,
+            linked.truck_plate.as_str()
+        ),
+        (candidates[0].id, truck_id, "SPED 001")
+    );
+    let e = s
+        .chef
+        .link_purchase(company, candidates[0].id, truck_id)
+        .unwrap_err();
+    assert_eq!(
+        e.to_string(),
+        "Server: Die Buchung ist schon als Kauf von SPED 001 verknüpft"
+    );
+    assert!(s.chef.purchase_candidates(company).unwrap().is_empty());
+    let ledger = get_raw(
+        &format!("{url}/api/companies/{company}/ledger"),
+        &s.chef_token,
+    );
+    let entry = ledger["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["id"] == candidates[0].id)
+        .unwrap();
+    assert_eq!(entry["truck_plate"], "SPED 001");
+    assert_eq!(entry["amount"], -45000);
+
+    // Ausgemustert: steht weiter in der Liste, lässt sich aber nicht mehr ausleihen
+    post_raw(
+        &format!("{url}/api/trucks/{truck_id}/retire"),
+        &s.chef_token,
+        json!({}),
+    );
+    let t = s.fahrer.trucks(company).unwrap().remove(0);
+    let retired = t.retired.clone().unwrap();
+    assert_eq!(
+        (retired.reason.as_str(), retired.text()),
+        ("ausgemustert", "ausgemustert".into())
+    );
+    let e = s.fahrer.checkout(truck_id).unwrap_err();
+    assert_eq!(
+        e.to_string(),
+        "Server: Der Lkw ist ausgemustert und lässt sich nicht mehr ausleihen"
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn kauf_und_abgang_als_text() {
+    use spedhub_launcher::client::{PurchaseCandidate, Retired, Truck, age_text};
+    assert_eq!(age_text(-5), "gerade eben");
+    assert_eq!(age_text(59), "gerade eben");
+    assert_eq!(age_text(60), "vor 1 Minute");
+    assert_eq!(age_text(5 * 60 + 10), "vor 5 Minuten");
+    assert_eq!(age_text(3600), "vor 1 Stunde");
+    assert_eq!(age_text(3 * 3600), "vor 3 Stunden");
+    assert_eq!(age_text(86_400), "vor 1 Tag");
+    assert_eq!(age_text(4 * 86_400), "vor 4 Tagen");
+    let c = PurchaseCandidate {
+        id: 1,
+        created_at: 1000,
+        amount: -45000,
+        note: String::new(),
+    };
+    assert_eq!(c.label(1000 + 7200), "45000 Euro, vor 2 Stunden");
+
+    let sold = |p: Option<i64>| Retired {
+        reason: "verkauft".into(),
+        at: 0,
+        sale_price: p,
+    };
+    assert_eq!(sold(Some(30000)).text(), "verkauft für 30000 Euro");
+    assert_eq!(sold(Some(0)).text(), "verkauft");
+    assert_eq!(sold(None).text(), "verkauft");
+
+    // Ältere Server ohne Abgang und ohne Budget
+    let t: Truck = serde_json::from_value(json!({
+        "id": 1, "plate": "SPED 001", "model": "scania.s_2016", "odometer_km": 1000, "rev": 1,
+        "leased_by": null
+    }))
+    .unwrap();
+    assert_eq!(t.retired, None);
+    let t: Truck = serde_json::from_value(json!({
+        "id": 1, "plate": "SPED 001", "model": "scania.s_2016", "odometer_km": 1000, "rev": 1,
+        "leased_by": null, "retired": { "reason": "verkauft", "at": 5, "sale_price": 100 }
+    }))
+    .unwrap();
+    assert_eq!(t.retired.unwrap().text(), "verkauft für 100 Euro");
+}

@@ -26,7 +26,7 @@ Im Spiel bestätigt ist, dass ETS2 einen eingesetzten Lkw lädt (siehe `docs/sav
 5. **In Spielstand schreiben:** dasselbe noch einmal, zum Beispiel wenn beim Ausleihen das Spiel lief. Liegt der Bauplan nicht auf diesem Rechner, holt der Launcher ihn vom Server.
 6. **Geld abgleichen:** Liest Kontostand und Erfahrungspunkte aus dem neuesten Spielstand, meldet sie dem Server und legt einen neuen Speicherplatz `SpedHub: Geldabgleich` mit dem Kontostand an, den der Server nennt: dein Lohnkonto plus den Betriebsvorschuss der Firma.
 7. **Zurückgeben:** Der Launcher liest Kilometerstand und Zustand des Lkw aus dem neuesten Spielstand und meldet sie dem Server. Er sucht den Lkw zuerst über das Kennzeichen. Das Spiel kann das Kennzeichen aber ersetzen. Findet er es nicht, erkennt er den Lkw über Modell, Teile und Kilometerstand wieder und meldet das neue Kennzeichen mit. Dafür braucht er den Bauplan, aus `leases\` oder vom Server. Passen zwei Lkw gleich gut, sagt er das und rät nicht. Erst wenn beides nichts findet, gibst du den Kilometerstand von Hand ein.
-8. **Lkw in den Fuhrpark übernehmen** (nur Chef): Spielstand wählen, Lkw wählen, übernehmen. Der Lkw kommt mit Bauplan, Kilometerstand und Zustand auf den Server.
+8. **Lkw in den Fuhrpark übernehmen** (nur Chef): Spielstand wählen, Lkw wählen, übernehmen. Der Lkw kommt mit Bauplan, Kilometerstand und Zustand auf den Server. Danach bietet der Launcher an, den Kauf zu verknüpfen (siehe unten).
 9. **Spiel starten:** öffnet `steam://rungameid/227300`.
 
 Läuft das Spiel, schreibt der Launcher nichts in den Spielstand und sagt das auch.
@@ -34,6 +34,14 @@ Läuft das Spiel, schreibt der Launcher nichts in den Spielstand und sagt das au
 Über dem Fuhrpark zeigt der Launcher dein Lohnkonto, offenen Lohn, Level, Firmenkilometer und Lohnstufe. Im Fuhrpark steht bei einem verliehenen Lkw "fährt gerade" mit der Geschwindigkeit, wenn das Plugin des Ausleihers gerade Herzschläge mit genau diesem Lkw schickt.
 
 Die Spalte "Schaden" zeigt den Schaden jedes Lkw in Prozent, so wie der Server ihn aus dem Zustand der letzten Rückgabe rechnet, dazu den dauerhaften Verschleiß, etwa `12,5 %, dauerhaft 3 %`. Liegt ein Lkw nach der Rückgabe über der Schadensgrenze der Firma, steht er "in der Werkstatt" und "Ausleihen" ist ausgegraut, bis der Chef ihn im Dashboard reparieren lässt. Nach der Rückgabe sagt der Launcher, wie viel Schaden der Lkw hat, ob er in die Werkstatt muss und was du an Haftung für neuen Schaden aus dem Lohnkonto zahlst, wenn die Firma eine Haftung eingestellt hat. Details in `server/README.md`, Abschnitt "Schaden und Werkstatt".
+
+## Lkw-Kauf verknüpfen
+
+Hat der Chef den Lkw im Spiel gekauft, hat der Geldabgleich den Kaufpreis als Betriebskosten aus der Firmenkasse gebucht. Das Geld dafür bekommt er vorher über ein Anschaffungsbudget, das er im Büro des Dashboards freigibt: Beim nächsten Geldabgleich schreibt der Launcher dann Lohnkonto plus Vorschuss plus den Rest des Budgets in den Spielstand, und die Meldung nach dem Abgleich nennt das Budget.
+
+Nach "Lkw übernehmen" holt der Launcher die letzten Betriebskosten-Buchungen des Chefs, die noch mit keinem Lkw verknüpft sind (Betrag, wie lange her, Notiz des Abgleichs). Gibt es welche, erscheint über dem Fuhrpark "Kauf von <Kennzeichen> verknüpfen": Buchung wählen und "Als Lkw-Kauf verknüpfen", oder "Nicht verknüpfen". Die Buchung bleibt unverändert, im Kassenbuch steht danach "Lkw-Kauf <Kennzeichen>" statt "Betriebskosten". Später geht das auch im Kassenbuch des Dashboards.
+
+Verkaufte und ausgemusterte Lkw stehen eingeklappt unter "Ausgemustert und verkauft", ohne Knöpfe. Verkaufen und ausmustern geht im Dashboard. Details in `server/README.md`, Abschnitt "Anschaffungen".
 
 ## Einstellungen
 

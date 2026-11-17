@@ -133,7 +133,8 @@ pub fn window_sum(
 ///
 /// - `diff` des Abgleichs sinkt um `game_amount`
 /// - Betriebskosten: Ziel ist `max(0, -diff)`. Zu viel gebucht ergibt eine Gutschrift
-///   `betriebskosten_korrektur`, zu wenig eine neue Buchung `betriebskosten`.
+///   `betriebskosten_korrektur`, zu wenig eine neue Buchung `betriebskosten`. Beide tragen den
+///   Abgleich in `sync_id`, damit das Anschaffungsbudget sie dem richtigen Abgleich zuordnet.
 /// - Ungeklärt: Ziel ist `max(0, diff)`. Ein offener Eintrag bekommt den Rest, den der Chef
 ///   nicht schon mit einem geschlossenen Eintrag hingenommen hat. Bleibt nichts, wird er
 ///   geschlossen. Gibt es keinen offenen und bleibt etwas, kommt ein neuer dazu.
@@ -194,9 +195,10 @@ pub fn correct_late(
             "betriebskosten"
         };
         conn.execute(
-            "INSERT INTO ledger (company_id, account, user_id, kind, amount, note, created_at)
-             VALUES (?1, 'firma', ?2, ?3, ?4, ?5, ?6)",
-            params![company_id, user_id, kind, -delta, note, now],
+            "INSERT INTO ledger (company_id, account, user_id, kind, amount, note, created_at,
+                                 sync_id)
+             VALUES (?1, 'firma', ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![company_id, user_id, kind, -delta, note, now, sync_id],
         )?;
         booked.push(json!({ "account": "firma", "kind": kind, "amount": -delta }));
     }
