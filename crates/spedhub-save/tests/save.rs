@@ -4,9 +4,10 @@ mod common;
 use cbc::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
 use common::*;
 use flate2::{Compression, write::ZlibEncoder};
+use spedhub_save::sii::{LineEnding, TextStyle};
 use spedhub_save::{
     Error, Format, InsertOptions, Problem, Save, check, export_truck, insert_truck, money,
-    remove_truck, truck_state, write_save, write_saves,
+    remove_truck, set_money, truck_state, write_save, write_saves,
 };
 use std::{fs, io::Write, path::Path};
 
@@ -101,9 +102,9 @@ fn kaputter_text_meldet_die_zeile() {
     let ok = "SiiNunit\n{\nbank : _nameless.1 {\n money_account: 5\n}\n\n}";
     assert!(Save::parse(ok).is_ok());
     let cases = [
-        ("CRLF", ok.replace('\n', "\r\n"), 1),
+        ("CR ohne LF", ok.replace("account: 5\n", "account: 5\r"), 4),
         ("ohne Kopf", ok.replace("SiiNunit\n", ""), 1),
-        ("Zeilenumbruch am Ende", format!("{ok}\n"), 8),
+        ("zwei Zeilenumbrüche am Ende", format!("{ok}\n\n"), 9),
         ("ohne Leerzeile", ok.replace("}\n\n}", "}\n}"), 6),
         ("zwei Leerzeilen", ok.replace("}\n\n}", "}\n\n\n}"), 7),
         ("Feld ohne Einrückung", ok.replace(" money", "money"), 4),
@@ -134,6 +135,116 @@ fn kaputter_text_meldet_die_zeile() {
             other => panic!("{label}: erwartet Parse-Fehler, bekommen {other:?}"),
         }
     }
+}
+
+#[test]
+fn crlf_und_zeilenumbruch_am_ende_bleiben_erhalten() {
+    // info.sii, wie das Spiel sie schreibt: CRLF und ein Zeilenumbruch nach der letzten }
+    let raw = fs::read(testdata(INFO)).unwrap();
+    assert!(raw.ends_with(b"&3758cbf7\r\n}\r\n\r\n}\r\n"));
+    let (save, _) = Save::from_bytes(&raw).unwrap();
+    assert_eq!(
+        save.style(),
+        TextStyle {
+            line_ending: LineEnding::CrLf,
+            final_newline: true
+        }
+    );
+    assert_eq!(save.dump().as_bytes(), raw);
+
+    // Alle vier Kombinationen mit dem großen Ziel, auch nach einer Änderung
+    let lf = text(ZIEL);
+    for ending in [LineEnding::Lf, LineEnding::CrLf] {
+        for final_newline in [false, true] {
+            let nl = ending.as_str();
+            let mut input = lf.replace('\n', nl);
+            if final_newline {
+                input.push_str(nl);
+            }
+            let mut save = Save::parse(&input).unwrap();
+            assert_eq!(save.style().line_ending, ending);
+            assert_eq!(save.style().final_newline, final_newline);
+            assert_eq!(save.dump(), input);
+            assert_eq!(save, load(ZIEL), "dieselben Units");
+            set_money(&mut save, 1).unwrap();
+            assert_eq!(
+                save.dump(),
+                input.replace(" money_account: 2000", " money_account: 1")
+            );
+        }
+    }
+
+    // Leerer Spielstand mit CRLF
+    let empty = "SiiNunit\r\n{\r\n}\r\n";
+    assert_eq!(Save::parse(empty).unwrap().dump(), empty);
+}
+
+#[test]
+fn gemischte_zeilenenden_werden_vereinheitlicht() {
+    let lf = text(ZIEL);
+    let lines: Vec<&str> = lf.split('\n').collect();
+    let join = |minority: &str, majority: &str| {
+        let mut out = String::new();
+        for (i, line) in lines.iter().enumerate() {
+            out.push_str(line);
+            if i + 1 < lines.len() {
+                out.push_str(if i % 10 == 3 { minority } else { majority });
+            }
+        }
+        out
+    };
+    let mostly_crlf = join("\n", "\r\n");
+    let save = Save::parse(&mostly_crlf).unwrap();
+    assert_eq!(save.style().line_ending, LineEnding::CrLf);
+    assert_eq!(save.dump(), lf.replace('\n', "\r\n"));
+
+    let mostly_lf = join("\r\n", "\n");
+    let save = Save::parse(&mostly_lf).unwrap();
+    assert_eq!(save.style().line_ending, LineEnding::Lf);
+    assert_eq!(save.dump(), lf);
+}
+
+#[test]
+fn einrueckung_mit_tabs_und_mehreren_leerzeichen() {
+    let lf = text(ZIEL);
+    let variants = ["\t", "  ", "\t ", " ", "\t\t", "    "];
+    let mut n = 0;
+    let mixed: Vec<String> = lf
+        .split('\n')
+        .map(|line| match line.strip_prefix(' ') {
+            Some(rest) => {
+                n += 1;
+                format!("{}{rest}", variants[n % variants.len()])
+            }
+            None => line.to_string(),
+        })
+        .collect();
+    let mixed = mixed.join("\n");
+    let save = Save::parse(&mixed).unwrap();
+    assert_eq!(save.dump(), mixed, "jede Einrückung bleibt, wie sie war");
+    // Gleiche Units, Schlüssel und Werte wie das Original, nur die Einrückung ist anders
+    let orig = load(ZIEL);
+    let pairs = |u: &spedhub_save::Unit| -> Vec<(String, String)> {
+        u.fields
+            .iter()
+            .map(|f| (f.key.clone(), f.value.clone()))
+            .collect()
+    };
+    assert_eq!(orig.units().len(), save.units().len());
+    for (a, b) in orig.units().iter().zip(save.units()) {
+        assert_eq!(a.name, b.name);
+        assert_eq!(pairs(a), pairs(b));
+    }
+    assert_eq!(money(&save).unwrap(), 2000);
+    assert!(check(&save).is_ok());
+
+    // Nur Tabs: Neue Felder beim Einsetzen bekommen ebenfalls einen Tab
+    let tabs = lf.replace("\n ", "\n\t");
+    let mut save = Save::parse(&tabs).unwrap();
+    assert_eq!(save.indent(), "\t");
+    let package = export_truck(&load(QUELLE), None).unwrap();
+    insert_truck(&mut save, &package, &InsertOptions { keep_names: true }).unwrap();
+    assert_eq!(save.dump(), text(ERWARTET).replace("\n ", "\n\t"));
 }
 
 #[test]

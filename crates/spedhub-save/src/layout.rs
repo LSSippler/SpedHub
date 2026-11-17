@@ -120,10 +120,15 @@ pub mod money {
     pub const INFO_FIELD: &str = "info_money_account";
 }
 
-/// Neue Unit-Namen haben die Form `_nameless.2ff.<hhhh>.<llll>`. Gezählt wird ab
-/// `NAME_MIDDLE_START.0001`, vergebene Namen werden übersprungen. Der erste Name entspricht
-/// dem, den `tools/transplant.py` für das neue `profit_log` verwendet.
+/// Neue Unit-Namen sehen aus wie die des Spiels: `_nameless.2ff.<hhhh>.<llll>`, die hinteren
+/// Gruppen vierstellig mit führenden Nullen, die letzte Stelle immer `8`. In echten
+/// Spielständen ist das bei allen Namen so. Gezählt wird ab `_nameless.2ff.7a11.0008` in
+/// Schritten von 0x10, vergebene Namen werden übersprungen. Nach `.fff8` geht es mit der
+/// nächsten mittleren Gruppe weiter. Der erste Name ist derselbe, den `tools/transplant.py`
+/// für das neue `profit_log` verwendet.
 pub const NAME_PREFIX: &str = "_nameless.2ff.";
 pub const NAME_MIDDLE_START: u32 = 0x7a11;
+pub const NAME_LOW_START: u32 = 0x0008;
+pub const NAME_STEP: u32 = 0x10;
 
 pub const NULL: &str = "null";

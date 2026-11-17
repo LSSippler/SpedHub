@@ -359,8 +359,10 @@ fn insert_into(
         .cloned()
         .ok_or_else(|| Error::InvalidPackage("das Paket enthält keine Units".into()))?;
 
-    // 5. Units bauen, Zustand und Kennzeichen aus dem Paket übernehmen
-    let mut units = build_units(package, &names)?;
+    // 5. Units bauen, Zustand und Kennzeichen aus dem Paket übernehmen. Neue Felder bekommen
+    //    die übliche Einrückung des Ziels.
+    let indent = work.indent().to_string();
+    let mut units = build_units(package, &names, &indent)?;
     let vu = units
         .first_mut()
         .ok_or_else(|| Error::InvalidPackage("das Paket enthält keine Units".into()))?;
@@ -371,10 +373,7 @@ fn insert_into(
         name: profit_log_name.clone(),
         fields: profit_log::EMPTY
             .iter()
-            .map(|(k, val)| Field {
-                key: (*k).into(),
-                value: (*val).into(),
-            })
+            .map(|(k, val)| Field::with_indent(*k, *val, indent.as_str()))
             .collect(),
     });
     let pos = work
@@ -464,7 +463,7 @@ fn remove_quick_job(work: &mut Save, p: &Player, job: &str) -> Result<usize> {
     Ok(delete.len())
 }
 
-fn build_units(package: &TruckPackage, names: &[String]) -> Result<Vec<Unit>> {
+fn build_units(package: &TruckPackage, names: &[String], indent: &str) -> Result<Vec<Unit>> {
     package
         .units
         .iter()
@@ -480,10 +479,7 @@ fn build_units(package: &TruckPackage, names: &[String]) -> Result<Vec<Unit>> {
                         })?,
                         None => value.clone(),
                     };
-                    Ok(Field {
-                        key: key.clone(),
-                        value,
-                    })
+                    Ok(Field::with_indent(key.clone(), value, indent))
                 })
                 .collect::<Result<_>>()?;
             Ok(Unit {
@@ -880,7 +876,7 @@ impl<'a> NameGenerator<'a> {
         NameGenerator {
             save,
             taken: HashSet::new(),
-            next: 1,
+            next: 0,
         }
     }
 
@@ -903,11 +899,13 @@ impl<'a> NameGenerator<'a> {
             self.next = n
                 .checked_add(1)
                 .ok_or_else(|| Error::Structure("keine freien Unit-Namen mehr".into()))?;
-            let middle = layout::NAME_MIDDLE_START + (n >> 16);
+            let per_middle = (0x1_0000 - layout::NAME_LOW_START).div_ceil(layout::NAME_STEP);
+            let middle = layout::NAME_MIDDLE_START + n / per_middle;
+            let low = layout::NAME_LOW_START + (n % per_middle) * layout::NAME_STEP;
             if middle > 0xffff {
                 return Err(Error::Structure("keine freien Unit-Namen mehr".into()));
             }
-            let name = format!("{}{middle:04x}.{:04x}", layout::NAME_PREFIX, n & 0xffff);
+            let name = format!("{}{middle:04x}.{low:04x}", layout::NAME_PREFIX);
             if !self.save.contains(&name) && self.taken.insert(name.clone()) {
                 return Ok(name);
             }

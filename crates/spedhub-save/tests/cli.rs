@@ -106,10 +106,11 @@ fn alle_befehle() {
             .unwrap()
             .contains(" money_account: 7500\n")
     );
+    // info.sii hat CRLF wie beim Spiel, das bleibt so
     assert!(
         fs::read_to_string(&info)
             .unwrap()
-            .contains(" info_money_account: 7500\n")
+            .contains(" info_money_account: 7500\r\n")
     );
     let backups = fs::read_dir(&dir)
         .unwrap()

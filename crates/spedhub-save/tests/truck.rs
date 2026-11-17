@@ -2,6 +2,8 @@
 mod common;
 
 use common::*;
+use std::collections::HashSet;
+
 use spedhub_save::{
     Error, InsertOptions, Save, TruckPackage, check, custom_plate, export_truck, insert_truck,
     license_plate, list_trucks, plate_country, plate_text, remove_truck, set_license_plate,
@@ -112,7 +114,7 @@ fn einsetzen_mit_quellnamen_ist_byte_genau_wie_transplant_py() {
     assert!(report.removed_quick_job);
     assert_eq!(report.removed_units, 52);
     assert_eq!(report.vehicle, SPED_001);
-    assert_eq!(report.profit_log, "_nameless.2ff.7a11.0001");
+    assert_eq!(report.profit_log, "_nameless.2ff.7a11.0008");
     assert_eq!(ziel.dump(), text(ERWARTET));
 }
 
@@ -135,6 +137,74 @@ fn einsetzen_mit_neuen_namen_entspricht_inhaltlich_der_referenz() {
 }
 
 // ------------------------------------------------------------------- Einsetzen, weitere Fälle
+
+/// Hat der Name die Form des Spiels? `_nameless.XXX.XXXX.XXXX`, Kleinbuchstaben, Ende auf 8.
+fn looks_like_game_name(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("_nameless.") else {
+        return false;
+    };
+    let groups: Vec<&str> = rest.split('.').collect();
+    groups.iter().map(|g| g.len()).collect::<Vec<_>>() == [3, 4, 4]
+        && groups.iter().all(|g| {
+            g.bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        })
+        && name.ends_with('8')
+}
+
+#[test]
+fn neue_namen_enden_auf_8_und_kollidieren_nicht() {
+    let mut save = load(QUELLE);
+    save.set_array(
+        "garage.munchen",
+        "vehicles",
+        &strings(&[SPED_001, "null", "null"]),
+    )
+    .unwrap();
+    save.set_array(
+        "garage.munchen",
+        "drivers",
+        &strings(&["driver.1", "null", "null"]),
+    )
+    .unwrap();
+    let names =
+        |s: &Save| -> HashSet<String> { s.units().iter().map(|u| u.name.clone()).collect() };
+    let before = names(&save);
+
+    let mut p = package();
+    p.license_plate = custom_plate("SPED 002", "germany").unwrap();
+    let first = insert_truck(&mut save, &p, &InsertOptions::default()).unwrap();
+    let after_first = names(&save);
+    p.license_plate = custom_plate("SPED 003", "germany").unwrap();
+    let second = insert_truck(&mut save, &p, &InsertOptions::default()).unwrap();
+    let after_second = names(&save);
+
+    // Jedes Mal 77 neue Units (Lkw mit Zubehör und profit_log), nichts überschrieben
+    let new_first: HashSet<_> = after_first.difference(&before).cloned().collect();
+    let new_second: HashSet<_> = after_second.difference(&after_first).cloned().collect();
+    assert_eq!(new_first.len(), 77);
+    assert_eq!(new_second.len(), 77);
+    assert_eq!(after_second.len(), before.len() + 154);
+    for n in new_first.iter().chain(&new_second) {
+        assert!(looks_like_game_name(n), "{n}");
+    }
+
+    // Gezählt wird ab .0008 in Schritten von 0x10. Der zweite Lauf überspringt die Namen des
+    // ersten und macht beim 78. Namen weiter: 8 + 77 * 0x10 = 0x4d8.
+    assert_eq!(first.vehicle, "_nameless.2ff.7a11.0008");
+    assert_eq!(second.vehicle, "_nameless.2ff.7a11.04d8");
+
+    // Der zweite Lkw verdrängt den ersten auf den nächsten freien Platz
+    assert_eq!(
+        save.array("garage.munchen", "vehicles").unwrap(),
+        vec![
+            second.vehicle.clone(),
+            SPED_001.into(),
+            first.vehicle.clone()
+        ]
+    );
+    assert!(check(&save).is_ok());
+}
 
 #[test]
 fn einsetzen_neben_eigene_lkw_mit_freiem_platz() {

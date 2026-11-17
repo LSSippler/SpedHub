@@ -310,7 +310,7 @@ player : _nameless.20e.3150.57d8 {
  trucks: 1
  trucks[0]: _nameless.206.398b.b508
  truck_profit_logs: 1
- truck_profit_logs[0]: _nameless.2ff.7a11.0001
+ truck_profit_logs[0]: _nameless.2ff.7a11.0008
  drivers: 1
  drivers[0]: driver.0
  driver_flags: 1
@@ -1063,7 +1063,7 @@ vehicle_accessory : _nameless.206.3989.7e08 {
  refund: 0
 }
 
-profit_log : _nameless.2ff.7a11.0001 {
+profit_log : _nameless.2ff.7a11.0008 {
  stats_data: 0
  acc_distance_free: 0
  acc_distance_on_job: 0

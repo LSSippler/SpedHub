@@ -19,10 +19,16 @@ fn kontostand_lesen_und_in_beiden_dateien_setzen() {
         game.dump(),
         text(ZIEL).replace(" money_account: 2000\n", " money_account: 12345\n")
     );
+    // info.sii hat CRLF und einen Zeilenumbruch am Ende wie beim Spiel. Das bleibt so.
+    assert!(text(INFO).contains("\r\n"));
     assert_eq!(
         info.dump(),
-        text(INFO).replace("info_money_account: 2000", "info_money_account: 12345")
+        text(INFO).replace(
+            "info_money_account: 2000\r\n",
+            "info_money_account: 12345\r\n"
+        )
     );
+    assert!(info.dump().ends_with("}\r\n\r\n}\r\n"));
 
     let dir = temp_dir("geld");
     let (g, i) = (dir.join("game.sii"), dir.join("info.sii"));

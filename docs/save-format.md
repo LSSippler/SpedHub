@@ -24,9 +24,11 @@ Slots heißen `autosave`, `autosave_job`, `autosave_drive_1` bis `_9`, `quicksav
 
 Das Spiel schreibt im Standard `ScsC`. Mit `uset g_save_format "2"` in der `config.cfg` schreibt es Klartext. Zum Lesen ist das nicht nötig: `decrypt_truck` 1.3.6 wandelt alle Formate in Text um (siehe `spedhub-save decode`). Laut Community-Quellen lädt das Spiel Klartext unabhängig von der Einstellung. Selbst geprüft ist das noch nicht.
 
-Den Text aus `BSII` setzt `decrypt_truck` genauso zusammen wie das Spiel seinen Klartext (Einrückung ein Leerzeichen, Leerzeile nach jeder Unit, `}` ohne Zeilenumbruch am Ende). Bei kaputten `BSII`-Daten gerät `decrypt_truck` manchmal in Panik statt einen Fehler zu melden. `spedhub-save` fängt das ab und meldet einen Lesefehler.
+Ein echtes `game.sii` aus 1.62 ist `ScsC` mit `BSII` darin, ein echtes `info.sii` ist Klartext. Bei kaputten `BSII`-Daten gerät `decrypt_truck` manchmal in Panik statt einen Fehler zu melden. `spedhub-save` fängt das ab und meldet einen Lesefehler.
 
 ## Aufbau des Textformats
+
+Wichtig vorweg: Das Layout unten stammt vom Serializer in `decrypt_truck`, also von dem Text, den die Bibliothek aus `BSII` macht. Es ist nicht das, was das Spiel schreibt. Wie das Spiel selbst ein `game.sii` als Text schreibt (`g_save_format 2`), ist noch nicht bekannt.
 
 ```
 SiiNunit
@@ -45,26 +47,37 @@ bank : _nameless.20e.3442.4168 {
 }
 ```
 
+So sieht der Text aus `decrypt_truck` aus, und so sind `quelle_mit_lkw.sii`, `ziel_schnellauftrag.sii` und `erwartet_nach_einsetzen.sii` aufgebaut:
+
 - Die Datei beginnt mit `SiiNunit`, dann `{`.
-- Jede Unit ist `typ : name {`, dann Felder mit einem Leerzeichen eingerückt, dann `}` und eine Leerzeile.
-- Die Datei endet mit `}` ohne Zeilenumbruch danach. Zeilenenden sind LF.
-- Listen stehen als Zählzeile `feld: N` und danach `feld[0]` bis `feld[N-1]`.
+- Jede Unit ist `typ : name {`, dann Felder, dann `}` und eine Leerzeile. Vor der ersten Unit steht keine Leerzeile.
+- Feldzeilen sind ` name: wert`, mit einem Leerzeichen davor und einem nach dem Doppelpunkt. Ein Feldname enthält nie `: `, ein Wert kann `:` enthalten (`text: "D:UDO"`).
+- Zeilenenden sind LF, nach der letzten `}` kommt kein Zeilenumbruch.
+- Listen stehen als Zählzeile `feld: N` und danach `feld[0]` bis `feld[N-1]`. In allen Testdateien steht die Zählzeile direkt vor den Einträgen, und die Einträge laufen lückenlos.
 - Unit-Namen sind entweder `_nameless.` plus Hex-Gruppen oder sprechend wie `garage.erfurt`, `driver.0`, `company.volatile.x.y`.
 - Ein Feld ist ein Verweis, wenn sein ganzer Wert dem Namen einer Unit in der Datei entspricht. Ein eigenes Kennzeichen für Verweise gibt es nicht.
 - Kommazahlen stehen oft als Hex mit `&` davor, zum Beispiel `&3dd0332a`. Das sind die Bits eines 32-Bit-Floats. Ganze Werte stehen dezimal da (`0`, `1`), alle anderen als Hex, auch genau darstellbare wie `rheostat_factor: &3f400000` (0,75).
-- Feldzeilen sind immer ` name: wert`, mit genau einem Leerzeichen davor und einem nach dem Doppelpunkt. Ein Feldname enthält nie `: `, ein Wert kann `:` enthalten (`text: "D:UDO"`).
-- Nach jeder Unit kommt genau eine Leerzeile, vor der ersten keine.
-- In allen Testdateien steht die Zählzeile einer Liste direkt vor den Einträgen, und die Einträge laufen lückenlos von 0 bis N-1.
 
-`spedhub-save` liest den Text streng nach diesen Regeln. Was es annimmt, gibt es byte-genau so wieder aus. Weicht eine Datei ab, gibt es einen Fehler mit Zeilennummer statt einer stillen Korrektur.
+Ein echtes `info.sii`, wie das Spiel es schreibt, hat denselben Aufbau, aber CRLF als Zeilenende und einen Zeilenumbruch nach der letzten `}`. Das Ende sieht so aus: letzte Feldzeile, CRLF, `}`, CRLF, leere Zeile mit CRLF, `}`, CRLF. So ist `testdata/ziel_info.sii` angelegt.
+
+### Wie spedhub-save den Text liest und schreibt
+
+Weil sich die Herkunft der Texte unterscheidet, ist der Parser an drei Stellen tolerant:
+
+- **Zeilenende:** LF und CRLF. Er merkt sich je Datei das Zeilenende und schreibt es genauso zurück. Gemischte Zeilenenden werden gelesen und beim Schreiben auf das häufigere vereinheitlicht, bei Gleichstand auf LF. Ein CR ohne LF dahinter ist ein Fehler.
+- **Dateiende:** mit oder ohne Zeilenumbruch nach der letzten `}`. Auch das bleibt beim Schreiben, wie es war.
+- **Einrückung:** ein oder mehrere Leerzeichen oder Tabs vor einem Feld. Jede Zeile behält ihre Einrückung. Neue Felder, zum Beispiel beim Einsetzen eines Lkw, bekommen die häufigste Einrückung der Datei.
+
+Alles andere liest er streng: Kopf, Unit-Köpfe, genau eine Leerzeile nach jeder Unit. Was er annimmt, gibt er byte-genau so wieder aus, außer bei gemischten Zeilenenden. Weicht eine Datei ab, gibt es einen Fehler mit Zeilennummer statt einer stillen Korrektur.
 
 Schreibt `spedhub-save` eine Kommazahl neu, nimmt es dezimal für ganze Werte und sonst Hex. Ein Wert, der sich nicht ändert, bleibt Zeichen für Zeichen stehen.
 
 ## Unit-Namen
 
-Alle `_nameless`-Namen in den Testdaten haben drei Hex-Gruppen mit 3, 4 und 4 Stellen, zum Beispiel `_nameless.20e.298c.1238`, und alle 383 enden auf `8`. Das sieht nach ausgerichteten Speicheradressen aus.
+In echten Spielständen aus 1.62 haben alle rund 15.000 `_nameless`-Namen die Form `_nameless.XXX.XXXX.XXXX`: drei Hex-Gruppen mit 3, 4 und 4 Stellen, die hinteren mit führenden Nullen, Kleinbuchstaben. Alle enden auf `8`. Das sieht nach ausgerichteten Speicheradressen aus. In den Testdaten ist es genauso.
 
-Neue Units bekommen von `spedhub-save` Namen der Form `_nameless.2ff.7a11.0001`, `.0002` und so weiter, freie Namen zuerst. Das ist dasselbe Schema wie in `tools/transplant.py`, damit beide Ergebnisse vergleichbar bleiben. Diese Namen enden nicht auf `8`. Ob das Spiel das stört, ist offen. Das Schema steht in `crates/spedhub-save/src/layout.rs` und ist dort schnell geändert.
+Neue Units bekommen von `spedhub-save` Namen derselben Form: ab `_nameless.2ff.7a11.0008` in Schritten von 0x10, also `.0008`, `.0018`, `.0028` und so weiter, immer auf `8` endend. Vergebene Namen werden übersprungen, nach `.fff8` geht es mit `_nameless.2ff.7a12.0008` weiter. `tools/transplant.py` nimmt für sein neues `profit_log` denselben ersten Namen, damit beide Ergebnisse byte-genau vergleichbar bleiben. Das Schema steht in `crates/spedhub-save/src/layout.rs`.
+
 ## Was immer gelten muss
 
 In allen untersuchten Originalen gilt:
@@ -189,6 +202,7 @@ Der Kontostand steht in `bank.money_account`, immer in Euro, als ganze Zahl. Der
 - Was mit `truck_profit_logs` passiert, wenn das Log leer ist: Der Lkw-Manager rechnet laut Community-Quellen Kilometer aus dem Log und nicht aus dem Tacho.
 - Wie ein Spielstand aussieht, in dem der Spieler gar keinen Lkw hat und auch keinen Auftrag fährt.
 - Einsetzen in ein Profil, das schon eigene Lkw hat, und Entfernen des aktiven Lkw mit Ersatz: so gebaut wie oben beschrieben, im Spiel nicht geprüft.
-- Ob das Spiel Unit-Namen annimmt, die nicht auf `8` enden.
+- Wie das Spiel ein `game.sii` als Klartext schreibt (`g_save_format 2`): Zeilenende, Einrückung, Dateiende.
+- Ob das Spiel die von `spedhub-save` vergebenen Unit-Namen annimmt. Sie haben jetzt die Form der echten Namen, geprüft ist es noch nicht.
 - Ob `owned_trucks[]` beim Entfernen eines Lkw angepasst werden muss.
 - Lkw mit Mod-Teilen.
