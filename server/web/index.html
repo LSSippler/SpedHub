@@ -110,6 +110,23 @@
   .buch .wann { color: var(--blass); white-space: nowrap; width: 5.25rem; }
   .eintraege { overflow: auto; min-height: 0; }
 
+  .buch tr.lauf td { font-weight: 600; }
+  .buch tr.lauf button { padding: 0; border: 0; background: none; color: var(--eu); font-weight: 600; text-align: left; white-space: normal; }
+  .buch tr.lauf button::before { content: "\25B8\00A0"; }
+  .buch tr.lauf button[aria-expanded="true"]::before { content: "\25BE\00A0"; }
+  .buch td.innen { padding: 0 .6rem .6rem 1.4rem; }
+  .buch td.innen table { font-size: .875rem; }
+  .buch td.innen th, .buch td.innen td { border-left: 0; width: auto; padding: .25rem .5rem .25rem 0; }
+  .ungeklaert { padding: .75rem 1rem; border-bottom: 1px solid var(--linie); background: #fff6e5; }
+  .ungeklaert h3 { color: var(--weg); }
+  .ungeklaert ul { list-style: none; margin: 0; padding: 0; }
+  .ungeklaert li { display: flex; flex-wrap: wrap; gap: .25rem .75rem; align-items: baseline; padding: .3rem 0; }
+  .ungeklaert li button { padding: .2rem .6rem; }
+  .stufen td { padding-right: .5rem; }
+  .stufen input { padding: .35rem .45rem; min-width: 4.5rem; }
+  .ganz { grid-column: 1 / -1; }
+  #fahrer th, #fahrer td { padding-right: .75rem; }
+  .buch td.innen .klein { font-weight: 400; }
   .code { font-size: 1.56rem; font-weight: 700; letter-spacing: .12em; }
   details > summary { cursor: pointer; font-weight: 600; font-stretch: 80%; font-size: 1.125rem; }
   details[open] > summary { margin-bottom: .75rem; }
@@ -157,7 +174,8 @@ const speicher = {
   set(k, v) { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} },
 };
 
-const zustand = { token: speicher.get("token"), ich: null, firmaId: null, firma: null, lkw: [], buch: null, rueckgabe: null };
+const zustand = { token: speicher.get("token"), ich: null, firmaId: null, firma: null, lkw: [], buch: null, rueckgabe: null,
+                  laeufe: [], ungeklaert: [], offen: new Set() };
 let takt = null;
 
 class ApiFehler extends Error { constructor(status, text) { super(text); this.status = status; } }
@@ -203,8 +221,8 @@ async function versuche(aktion, knopf) {
   }
 }
 
-const euro = (n) => new Intl.NumberFormat("de-DE").format(n) + " €";
-const km = (n) => new Intl.NumberFormat("de-DE").format(n) + " km";
+const euro = (n) => new Intl.NumberFormat("de-DE").format(n) + "\u00a0€";
+const km = (n) => new Intl.NumberFormat("de-DE").format(n) + "\u00a0km";
 const uhrzeit = (s) => new Date(s * 1000).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
 function wann(s) {
   const d = new Date(s * 1000);
@@ -215,8 +233,11 @@ function wann(s) {
 const modellName = (m) => m.split(/[._]/).filter(Boolean)
   .map((w) => (w.length <= 3 ? w.toUpperCase() : w[0].toUpperCase() + w.slice(1))).join(" ");
 
-const ARTEN = { lohn: "Lohn", auftrag: "Auftrag", strafe: "Strafe", maut: "Maut", faehre: "Fähre", zug: "Zug",
-                auftrag_abgebrochen: "Auftrag abgebrochen", ueberweisung: "Überweisung" };
+const ARTEN = { lohn: "Lohnanteil (altes Modell)", auftrag: "Auftrag", strafe: "Strafe", maut: "Maut", faehre: "Fähre", zug: "Zug",
+                auftrag_abgebrochen: "Auftrag abgebrochen", ueberweisung: "Überweisung", betriebskosten: "Betriebskosten" };
+/** "2026-11-16" wird zu "16.11.2026". */
+const tag = (d) => d.split("-").reverse().join(".");
+const cent = (n) => new Intl.NumberFormat("de-DE").format(n) + "\u00a0ct";
 
 function feld(beschriftung, eingabe, klasse) {
   if (!eingabe.id) eingabe.id = "f" + Math.random().toString(36).slice(2, 9);
@@ -293,7 +314,6 @@ async function zeigeFirmenwahl() {
     : h("p", {}, "Du bist noch in keiner Firma. Gründe eine, oder tritt mit einem Einladungscode bei.");
 
   const fname = h("input", { required: true, minlength: 3, maxlength: 48 });
-  const lohn = h("input", { type: "number", min: 0, max: 100, value: 30, required: true });
   const code = h("input", { required: true, autocapitalize: "characters" });
 
   $("app").replaceChildren(h("div", { class: "stapel" },
@@ -302,12 +322,11 @@ async function zeigeFirmenwahl() {
       h("section", { class: "blatt" },
         h("h3", {}, "Firma gründen"),
         formular(async () => {
-            const f = await api("POST", "/api/companies", { name: fname.value, wage_percent: Number(lohn.value) });
+            const f = await api("POST", "/api/companies", { name: fname.value });
             await oeffneFirma(f.id);
             melde("Firma gegründet. Den Einladungscode findest du im Büro.");
           },
           feld("Name der Firma", fname),
-          feld("Lohnanteil der Fahrer in Prozent", lohn),
           h("button", {}, "Firma gründen"))),
       h("section", { class: "blatt" },
         h("h3", {}, "Einer Firma beitreten"),
@@ -324,13 +343,16 @@ async function zeigeFirmenwahl() {
 
 async function ladeFirma() {
   const id = zustand.firmaId;
-  const [firma, lkw, buch] = await Promise.all([
+  const [firma, lkw, buch, laeufe] = await Promise.all([
     api("GET", "/api/companies/" + id),
     api("GET", "/api/companies/" + id + "/trucks"),
-    api("GET", "/api/companies/" + id + "/ledger?limit=100"),
+    api("GET", "/api/companies/" + id + "/ledger?limit=200"),
+    api("GET", "/api/companies/" + id + "/payrolls?limit=60"),
   ]);
+  const ungeklaert = firma.your_role === "chef" ? (await api("GET", "/api/companies/" + id + "/unexplained")).entries : [];
   if (id !== zustand.firmaId) return;
   zustand.firma = firma; zustand.lkw = lkw.trucks; zustand.buch = buch;
+  zustand.laeufe = laeufe.payrolls; zustand.ungeklaert = ungeklaert;
 }
 
 async function oeffneFirma(id) {
@@ -436,39 +458,107 @@ function baueRueckgabe(t) {
 // ---- Fahrer
 
 function zeichneFahrer() {
-  $("fahrer").replaceChildren(h("table", {},
-    h("thead", {}, h("tr", {}, h("th", {}, "Name"), h("th", {}, "Rolle"), h("th", { class: "zahl" }, "Lohnkonto"))),
-    h("tbody", {}, zustand.firma.members.map((m) => h("tr", {},
-      h("td", {}, m.name),
-      h("td", {}, m.role === "chef" ? "Chef" : "Fahrer"),
-      h("td", { class: "zahl" + (m.wallet < 0 ? " minus" : "") }, euro(m.wallet)))))));
+  const zahl = (inhalt, minus) => h("td", { class: "zahl" + (minus ? " minus" : "") }, inhalt);
+  $("fahrer").replaceChildren(
+    h("div", { style: "overflow-x: auto" }, h("table", {},
+      h("thead", {}, h("tr", {}, h("th", {}, "Name"), h("th", {}, "Rolle"), h("th", { class: "zahl" }, "Level"),
+        h("th", { class: "zahl" }, "Firmen-km"), h("th", {}, "Lohnstufe"), h("th", { class: "zahl" }, "Lohnkonto"),
+        h("th", { class: "zahl" }, "Offener Lohn"))),
+      h("tbody", {}, zustand.firma.members.map((m) => h("tr", {},
+        h("td", {}, m.name),
+        h("td", {}, m.role === "chef" ? "Chef" : "Fahrer"),
+        zahl(m.xp == null ? "?" : String(m.game_level)),
+        zahl(km(m.company_km)),
+        h("td", {}, m.stage == null ? "keine" : "Stufe " + m.stage + ", " + cent(m.cents_per_km) + " je km"),
+        zahl(euro(m.wallet), m.wallet < 0),
+        zahl(m.open_claim ? euro(m.open_claim) : "", m.open_claim > 0)))))),
+    h("p", { class: "klein blass" }, "Das Level kommt mit dem Geldabgleich aus dem Spielstand. Ein Fragezeichen heißt: noch kein Abgleich."));
 }
 
 // ---- Kassenbuch
 
+/** Eine Lohnabrechnung als Zeile, aufklappbar mit den Fahrern. */
+function laufZeilen(l) {
+  const auf = zustand.offen.has(l.id);
+  const knopf = h("button", { type: "button", "aria-expanded": auf ? "true" : "false", onclick: () => {
+    if (zustand.offen.has(l.id)) zustand.offen.delete(l.id); else zustand.offen.add(l.id);
+    zeichneBuch();
+  } }, (l.kind === "hand" ? "Lohnabrechnung von Hand " : "Lohnabrechnung ") + tag(l.day));
+  const offen = l.lines.reduce((s, x) => s + x.claim_after, 0);
+  const zeilen = [h("tr", { class: "lauf" },
+    h("td", { class: "wann" }, wann(l.created_at)),
+    h("td", {}, knopf, offen > 0 ? h("div", { class: "klein minus" }, "offen geblieben: " + euro(offen)) : null),
+    h("td", { class: "zahl" }, l.paid ? h("span", { class: "minus" }, euro(-l.paid)) : ""),
+    h("td", { class: "zahl" }, l.paid ? "+" + euro(l.paid) : ""))];
+  if (auf) {
+    zeilen.push(h("tr", {}, h("td", { colspan: 4, class: "innen" }, h("table", {},
+      h("thead", {}, h("tr", {}, h("th", {}, "Fahrer"), h("th", { class: "zahl" }, "Lohn"),
+        h("th", { class: "zahl" }, "Gezahlt"), h("th", { class: "zahl" }, "Offen"))),
+      h("tbody", {}, l.lines.map((x) => h("tr", {},
+        h("td", {}, x.name, h("div", { class: "klein blass" },
+          km(x.km) + ", " + (x.stage == null ? "keine Stufe" : "Stufe " + x.stage + " mit " + cent(x.cents_per_km))
+          + (x.flat_days ? ", Pauschale " + euro(x.flat) : "")
+          + (x.claim_before ? ", dazu alter Lohn " + euro(x.claim_before) : ""))),
+        h("td", { class: "zahl" }, euro(x.wage)),
+        h("td", { class: "zahl" }, euro(x.paid)),
+        h("td", { class: "zahl" + (x.claim_after > 0 ? " minus" : "") }, x.claim_after ? euro(x.claim_after) : ""))))))));
+  }
+  return zeilen;
+}
+
+function baueUngeklaert() {
+  const liste = zustand.ungeklaert;
+  if (!liste.length) return null;
+  return h("div", { class: "ungeklaert" },
+    h("h3", {}, "Ungeklärt"),
+    h("p", { class: "klein" }, "Beim Geldabgleich war mehr Geld im Spiel, als die gemeldeten Ereignisse erklären. Gutgeschrieben wurde nichts."),
+    h("ul", {}, liste.map((u) => h("li", {},
+      h("strong", {}, euro(u.amount)),
+      h("span", {}, u.user + ", " + wann(u.created_at)),
+      h("span", { class: "klein blass" }, "erwartet " + euro(u.expected) + ", im Spiel " + euro(u.ingame_money)),
+      h("button", { class: "leise", onclick: (e) => versuche(async () => {
+        await api("POST", "/api/companies/" + zustand.firmaId + "/unexplained/" + u.id + "/close", {});
+        await auffrischen();
+        melde("Eintrag geschlossen.");
+      }, e.target) }, "Schließen")))));
+}
+
 function zeichneBuch() {
   const ich = zustand.firma.members.find((m) => m.user_id === zustand.ich.user_id);
-  const eintraege = zustand.buch.entries;
-  const zeilen = eintraege.map((e) => {
+  // Buchungen einer Lohnabrechnung stehen nicht einzeln da, sondern als eine Zeile je Abrechnung.
+  const posten = zustand.buch.entries.filter((e) => e.payroll_id == null)
+    .map((e) => ({ t: e.created_at, id: e.id, e }))
+    .concat(zustand.laeufe.filter((l) => l.lines.length).map((l) => ({ t: l.created_at, id: Infinity, l })))
+    .sort((a, b) => b.t - a.t || b.id - a.id);
+  const zeilen = posten.flatMap(({ e, l }) => {
+    if (l) return laufZeilen(l);
     const betrag = h("span", { class: e.amount < 0 ? "minus" : "" }, (e.amount > 0 ? "+" : "") + euro(e.amount));
-    const text = [ARTEN[e.kind] || e.kind, e.user ? ", " + e.user : "", e.note ? " (" + e.note + ")" : ""].join("");
-    return h("tr", {},
+    const zusatz = [];
+    if (e.distance_km != null) zusatz.push(km(e.distance_km));
+    if (e.game_amount != null && e.game_amount !== e.amount && e.kind === "auftrag") zusatz.push("im Spiel " + euro(e.game_amount));
+    if (e.note) zusatz.push(e.note);
+    const text = [ARTEN[e.kind] || e.kind, e.user ? ", " + e.user : "", zusatz.length ? " (" + zusatz.join(", ") + ")" : ""].join("");
+    return [h("tr", {},
       h("td", { class: "wann" }, wann(e.created_at)),
       h("td", {}, text),
       h("td", { class: "zahl" }, e.account === "firma" ? betrag : ""),
-      h("td", { class: "zahl" }, e.account === "fahrer" ? betrag : ""));
+      h("td", { class: "zahl" }, e.account === "fahrer" ? betrag : ""))];
   });
-  $("buch").replaceChildren(
+  $("buch").replaceChildren(...[
     h("header", {},
       h("h2", {}, "Kassenbuch"),
       h("div", { class: "bestand" + (zustand.firma.balance < 0 ? " minus" : "") }, euro(zustand.firma.balance)),
       h("div", {}, "in der Firmenkasse"),
-      ich ? h("div", { class: "klein blass" }, "Dein Lohnkonto: " + euro(ich.wallet) + ", Lohnanteil " + zustand.firma.wage_percent + " %") : null),
-    eintraege.length
+      ich ? h("div", { class: "klein blass" }, "Dein Lohnkonto: " + euro(ich.wallet)
+        + (ich.open_claim ? ", offener Lohn " + euro(ich.open_claim) : "")
+        + ". Abrechnung täglich um " + zustand.firma.payroll_time + " Uhr") : null),
+    baueUngeklaert(),
+    zeilen.length
       ? h("div", { class: "eintraege" }, h("table", {},
           h("thead", {}, h("tr", {}, h("th", {}, "Wann"), h("th", {}, "Was"), h("th", { class: "zahl" }, "Kasse"), h("th", { class: "zahl" }, "Lohnkonto"))),
           h("tbody", {}, zeilen)))
-      : h("p", { style: "padding: 1rem" }, "Noch keine Buchungen. Die erste kommt mit dem ersten abgelieferten Auftrag."));
+      : h("p", { style: "padding: 1rem" }, "Noch keine Buchungen. Die erste kommt mit dem ersten abgelieferten Auftrag."),
+  ].filter(Boolean));
 }
 
 // ---- Büro (nur Chef)
@@ -486,7 +576,11 @@ function fuelleFahrerwahl() {
 
 function baueBuero() {
   const id = zustand.firmaId;
-  const lohn = h("input", { type: "number", min: 0, max: 100, value: zustand.firma.wage_percent, required: true });
+  const f0 = zustand.firma;
+  const faktor = h("input", { type: "number", min: 0.0001, max: 10000, step: "any", value: f0.revenue_factor, required: true });
+  const pauschale = h("input", { type: "number", min: 0, max: 100000, value: f0.daily_flat, required: true });
+  const uhr = h("input", { type: "time", value: f0.payroll_time, required: true });
+  const vorschuss = h("input", { type: "number", min: 0, max: 10000000, value: f0.advance, required: true });
   const kz = h("input", { required: true, maxlength: 12, placeholder: "SPED 001" });
   const modell = h("input", { required: true, placeholder: "scania.s_2016" });
   const stand = h("input", { type: "number", min: 0, value: 0, required: true });
@@ -508,14 +602,21 @@ function baueBuero() {
           h("button", { class: "leise", onclick: () => navigator.clipboard.writeText(code).then(
             () => melde("Einladungscode kopiert."), () => melde("Kopieren ging nicht. Markier den Code von Hand.", true)) }, "Code kopieren"))),
       h("div", { class: "blatt" },
-        h("h3", {}, "Lohnanteil"),
+        h("h3", {}, "Lohn und Geld"),
+        h("p", { class: "klein" }, "Aufträge gehen ganz in die Firmenkasse. Fahrer bekommen jeden Tag Lohn nach Kilometern und Lohnstufe, dazu die Pauschale für jeden Tag mit einem abgelieferten Auftrag."),
         formular(async () => {
-            await api("PATCH", "/api/companies/" + id, { wage_percent: Number(lohn.value) });
+            await api("PATCH", "/api/companies/" + id, {
+              revenue_factor: Number(faktor.value), daily_flat: Number(pauschale.value),
+              payroll_time: uhr.value, advance: Number(vorschuss.value) });
             await auffrischen();
-            melde("Lohnanteil gespeichert. Er gilt ab dem nächsten Auftrag.");
+            melde("Einstellungen gespeichert.");
           },
-          feld("So viel Prozent vom Erlös bekommt der Fahrer", lohn),
-          h("button", {}, "Lohnanteil speichern"))),
+          feld("Tagespauschale in Euro", pauschale),
+          feld("Tägliche Abrechnung um (Uhrzeit in Deutschland)", uhr),
+          feld("Betriebsvorschuss in Euro, zusätzlich zum Lohnkonto im Spiel", vorschuss),
+          feld("Erlösfaktor: der gemeldete Erlös mal diese Zahl geht in die Kasse", faktor),
+          h("button", {}, "Einstellungen speichern"))),
+      baueStufen(),
       h("div", { class: "blatt" },
         h("h3", {}, "Lkw anlegen"),
         formular(async (f) => {
@@ -545,30 +646,102 @@ function baueBuero() {
           h("button", {}, "Überweisen")))));
 }
 
+function baueStufen() {
+  const id = zustand.firmaId;
+  let stufen = zustand.firma.wage_levels.map((w) => ({ ...w }));
+  const box = h("div", {});
+  const zahlfeld = (s, k, max) => h("input", { type: "number", min: 0, max, value: s[k], required: true,
+    "aria-label": k, oninput: (e) => { s[k] = Number(e.target.value); } });
+  const zeichne = () => box.replaceChildren(
+    h("div", { style: "overflow-x: auto" }, h("table", { class: "stufen" },
+      h("thead", {}, h("tr", {}, h("th", {}, "Stufe"), h("th", {}, "ab Level"), h("th", {}, "ab Firmen-km"), h("th", {}, "Cent je km"), h("th", {}, ""))),
+      h("tbody", {}, stufen.map((s, i) => h("tr", {},
+        h("td", {}, String(i + 1)),
+        h("td", {}, zahlfeld(s, "min_level", 1000)),
+        h("td", {}, zahlfeld(s, "min_km", 100000000)),
+        h("td", {}, zahlfeld(s, "cents_per_km", 100000)),
+        h("td", {}, stufen.length > 1 ? h("button", { type: "button", class: "leise", onclick: () => { stufen.splice(i, 1); zeichne(); } }, "Entfernen") : null)))))),
+    h("div", { class: "zeile", style: "margin-top: .75rem" },
+      h("button", { type: "button", class: "leise", onclick: () => {
+        const letzte = stufen[stufen.length - 1];
+        stufen.push({ min_level: letzte.min_level, min_km: letzte.min_km, cents_per_km: letzte.cents_per_km });
+        zeichne();
+      } }, "Stufe hinzufügen"),
+      h("button", {}, "Lohnstufen speichern")));
+  zeichne();
+  return h("div", { class: "blatt ganz" },
+    h("h3", {}, "Lohnstufen"),
+    h("p", { class: "klein" }, "Ein Fahrer hat die letzte Stufe in der Liste, bei der er beide Bedingungen erfüllt: Level im Spiel und Kilometer für die Firma."),
+    formular(async () => {
+        const r = await api("PUT", "/api/companies/" + id + "/wage-levels", {
+          levels: stufen.map((s) => ({ min_level: s.min_level, min_km: s.min_km, cents_per_km: s.cents_per_km })) });
+        stufen = r.wage_levels.map((w) => ({ ...w }));
+        zeichne();
+        await auffrischen();
+        melde("Lohnstufen gespeichert. Sie gelten ab der nächsten Abrechnung.");
+      }, box));
+}
+
 // ---- Buchen von Hand, solange es noch kein Plugin gibt
 
 function baueTestbuchung() {
   const id = zustand.firmaId;
+  const chef = zustand.firma.your_role === "chef";
   const art = h("select", {},
-    h("option", { value: "job_delivered" }, "Auftrag abgeliefert (Erlös)"),
+    h("option", { value: "job_delivered" }, "Auftrag abgeliefert (Erlös an die Firma)"),
     h("option", { value: "job_cancelled" }, "Auftrag abgebrochen (zahlt der Fahrer)"),
     h("option", { value: "fined" }, "Strafe (zahlt der Fahrer)"),
     h("option", { value: "tollgate" }, "Maut (zahlt die Firma)"),
     h("option", { value: "ferry" }, "Fähre (zahlt die Firma)"),
     h("option", { value: "train" }, "Zug (zahlt die Firma)"));
   const betrag = h("input", { type: "number", min: 0, required: true });
+  const strecke = h("input", { type: "number", min: 0, max: 100000, step: "any" });
+  const streckeFeld = feld("Strecke in km", strecke);
+  art.addEventListener("change", () => { streckeFeld.hidden = art.value !== "job_delivered"; });
   const notiz = h("input", { maxlength: 80 });
+
+  const geld = h("input", { type: "number", required: true });
+  const xp = h("input", { type: "number", min: 0 });
+
   return h("details", {},
     h("summary", {}, "Ereignis von Hand buchen"),
-    h("p", { class: "klein blass" }, "Zum Testen ohne Spiel. Später meldet das Plugin diese Ereignisse von selbst. Gebucht wird auf dich als Fahrer."),
+    h("p", { class: "klein blass" }, "Zum Testen ohne Spiel. Sonst meldet das Plugin diese Ereignisse von selbst. Gebucht wird auf dich als Fahrer."),
     formular(async (f) => {
         const ereignis = "hand-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
-        await api("POST", "/api/companies/" + id + "/events", { event_id: ereignis, type: art.value, amount: Number(betrag.value), note: notiz.value });
+        const daten = { event_id: ereignis, type: art.value, amount: Number(betrag.value), note: notiz.value };
+        if (art.value === "job_delivered" && strecke.value !== "") daten.distance_km = Number(strecke.value);
+        await api("POST", "/api/companies/" + id + "/events", daten);
         f.reset();
+        streckeFeld.hidden = false;
         await auffrischen();
         melde("Gebucht.");
       },
-      h("div", { class: "zeile" }, feld("Was ist passiert", art, "breit"), feld("Betrag in Euro", betrag), feld("Notiz", notiz), h("button", {}, "Buchen"))));
+      h("div", { class: "zeile" }, feld("Was ist passiert", art, "breit"), feld("Betrag in Euro", betrag), streckeFeld, feld("Notiz", notiz), h("button", {}, "Buchen"))),
+    h("h3", { style: "margin-top: 1.5rem" }, "Geldabgleich testen"),
+    h("p", { class: "klein blass" }, "Tut so, als hätte der Launcher deinen Spielstand gelesen und den neuen Kontostand geschrieben."),
+    formular(async () => {
+        const daten = { ingame_money: Number(geld.value) };
+        if (xp.value !== "") daten.xp = Number(xp.value);
+        const r = await api("POST", "/api/companies/" + id + "/sync", daten);
+        await api("POST", "/api/companies/" + id + "/sync/" + r.sync_id + "/written", {});
+        await auffrischen();
+        let text;
+        if (r.first) text = "Erster Abgleich, nichts gebucht.";
+        else if (r.booked.length) text = "Erwartet " + euro(r.expected) + ", Betriebskosten " + euro(-r.booked[0].amount) + " gebucht.";
+        else if (r.unexplained) text = "Erwartet " + euro(r.expected) + ", " + euro(r.unexplained.amount) + " ungeklärt.";
+        else text = "Erwartet " + euro(r.expected) + ", passt.";
+        melde(text + " Neuer Kontostand im Spiel: " + euro(r.write_money) + ".");
+      },
+      h("div", { class: "zeile" }, feld("Kontostand im Spiel", geld), feld("Erfahrungspunkte", xp), h("button", {}, "Abgleichen"))),
+    chef ? h("div", {},
+      h("h3", { style: "margin-top: 1.5rem" }, "Lohnabrechnung"),
+      h("p", { class: "klein blass" }, "Rechnet sofort alles seit der letzten Abrechnung ab. Die tägliche Abrechnung macht danach dort weiter."),
+      h("button", { type: "button", onclick: (e) => versuche(async () => {
+        const r = await api("POST", "/api/companies/" + id + "/payrolls/run", {});
+        await auffrischen();
+        const gezahlt = r.payrolls.reduce((s, l) => s + l.paid, 0);
+        melde("Abgerechnet: " + euro(gezahlt) + " an die Fahrer.");
+      }, e.target) }, "Lohn jetzt abrechnen")) : null);
 }
 
 // ---------------------------------------------------------------- Start

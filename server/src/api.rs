@@ -1,6 +1,9 @@
 use crate::{
-    db::{Db, now},
+    clock::{Clock, format_minute, parse_minute},
+    db::{Db, insert_default_wage_levels, now},
     error::{ApiError, ApiResult},
+    levels::{WageLevel, standing, wage_levels},
+    payroll,
 };
 use argon2::{
     Argon2,
@@ -8,17 +11,43 @@ use argon2::{
 };
 use axum::{
     Json, Router,
-    extract::{FromRequestParts, Path, Query, State},
+    extract::{FromRef, FromRequestParts, Path, Query, State},
     http::{HeaderMap, header::AUTHORIZATION, request::Parts},
     response::Html,
-    routing::{get, post},
+    routing::{get, post, put},
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+/// Zustand der Anwendung: Datenbank und Uhr. Handler holen sich per `State<Db>` oder
+/// `State<Clock>` nur, was sie brauchen.
+#[derive(Clone)]
+pub struct AppState {
+    pub db: Db,
+    pub clock: Clock,
+}
+
+impl FromRef<AppState> for Db {
+    fn from_ref(s: &AppState) -> Db {
+        s.db.clone()
+    }
+}
+
+impl FromRef<AppState> for Clock {
+    fn from_ref(s: &AppState) -> Clock {
+        s.clock.clone()
+    }
+}
+
+/// Router mit der echten Uhr.
 pub fn router(db: Db) -> Router {
+    router_with(db, Clock::system())
+}
+
+/// Router mit eigener Uhr, für Tests mit gestellter Zeit.
+pub fn router_with(db: Db, clock: Clock) -> Router {
     Router::new()
         .route("/", get(dashboard))
         .route("/api/health", get(health))
@@ -36,12 +65,26 @@ pub fn router(db: Db) -> Router {
             "/api/companies/{id}/trucks",
             get(list_trucks).post(add_truck),
         )
+        .route("/api/companies/{id}/wage-levels", put(set_wage_levels))
         .route("/api/companies/{id}/events", post(post_event))
         .route("/api/companies/{id}/ledger", get(get_ledger))
         .route("/api/companies/{id}/transfer", post(transfer))
+        .route("/api/companies/{id}/payrolls", get(list_payrolls))
+        .route("/api/companies/{id}/payrolls/run", post(run_payroll_now))
+        .route("/api/companies/{id}/sync", post(sync))
+        .route(
+            "/api/companies/{id}/sync/{sync_id}/written",
+            post(sync_written),
+        )
+        .route("/api/companies/{id}/unexplained", get(list_unexplained))
+        .route(
+            "/api/companies/{id}/unexplained/{entry}/close",
+            post(close_unexplained),
+        )
         .route("/api/trucks/{id}/checkout", post(checkout))
         .route("/api/trucks/{id}/checkin", post(checkin))
-        .with_state(db)
+        .route("/api/trucks/{id}/lease", get(get_lease))
+        .with_state(AppState { db, clock })
 }
 
 // ---------------------------------------------------------------- Hilfen
@@ -124,11 +167,15 @@ pub struct AuthUser {
     pub name: String,
 }
 
-impl FromRequestParts<Db> for AuthUser {
+impl<S: Send + Sync> FromRequestParts<S> for AuthUser
+where
+    Db: FromRef<S>,
+{
     type Rejection = ApiError;
 
-    async fn from_request_parts(parts: &mut Parts, db: &Db) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let token = bearer(&parts.headers).ok_or_else(ApiError::unauthorized)?;
+        let db = Db::from_ref(state);
         let conn = db.lock().unwrap();
         conn.query_row(
             "SELECT u.id, u.name FROM tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ?1",
@@ -247,11 +294,11 @@ async fn me(State(db): State<Db>, user: AuthUser) -> ApiResult<Json<Value>> {
 #[derive(Deserialize)]
 struct NewCompany {
     name: String,
-    wage_percent: Option<i64>,
 }
 
 async fn create_company(
     State(db): State<Db>,
+    State(clock): State<Clock>,
     user: AuthUser,
     Json(b): Json<NewCompany>,
 ) -> ApiResult<Json<Value>> {
@@ -259,18 +306,13 @@ async fn create_company(
     if name.len() < 3 || name.len() > 48 {
         return Err(ApiError::bad("Der Firmenname braucht 3 bis 48 Zeichen"));
     }
-    let wage = b.wage_percent.unwrap_or(30);
-    if !(0..=100).contains(&wage) {
-        return Err(ApiError::bad(
-            "Der Lohnanteil muss zwischen 0 und 100 liegen",
-        ));
-    }
     let invite = random_hex(4).to_uppercase();
+    let t = clock.now();
     let mut conn = db.lock().unwrap();
     let tx = conn.transaction()?;
     match tx.execute(
-        "INSERT INTO companies (name, invite_code, wage_percent, created_at) VALUES (?1, ?2, ?3, ?4)",
-        params![name, invite, wage, now()],
+        "INSERT INTO companies (name, invite_code, created_at, payroll_from) VALUES (?1, ?2, ?3, ?3)",
+        params![name, invite, t],
     ) {
         Ok(_) => {}
         Err(e) if is_unique_violation(&e) => return Err(ApiError::conflict("Eine Firma mit dem Namen gibt es schon")),
@@ -279,11 +321,12 @@ async fn create_company(
     let id = tx.last_insert_rowid();
     tx.execute(
         "INSERT INTO memberships (company_id, user_id, role, joined_at) VALUES (?1, ?2, 'chef', ?3)",
-        params![id, user.id, now()],
+        params![id, user.id, t],
     )?;
+    insert_default_wage_levels(&tx, id)?;
     tx.commit()?;
     Ok(Json(
-        json!({ "id": id, "name": name, "wage_percent": wage, "invite_code": invite }),
+        json!({ "id": id, "name": name, "invite_code": invite }),
     ))
 }
 
@@ -294,6 +337,7 @@ struct JoinReq {
 
 async fn join_company(
     State(db): State<Db>,
+    State(clock): State<Clock>,
     user: AuthUser,
     Json(b): Json<JoinReq>,
 ) -> ApiResult<Json<Value>> {
@@ -308,7 +352,7 @@ async fn join_company(
         .ok_or_else(|| ApiError::not_found("Der Einladungscode passt zu keiner Firma"))?;
     match conn.execute(
         "INSERT INTO memberships (company_id, user_id, role, joined_at) VALUES (?1, ?2, 'fahrer', ?3)",
-        params![id, user.id, now()],
+        params![id, user.id, clock.now()],
     ) {
         Ok(_) => {}
         Err(e) if is_unique_violation(&e) => return Err(ApiError::conflict("Du bist schon in dieser Firma")),
@@ -319,6 +363,18 @@ async fn join_company(
     ))
 }
 
+fn wage_levels_json(levels: &[WageLevel]) -> Value {
+    json!(
+        levels
+            .iter()
+            .map(|w| json!({
+                "stage": w.position, "min_level": w.min_level, "min_km": w.min_km,
+                "cents_per_km": w.cents_per_km
+            }))
+            .collect::<Vec<_>>()
+    )
+}
+
 async fn get_company(
     State(db): State<Db>,
     user: AuthUser,
@@ -326,40 +382,68 @@ async fn get_company(
 ) -> ApiResult<Json<Value>> {
     let conn = db.lock().unwrap();
     let role = role_in(&conn, id, user.id)?;
-    let (name, wage, invite): (String, i64, String) = conn.query_row(
-        "SELECT name, wage_percent, invite_code FROM companies WHERE id = ?1",
-        [id],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-    )?;
-    let mut stmt = conn.prepare(
-        "SELECT u.id, u.name, m.role,
-                (SELECT COALESCE(SUM(amount), 0) FROM ledger l
-                  WHERE l.company_id = m.company_id AND l.account = 'fahrer' AND l.user_id = u.id)
-         FROM memberships m JOIN users u ON u.id = m.user_id
-         WHERE m.company_id = ?1 ORDER BY m.role, u.name",
-    )?;
-    let members = stmt
-        .query_map([id], |r| {
-            Ok(json!({
-                "user_id": r.get::<_, i64>(0)?, "name": r.get::<_, String>(1)?,
-                "role": r.get::<_, String>(2)?, "wallet": r.get::<_, i64>(3)?
-            }))
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
+    let (name, invite, factor, flat, minute, advance): (String, String, f64, i64, i64, i64) = conn
+        .query_row(
+            "SELECT name, invite_code, revenue_factor, daily_flat, payroll_minute, advance
+             FROM companies WHERE id = ?1",
+            [id],
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
+            },
+        )?;
+    let levels = wage_levels(&conn, id)?;
+    let people: Vec<(i64, String, String)> = conn
+        .prepare(
+            "SELECT u.id, u.name, m.role FROM memberships m JOIN users u ON u.id = m.user_id
+             WHERE m.company_id = ?1 ORDER BY m.role, u.name",
+        )?
+        .query_map([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<Result<_, _>>()?;
+    let mut members = Vec::new();
+    for (uid, uname, urole) in people {
+        let s = standing(&conn, &levels, id, uid)?;
+        members.push(json!({
+            "user_id": uid, "name": uname, "role": urole,
+            "wallet": wallet(&conn, id, uid)?,
+            "open_claim": payroll::open_claim(&conn, id, uid)?,
+            "xp": s.xp, "game_level": s.game_level, "company_km": s.company_km,
+            "stage": s.stage.map(|w| w.position), "cents_per_km": s.cents_per_km()
+        }));
+    }
     let mut out = json!({
-        "id": id, "name": name, "wage_percent": wage, "your_role": role,
-        "balance": company_balance(&conn, id)?, "members": members
+        "id": id, "name": name, "your_role": role,
+        "balance": company_balance(&conn, id)?, "members": members,
+        "revenue_factor": factor, "daily_flat": flat, "payroll_time": format_minute(minute),
+        "advance": advance, "wage_levels": wage_levels_json(&levels)
     });
-    // Den Einladungscode sieht nur der Chef.
+    // Einladungscode und ungeklärte Beträge sieht nur der Chef.
     if role == "chef" {
         out["invite_code"] = json!(invite);
+        let open: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM unexplained WHERE company_id = ?1 AND closed_at IS NULL",
+            [id],
+            |r| r.get(0),
+        )?;
+        out["open_unexplained"] = json!(open);
     }
     Ok(Json(out))
 }
 
+/// Einstellungen der Firma. Alles optional, nur Mitgeschicktes ändert sich.
 #[derive(Deserialize)]
 struct CompanyPatch {
-    wage_percent: i64,
+    revenue_factor: Option<f64>,
+    daily_flat: Option<i64>,
+    /// Uhrzeit der täglichen Abrechnung wie `04:00`, Europe/Berlin
+    payroll_time: Option<String>,
+    advance: Option<i64>,
 }
 
 async fn update_company(
@@ -368,18 +452,119 @@ async fn update_company(
     Path(id): Path<i64>,
     Json(b): Json<CompanyPatch>,
 ) -> ApiResult<Json<Value>> {
-    if !(0..=100).contains(&b.wage_percent) {
+    if let Some(f) = b.revenue_factor
+        && !(f.is_finite() && f > 0.0 && f <= 10_000.0)
+    {
         return Err(ApiError::bad(
-            "Der Lohnanteil muss zwischen 0 und 100 liegen",
+            "Der Erlösfaktor muss größer als 0 und höchstens 10000 sein",
         ));
     }
-    let conn = db.lock().unwrap();
-    require_chef(&conn, id, user.id)?;
-    conn.execute(
-        "UPDATE companies SET wage_percent = ?1 WHERE id = ?2",
-        [b.wage_percent, id],
+    if let Some(f) = b.daily_flat
+        && !(0..=100_000).contains(&f)
+    {
+        return Err(ApiError::bad(
+            "Die Tagespauschale muss zwischen 0 und 100000 Euro liegen",
+        ));
+    }
+    if let Some(a) = b.advance
+        && !(0..=10_000_000).contains(&a)
+    {
+        return Err(ApiError::bad(
+            "Der Betriebsvorschuss muss zwischen 0 und 10000000 Euro liegen",
+        ));
+    }
+    let minute =
+        match &b.payroll_time {
+            None => None,
+            Some(t) => Some(parse_minute(t).ok_or_else(|| {
+                ApiError::bad("Die Uhrzeit der Abrechnung muss wie 04:00 aussehen")
+            })?),
+        };
+    let mut conn = db.lock().unwrap();
+    let tx = conn.transaction()?;
+    require_chef(&tx, id, user.id)?;
+    if let Some(f) = b.revenue_factor {
+        tx.execute(
+            "UPDATE companies SET revenue_factor = ?1 WHERE id = ?2",
+            params![f, id],
+        )?;
+    }
+    if let Some(f) = b.daily_flat {
+        tx.execute(
+            "UPDATE companies SET daily_flat = ?1 WHERE id = ?2",
+            [f, id],
+        )?;
+    }
+    if let Some(m) = minute {
+        tx.execute(
+            "UPDATE companies SET payroll_minute = ?1 WHERE id = ?2",
+            [m, id],
+        )?;
+    }
+    if let Some(a) = b.advance {
+        tx.execute("UPDATE companies SET advance = ?1 WHERE id = ?2", [a, id])?;
+    }
+    let (factor, flat, minute, advance): (f64, i64, i64, i64) = tx.query_row(
+        "SELECT revenue_factor, daily_flat, payroll_minute, advance FROM companies WHERE id = ?1",
+        [id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
     )?;
-    Ok(Json(json!({ "id": id, "wage_percent": b.wage_percent })))
+    tx.commit()?;
+    Ok(Json(json!({
+        "id": id, "revenue_factor": factor, "daily_flat": flat,
+        "payroll_time": format_minute(minute), "advance": advance
+    })))
+}
+
+#[derive(Deserialize)]
+struct LevelReq {
+    min_level: i64,
+    min_km: i64,
+    cents_per_km: i64,
+}
+
+#[derive(Deserialize)]
+struct LevelsReq {
+    levels: Vec<LevelReq>,
+}
+
+/// Lohnstufen ersetzen. Die Reihenfolge ist die Rangfolge: Ein Fahrer bekommt die letzte Stufe,
+/// deren Bedingungen er erfüllt.
+async fn set_wage_levels(
+    State(db): State<Db>,
+    user: AuthUser,
+    Path(id): Path<i64>,
+    Json(b): Json<LevelsReq>,
+) -> ApiResult<Json<Value>> {
+    if b.levels.is_empty() || b.levels.len() > 20 {
+        return Err(ApiError::bad("Es braucht 1 bis 20 Lohnstufen"));
+    }
+    for l in &b.levels {
+        if l.min_level < 0 || l.min_level > 1000 || l.min_km < 0 || l.min_km > 100_000_000 {
+            return Err(ApiError::bad(
+                "Level und Kilometer einer Stufe dürfen nicht negativ sein",
+            ));
+        }
+        if !(0..=100_000).contains(&l.cents_per_km) {
+            return Err(ApiError::bad(
+                "Der Lohn je Kilometer muss zwischen 0 und 100000 Cent liegen",
+            ));
+        }
+    }
+    let mut conn = db.lock().unwrap();
+    let tx = conn.transaction()?;
+    require_chef(&tx, id, user.id)?;
+    tx.execute("DELETE FROM wage_levels WHERE company_id = ?1", [id])?;
+    for (i, l) in b.levels.iter().enumerate() {
+        tx.execute(
+            "INSERT INTO wage_levels (company_id, position, min_level, min_km, cents_per_km)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id, i as i64 + 1, l.min_level, l.min_km, l.cents_per_km],
+        )?;
+    }
+    let levels = wage_levels(&tx, id)?;
+    tx.commit()?;
+    Ok(Json(json!({ "wage_levels": wage_levels_json(&levels) })))
 }
 
 // ---------------------------------------------------------------- Fuhrpark
@@ -397,6 +582,7 @@ struct NewTruck {
 
 async fn add_truck(
     State(db): State<Db>,
+    State(clock): State<Clock>,
     user: AuthUser,
     Path(company_id): Path<i64>,
     Json(b): Json<NewTruck>,
@@ -424,7 +610,7 @@ async fn add_truck(
             b.package,
             b.odometer_km,
             state,
-            now()
+            clock.now()
         ],
     ) {
         Ok(_) => {}
@@ -455,11 +641,25 @@ async fn list_trucks(
          LEFT JOIN users u ON u.id = l.user_id
          WHERE t.company_id = ?1 ORDER BY t.plate",
     )?;
+    // Frühere Kennzeichen je Lkw, älteste zuerst
+    let mut old: std::collections::HashMap<i64, Vec<String>> = std::collections::HashMap::new();
+    let mut plates = conn.prepare(
+        "SELECT p.truck_id, p.plate FROM truck_plates p JOIN trucks t ON t.id = p.truck_id
+         WHERE t.company_id = ?1 ORDER BY p.replaced_at, p.rowid",
+    )?;
+    for row in plates.query_map([company_id], |r| {
+        Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+    })? {
+        let (id, plate) = row?;
+        old.entry(id).or_default().push(plate);
+    }
     let trucks = stmt
         .query_map([company_id], |r| {
             let holder: Option<i64> = r.get(5)?;
+            let id: i64 = r.get(0)?;
             Ok(json!({
-                "id": r.get::<_, i64>(0)?, "plate": r.get::<_, String>(1)?, "model": r.get::<_, String>(2)?,
+                "id": id, "plate": r.get::<_, String>(1)?, "model": r.get::<_, String>(2)?,
+                "old_plates": old.get(&id).cloned().unwrap_or_default(),
                 "odometer_km": r.get::<_, i64>(3)?, "rev": r.get::<_, i64>(4)?,
                 "leased_by": holder.map(|id| json!({
                     "user_id": id,
@@ -472,19 +672,37 @@ async fn list_trucks(
     Ok(Json(json!({ "trucks": trucks })))
 }
 
+/// Bauplan, Zustand und Kennzeichen eines Lkw, wie sie beim Ausleihen herausgehen.
+fn truck_package(conn: &Connection, truck_id: i64) -> rusqlite::Result<Value> {
+    conn.query_row(
+        "SELECT plate, model, package, odometer_km, state, rev FROM trucks WHERE id = ?1",
+        [truck_id],
+        |r| {
+            let state: String = r.get(4)?;
+            Ok(json!({
+                "id": truck_id, "plate": r.get::<_, String>(0)?, "model": r.get::<_, String>(1)?,
+                "package": r.get::<_, String>(2)?, "odometer_km": r.get::<_, i64>(3)?,
+                "rev": r.get::<_, i64>(5)?,
+                "state": serde_json::from_str::<Value>(&state).unwrap_or_else(|_| json!({}))
+            }))
+        },
+    )
+}
+
 /// Lkw ausleihen. Geht nur, wenn er frei ist. Liefert Bauplan und Zustand für den Spielstand.
 async fn checkout(
     State(db): State<Db>,
+    State(clock): State<Clock>,
     user: AuthUser,
     Path(truck_id): Path<i64>,
 ) -> ApiResult<Json<Value>> {
     let mut conn = db.lock().unwrap();
     let tx = conn.transaction()?;
-    let (company_id, plate, model, package, odometer, state, rev): (i64, String, String, String, i64, String, i64) = tx
+    let (company_id, rev): (i64, i64) = tx
         .query_row(
-            "SELECT company_id, plate, model, package, odometer_km, state, rev FROM trucks WHERE id = ?1",
+            "SELECT company_id, rev FROM trucks WHERE id = ?1",
             [truck_id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()?
         .ok_or_else(|| ApiError::not_found("Diesen Lkw gibt es nicht"))?;
@@ -504,17 +722,47 @@ async fn checkout(
     }
     tx.execute(
         "INSERT INTO leases (truck_id, user_id, rev_out, taken_at) VALUES (?1, ?2, ?3, ?4)",
-        params![truck_id, user.id, rev, now()],
+        params![truck_id, user.id, rev, clock.now()],
     )?;
     let lease_id = tx.last_insert_rowid();
+    let truck = truck_package(&tx, truck_id)?;
     tx.commit()?;
+    Ok(Json(json!({ "lease_id": lease_id, "truck": truck })))
+}
+
+/// Bauplan einer laufenden Leihe noch einmal holen, zum Beispiel auf einem anderen Rechner.
+/// Darf der Fahrer, der den Lkw hat, und der Chef der Firma. Alle anderen bekommen 403.
+async fn get_lease(
+    State(db): State<Db>,
+    user: AuthUser,
+    Path(truck_id): Path<i64>,
+) -> ApiResult<Json<Value>> {
+    let conn = db.lock().unwrap();
+    let company_id: i64 = conn
+        .query_row(
+            "SELECT company_id FROM trucks WHERE id = ?1",
+            [truck_id],
+            |r| r.get(0),
+        )
+        .optional()?
+        .ok_or_else(|| ApiError::not_found("Diesen Lkw gibt es nicht"))?;
+    let role = role_in(&conn, company_id, user.id)?;
+    let (lease_id, holder, taken_at): (i64, i64, i64) = conn
+        .query_row(
+            "SELECT id, user_id, taken_at FROM leases WHERE truck_id = ?1 AND returned_at IS NULL",
+            [truck_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()?
+        .ok_or_else(|| ApiError::conflict("Der Lkw ist gar nicht verliehen"))?;
+    if holder != user.id && role != "chef" {
+        return Err(ApiError::forbidden(
+            "Den Lkw hat jemand anderes ausgeliehen",
+        ));
+    }
     Ok(Json(json!({
-        "lease_id": lease_id,
-        "truck": {
-            "id": truck_id, "plate": plate, "model": model, "package": package,
-            "odometer_km": odometer, "rev": rev,
-            "state": serde_json::from_str::<Value>(&state).unwrap_or_else(|_| json!({}))
-        }
+        "lease_id": lease_id, "user_id": holder, "taken_at": taken_at,
+        "truck": truck_package(&conn, truck_id)?
     })))
 }
 
@@ -522,22 +770,27 @@ async fn checkout(
 struct CheckinReq {
     odometer_km: i64,
     state: Option<Value>,
+    /// Aktuelles Kennzeichen im Spielstand, falls das Spiel es ersetzt hat
+    #[serde(default)]
+    plate: Option<String>,
 }
 
 /// Lkw zurückgeben. Der Zustand aus dem Spielstand wird übernommen, die Revision steigt.
+/// Mit `plate` bekommt der Lkw ein neues Kennzeichen, das alte kommt in `truck_plates`.
 async fn checkin(
     State(db): State<Db>,
+    State(clock): State<Clock>,
     user: AuthUser,
     Path(truck_id): Path<i64>,
     Json(b): Json<CheckinReq>,
 ) -> ApiResult<Json<Value>> {
     let mut conn = db.lock().unwrap();
     let tx = conn.transaction()?;
-    let (company_id, odometer): (i64, i64) = tx
+    let (company_id, odometer, current_plate): (i64, i64, String) = tx
         .query_row(
-            "SELECT company_id, odometer_km FROM trucks WHERE id = ?1",
+            "SELECT company_id, odometer_km, plate FROM trucks WHERE id = ?1",
             [truck_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .optional()?
         .ok_or_else(|| ApiError::not_found("Diesen Lkw gibt es nicht"))?;
@@ -561,6 +814,35 @@ async fn checkin(
             "Der Kilometerstand kann nicht kleiner werden",
         ));
     }
+    let new_plate = match b.plate.as_deref().map(str::trim) {
+        None => None,
+        Some("") => return Err(ApiError::bad("Das Kennzeichen darf nicht leer sein")),
+        Some(p) if p.chars().count() > 32 => {
+            return Err(ApiError::bad(
+                "Das Kennzeichen darf höchstens 32 Zeichen haben",
+            ));
+        }
+        Some(p) if p == current_plate => None,
+        Some(p) => Some(p.to_string()),
+    };
+    if let Some(p) = &new_plate {
+        match tx.execute(
+            "UPDATE trucks SET plate = ?1 WHERE id = ?2",
+            params![p, truck_id],
+        ) {
+            Ok(_) => {}
+            Err(e) if is_unique_violation(&e) => {
+                return Err(ApiError::conflict(&format!(
+                    "Das Kennzeichen {p} hat in der Firma schon ein anderer Lkw"
+                )));
+            }
+            Err(e) => return Err(e.into()),
+        }
+        tx.execute(
+            "INSERT INTO truck_plates (truck_id, plate, replaced_at) VALUES (?1, ?2, ?3)",
+            params![truck_id, current_plate, clock.now()],
+        )?;
+    }
     match &b.state {
         Some(s) => tx.execute(
             "UPDATE trucks SET odometer_km = ?1, state = ?2, rev = rev + 1 WHERE id = ?3",
@@ -573,15 +855,17 @@ async fn checkin(
     };
     tx.execute(
         "UPDATE leases SET returned_at = ?1 WHERE id = ?2",
-        params![now(), lease_id],
+        params![clock.now(), lease_id],
     )?;
     let rev: i64 = tx.query_row("SELECT rev FROM trucks WHERE id = ?1", [truck_id], |r| {
         r.get(0)
     })?;
     tx.commit()?;
-    Ok(Json(
-        json!({ "id": truck_id, "odometer_km": b.odometer_km, "rev": rev, "driven_km": b.odometer_km - odometer }),
-    ))
+    let plate = new_plate.unwrap_or(current_plate);
+    Ok(Json(json!({
+        "id": truck_id, "plate": plate, "odometer_km": b.odometer_km, "rev": rev,
+        "driven_km": b.odometer_km - odometer
+    })))
 }
 
 // ---------------------------------------------------------------- Kasse
@@ -592,18 +876,26 @@ struct EventReq {
     event_id: String,
     #[serde(rename = "type")]
     kind: String,
-    /// Betrag in Euro, immer positiv. Bei job_delivered ist das der Erlös.
+    /// Betrag in Euro, immer positiv, so wie das Spiel ihn gemeldet hat. Bei job_delivered ist
+    /// das der Erlös.
     amount: i64,
+    /// Gefahrene Kilometer, nur bei job_delivered
+    #[serde(default)]
+    distance_km: Option<f64>,
     #[serde(default)]
     note: String,
 }
 
 /// Ereignis aus dem Spiel buchen. Die Regeln:
-/// - job_delivered: Lohnanteil an den Fahrer, der Rest in die Firmenkasse
-/// - job_cancelled, fined: zahlt der Fahrer
+/// - job_delivered: Erlös mal Erlösfaktor in die Firmenkasse, die Kilometer zählen für den Fahrer
+/// - job_cancelled, fined: zahlt der Fahrer aus dem Lohnkonto
 /// - tollgate, ferry, train: zahlt die Firma
+///
+/// Jede Buchung merkt sich in `game_amount` den vollen Betrag aus dem Spiel mit Vorzeichen, so
+/// wie er den Kontostand im Spiel verändert hat. Daraus rechnet der Geldabgleich.
 async fn post_event(
     State(db): State<Db>,
+    State(clock): State<Clock>,
     user: AuthUser,
     Path(company_id): Path<i64>,
     Json(b): Json<EventReq>,
@@ -612,9 +904,18 @@ async fn post_event(
     if event_id.is_empty() || event_id.len() > 100 {
         return Err(ApiError::bad("event_id fehlt oder ist zu lang"));
     }
-    if b.amount < 0 {
+    if b.amount < 0 || b.amount > 1_000_000_000 {
         return Err(ApiError::bad("Der Betrag darf nicht negativ sein"));
     }
+    let distance = match b.distance_km {
+        None => None,
+        Some(d) if d.is_finite() && (0.0..=100_000.0).contains(&d) => Some(d.round() as i64),
+        Some(_) => {
+            return Err(ApiError::bad(
+                "Die Strecke muss zwischen 0 und 100000 km liegen",
+            ));
+        }
+    };
     let mut conn = db.lock().unwrap();
     let tx = conn.transaction()?;
     role_in(&tx, company_id, user.id)?;
@@ -631,46 +932,54 @@ async fn post_event(
         })));
     }
 
-    // (Konto, Buchungsart, Betrag mit Vorzeichen)
-    let bookings: Vec<(&str, &str, i64)> = match b.kind.as_str() {
+    // (Konto, Buchungsart, gebuchter Betrag, Betrag im Spiel), beide mit Vorzeichen
+    let a = b.amount;
+    let booking: (&str, &str, i64, i64) = match b.kind.as_str() {
         "job_delivered" => {
-            let percent: i64 = tx.query_row(
-                "SELECT wage_percent FROM companies WHERE id = ?1",
+            let factor: f64 = tx.query_row(
+                "SELECT revenue_factor FROM companies WHERE id = ?1",
                 [company_id],
                 |r| r.get(0),
             )?;
-            let wage = b.amount * percent / 100;
-            vec![
-                ("fahrer", "lohn", wage),
-                ("firma", "auftrag", b.amount - wage),
-            ]
+            ("firma", "auftrag", (a as f64 * factor).round() as i64, a)
         }
-        "job_cancelled" => vec![("fahrer", "auftrag_abgebrochen", -b.amount)],
-        "fined" => vec![("fahrer", "strafe", -b.amount)],
-        "tollgate" => vec![("firma", "maut", -b.amount)],
-        "ferry" => vec![("firma", "faehre", -b.amount)],
-        "train" => vec![("firma", "zug", -b.amount)],
+        "job_cancelled" => ("fahrer", "auftrag_abgebrochen", -a, -a),
+        "fined" => ("fahrer", "strafe", -a, -a),
+        "tollgate" => ("firma", "maut", -a, -a),
+        "ferry" => ("firma", "faehre", -a, -a),
+        "train" => ("firma", "zug", -a, -a),
         _ => return Err(ApiError::bad("Unbekannter Ereignistyp")),
     };
-    for (account, kind, amount) in &bookings {
-        tx.execute(
-            "INSERT INTO ledger (company_id, account, user_id, kind, amount, event_id, note, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![company_id, account, user.id, kind, amount, event_id, b.note, now()],
-        )?;
-    }
+    let (account, kind, amount, game_amount) = booking;
+    let distance = if kind == "auftrag" { distance } else { None };
+    tx.execute(
+        "INSERT INTO ledger (company_id, account, user_id, kind, amount, event_id, note, created_at,
+                             game_amount, distance_km)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![
+            company_id,
+            account,
+            user.id,
+            kind,
+            amount,
+            event_id,
+            b.note,
+            clock.now(),
+            game_amount,
+            distance
+        ],
+    )?;
     let balance = company_balance(&tx, company_id)?;
     let my_wallet = wallet(&tx, company_id, user.id)?;
     tx.commit()?;
-    let booked: Vec<Value> = bookings
-        .iter()
-        .map(
-            |(account, kind, amount)| json!({ "account": account, "kind": kind, "amount": amount }),
-        )
-        .collect();
-    Ok(Json(
-        json!({ "duplicate": false, "booked": booked, "balance": balance, "wallet": my_wallet }),
-    ))
+    Ok(Json(json!({
+        "duplicate": false,
+        "booked": [{
+            "account": account, "kind": kind, "amount": amount, "game_amount": game_amount,
+            "distance_km": distance
+        }],
+        "balance": balance, "wallet": my_wallet
+    })))
 }
 
 #[derive(Deserialize)]
@@ -686,6 +995,7 @@ struct TransferReq {
 /// Die Kasse kann dabei nicht ins Minus gehen, ein Lohnkonto schon (Schulden beim Chef).
 async fn transfer(
     State(db): State<Db>,
+    State(clock): State<Clock>,
     user: AuthUser,
     Path(company_id): Path<i64>,
     Json(b): Json<TransferReq>,
@@ -711,7 +1021,7 @@ async fn transfer(
         tx.execute(
             "INSERT INTO ledger (company_id, account, user_id, kind, amount, note, created_at)
              VALUES (?1, ?2, ?3, 'ueberweisung', ?4, ?5, ?6)",
-            params![company_id, account, b.user_id, amount, b.note, now()],
+            params![company_id, account, b.user_id, amount, b.note, clock.now()],
         )?;
     }
     let balance = company_balance(&tx, company_id)?;
@@ -735,7 +1045,8 @@ async fn get_ledger(
     let conn = db.lock().unwrap();
     role_in(&conn, company_id, user.id)?;
     let mut stmt = conn.prepare(
-        "SELECT l.id, l.account, u.name, l.kind, l.amount, l.note, l.created_at
+        "SELECT l.id, l.account, u.name, l.kind, l.amount, l.note, l.created_at, l.user_id,
+                l.game_amount, l.distance_km, l.payroll_id
          FROM ledger l LEFT JOIN users u ON u.id = l.user_id
          WHERE l.company_id = ?1 ORDER BY l.id DESC LIMIT ?2",
     )?;
@@ -745,13 +1056,298 @@ async fn get_ledger(
                 "id": r.get::<_, i64>(0)?, "account": r.get::<_, String>(1)?,
                 "user": r.get::<_, Option<String>>(2)?, "kind": r.get::<_, String>(3)?,
                 "amount": r.get::<_, i64>(4)?, "note": r.get::<_, String>(5)?,
-                "created_at": r.get::<_, i64>(6)?
+                "created_at": r.get::<_, i64>(6)?, "user_id": r.get::<_, Option<i64>>(7)?,
+                "game_amount": r.get::<_, Option<i64>>(8)?,
+                "distance_km": r.get::<_, Option<i64>>(9)?,
+                "payroll_id": r.get::<_, Option<i64>>(10)?
             }))
         })?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Json(
         json!({ "balance": company_balance(&conn, company_id)?, "entries": entries }),
     ))
+}
+
+// ---------------------------------------------------------------- Lohnabrechnung
+
+async fn list_payrolls(
+    State(db): State<Db>,
+    user: AuthUser,
+    Path(company_id): Path<i64>,
+    Query(q): Query<LedgerQuery>,
+) -> ApiResult<Json<Value>> {
+    let limit = q.limit.unwrap_or(30).clamp(1, 500);
+    let conn = db.lock().unwrap();
+    role_in(&conn, company_id, user.id)?;
+    let ids: Vec<i64> = conn
+        .prepare("SELECT id FROM payroll_runs WHERE company_id = ?1 ORDER BY id DESC LIMIT ?2")?
+        .query_map([company_id, limit], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    let runs = ids
+        .into_iter()
+        .map(|id| payroll::run_json(&conn, id))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Json(json!({ "payrolls": runs })))
+}
+
+/// Abrechnung sofort auslösen (Testbereich im Dashboard). Nur der Chef.
+async fn run_payroll_now(
+    State(db): State<Db>,
+    State(clock): State<Clock>,
+    user: AuthUser,
+    Path(company_id): Path<i64>,
+) -> ApiResult<Json<Value>> {
+    let mut conn = db.lock().unwrap();
+    require_chef(&conn, company_id, user.id)?;
+    let ids = payroll::run_now(&mut conn, company_id, clock.now())?;
+    let runs = ids
+        .into_iter()
+        .map(|id| payroll::run_json(&conn, id))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Json(json!({
+        "payrolls": runs, "balance": company_balance(&conn, company_id)?
+    })))
+}
+
+// ---------------------------------------------------------------- Geldabgleich
+
+#[derive(Deserialize)]
+struct SyncReq {
+    /// Kontostand im neuesten Spielstand
+    ingame_money: i64,
+    /// Erfahrungspunkte aus `info.sii`
+    #[serde(default)]
+    xp: Option<i64>,
+}
+
+/// Geldabgleich eines Fahrers. Vergleicht den Kontostand im Spiel mit dem, was die gemeldeten
+/// Ereignisse seit dem letzten Abgleich erklären:
+///
+/// erwartet = Stand nach dem letzten Abgleich + Summe der Spielbeträge seitdem
+///
+/// Fehlt Geld, bucht die Firma die Differenz als Betriebskosten (Tanken, Reparaturen und was
+/// das Spiel sonst abzieht). Ist mehr da, wird nichts gutgeschrieben, sondern ein ungeklärter
+/// Betrag für den Chef angelegt. Der erste Abgleich bucht nichts.
+///
+/// Zurück kommt, was der Launcher in den Spielstand schreiben soll: Lohnkonto plus
+/// Betriebsvorschuss, nie unter 0. Hat er es geschrieben, meldet er das über `.../written`.
+async fn sync(
+    State(db): State<Db>,
+    State(clock): State<Clock>,
+    user: AuthUser,
+    Path(company_id): Path<i64>,
+    Json(b): Json<SyncReq>,
+) -> ApiResult<Json<Value>> {
+    if b.ingame_money.abs() > 1_000_000_000_000 {
+        return Err(ApiError::bad("Der Kontostand ist nicht plausibel"));
+    }
+    if let Some(xp) = b.xp
+        && !(0..=1_000_000_000).contains(&xp)
+    {
+        return Err(ApiError::bad(
+            "Die Erfahrungspunkte dürfen nicht negativ sein",
+        ));
+    }
+    let t = clock.now();
+    let mut conn = db.lock().unwrap();
+    let tx = conn.transaction()?;
+    role_in(&tx, company_id, user.id)?;
+    let last: Option<(i64, i64, bool, i64)> = tx
+        .query_row(
+            "SELECT ingame_money, write_money, written, last_ledger_id FROM sync_points
+             WHERE company_id = ?1 AND user_id = ?2 ORDER BY id DESC LIMIT 1",
+            [company_id, user.id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .optional()?;
+    let max_id: i64 = tx.query_row("SELECT COALESCE(MAX(id), 0) FROM ledger", [], |r| r.get(0))?;
+
+    let mut booked = Vec::new();
+    let mut expected = None;
+    let mut surplus = 0;
+    let mut events = 0;
+    if let Some((ingame, write, written, last_id)) = last {
+        let baseline = if written { write } else { ingame };
+        let (sum, n): (i64, i64) = tx.query_row(
+            "SELECT COALESCE(SUM(game_amount), 0), COUNT(*) FROM ledger
+             WHERE company_id = ?1 AND user_id = ?2 AND game_amount IS NOT NULL
+               AND event_id IS NOT NULL AND id > ?3 AND id <= ?4",
+            params![company_id, user.id, last_id, max_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        events = n;
+        let exp = baseline + sum;
+        expected = Some(exp);
+        let diff = b.ingame_money - exp;
+        if diff < 0 {
+            let note = format!("Abgleich: erwartet {exp} €, im Spiel {} €", b.ingame_money);
+            tx.execute(
+                "INSERT INTO ledger (company_id, account, user_id, kind, amount, note, created_at)
+                 VALUES (?1, 'firma', ?2, 'betriebskosten', ?3, ?4, ?5)",
+                params![company_id, user.id, diff, note, t],
+            )?;
+            booked.push(json!({ "account": "firma", "kind": "betriebskosten", "amount": diff }));
+        } else {
+            surplus = diff;
+        }
+    }
+
+    let advance: i64 = tx.query_row(
+        "SELECT advance FROM companies WHERE id = ?1",
+        [company_id],
+        |r| r.get(0),
+    )?;
+    let my_wallet = wallet(&tx, company_id, user.id)?;
+    let write_money = (my_wallet + advance).max(0);
+    let last_ledger_id: i64 =
+        tx.query_row("SELECT COALESCE(MAX(id), 0) FROM ledger", [], |r| r.get(0))?;
+    tx.execute(
+        "INSERT INTO sync_points (company_id, user_id, ingame_money, xp, expected, write_money,
+                                  last_ledger_id, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            company_id,
+            user.id,
+            b.ingame_money,
+            b.xp,
+            expected,
+            write_money,
+            last_ledger_id,
+            t
+        ],
+    )?;
+    let sync_id = tx.last_insert_rowid();
+    let mut unexplained = Value::Null;
+    if surplus > 0 {
+        tx.execute(
+            "INSERT INTO unexplained (company_id, user_id, amount, sync_id, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![company_id, user.id, surplus, sync_id, t],
+        )?;
+        unexplained = json!({ "id": tx.last_insert_rowid(), "amount": surplus });
+    }
+    let levels = wage_levels(&tx, company_id)?;
+    let s = standing(&tx, &levels, company_id, user.id)?;
+    tx.commit()?;
+    Ok(Json(json!({
+        "sync_id": sync_id, "first": last.is_none(), "ingame_money": b.ingame_money,
+        "expected": expected, "events": events, "booked": booked, "unexplained": unexplained,
+        "wallet": my_wallet, "advance": advance, "write_money": write_money,
+        "xp": s.xp, "game_level": s.game_level, "stage": s.stage.map(|w| w.position)
+    })))
+}
+
+/// Der Launcher hat den Betrag aus dem Abgleich in den Spielstand geschrieben. Ab jetzt ist
+/// das die Grundlage für den nächsten Abgleich.
+async fn sync_written(
+    State(db): State<Db>,
+    user: AuthUser,
+    Path((company_id, sync_id)): Path<(i64, i64)>,
+) -> ApiResult<Json<Value>> {
+    let conn = db.lock().unwrap();
+    role_in(&conn, company_id, user.id)?;
+    let latest: Option<i64> = conn.query_row(
+        "SELECT MAX(id) FROM sync_points WHERE company_id = ?1 AND user_id = ?2",
+        [company_id, user.id],
+        |r| r.get(0),
+    )?;
+    let owner: Option<i64> = conn
+        .query_row(
+            "SELECT user_id FROM sync_points WHERE id = ?1 AND company_id = ?2",
+            [sync_id, company_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    match owner {
+        None => return Err(ApiError::not_found("Diesen Abgleich gibt es nicht")),
+        Some(u) if u != user.id => {
+            return Err(ApiError::forbidden("Das ist nicht dein Abgleich"));
+        }
+        _ => {}
+    }
+    if latest != Some(sync_id) {
+        return Err(ApiError::conflict("Es gibt schon einen neueren Abgleich"));
+    }
+    conn.execute(
+        "UPDATE sync_points SET written = 1 WHERE id = ?1",
+        [sync_id],
+    )?;
+    Ok(Json(json!({ "sync_id": sync_id, "written": true })))
+}
+
+#[derive(Deserialize)]
+struct UnexplainedQuery {
+    #[serde(default)]
+    all: bool,
+}
+
+/// Ungeklärte Beträge aus dem Abgleich. Nur der Chef. Ohne `?all=true` nur die offenen.
+async fn list_unexplained(
+    State(db): State<Db>,
+    user: AuthUser,
+    Path(company_id): Path<i64>,
+    Query(q): Query<UnexplainedQuery>,
+) -> ApiResult<Json<Value>> {
+    let conn = db.lock().unwrap();
+    require_chef(&conn, company_id, user.id)?;
+    let entries: Vec<Value> = conn
+        .prepare(
+            "SELECT x.id, x.user_id, u.name, x.amount, x.created_at, x.closed_at, c.name, x.close_note,
+                    s.expected, s.ingame_money
+             FROM unexplained x
+             JOIN users u ON u.id = x.user_id
+             JOIN sync_points s ON s.id = x.sync_id
+             LEFT JOIN users c ON c.id = x.closed_by
+             WHERE x.company_id = ?1 AND (?2 OR x.closed_at IS NULL)
+             ORDER BY x.id DESC LIMIT 200",
+        )?
+        .query_map(params![company_id, q.all], |r| {
+            Ok(json!({
+                "id": r.get::<_, i64>(0)?, "user_id": r.get::<_, i64>(1)?,
+                "user": r.get::<_, String>(2)?, "amount": r.get::<_, i64>(3)?,
+                "created_at": r.get::<_, i64>(4)?, "closed_at": r.get::<_, Option<i64>>(5)?,
+                "closed_by": r.get::<_, Option<String>>(6)?, "note": r.get::<_, String>(7)?,
+                "expected": r.get::<_, Option<i64>>(8)?, "ingame_money": r.get::<_, i64>(9)?
+            }))
+        })?
+        .collect::<Result<_, _>>()?;
+    Ok(Json(json!({ "entries": entries })))
+}
+
+#[derive(Deserialize, Default)]
+struct CloseReq {
+    #[serde(default)]
+    note: String,
+}
+
+/// Ungeklärten Betrag schließen. Gebucht wird dabei nichts.
+async fn close_unexplained(
+    State(db): State<Db>,
+    State(clock): State<Clock>,
+    user: AuthUser,
+    Path((company_id, entry)): Path<(i64, i64)>,
+    body: Option<Json<CloseReq>>,
+) -> ApiResult<Json<Value>> {
+    let note = body.map(|Json(b)| b.note).unwrap_or_default();
+    let conn = db.lock().unwrap();
+    require_chef(&conn, company_id, user.id)?;
+    let closed: Option<Option<i64>> = conn
+        .query_row(
+            "SELECT closed_at FROM unexplained WHERE id = ?1 AND company_id = ?2",
+            [entry, company_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    match closed {
+        None => return Err(ApiError::not_found("Diesen Eintrag gibt es nicht")),
+        Some(Some(_)) => return Err(ApiError::conflict("Der Eintrag ist schon geschlossen")),
+        Some(None) => {}
+    }
+    conn.execute(
+        "UPDATE unexplained SET closed_at = ?1, closed_by = ?2, close_note = ?3 WHERE id = ?4",
+        params![clock.now(), user.id, note.trim(), entry],
+    )?;
+    Ok(Json(json!({ "id": entry, "closed": true })))
 }
 
 // ---------------------------------------------------------------- Sonstiges

@@ -1,0 +1,3 @@
+# Spielstände byte-genau auschecken, auch unter Windows. Die Tests vergleichen Dateien
+# Byte für Byte, und ziel_info.sii hat absichtlich CRLF wie eine echte info.sii.
+*.sii -text

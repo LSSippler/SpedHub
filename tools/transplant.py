@@ -122,7 +122,7 @@ if __name__ == '__main__':
         del T.units[n]; T.order.remove(n)
 
     # --- target: insert truck
-    PL = '_nameless.2ff.7a11.0001'
+    PL = '_nameless.2ff.7a11.0008'
     assert PL not in T.units
     ins = T.order.index(tp) + 1
     new_units = [(n, S.units[n][0], list(S.units[n][1])) for n in vclos]

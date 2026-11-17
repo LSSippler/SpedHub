@@ -1,5 +1,7 @@
 # SpedHub
 
+[![CI](https://github.com/LSSippler/SpedHub/actions/workflows/ci.yml/badge.svg)](https://github.com/LSSippler/SpedHub/actions/workflows/ci.yml)
+
 SpedHub macht aus Euro Truck Simulator 2 eine echte Firma. Mehrere Fahrer fahren zusammen im Convoy, die Einnahmen gehen in eine gemeinsame Kasse, und wer keinen eigenen Lkw hat, leiht sich einen aus dem Fuhrpark der Firma. Der geliehene Lkw landet wirklich im eigenen Spielstand, mit Kilometerstand, Schaden und Tuning.
 
 Das Projekt steht am Anfang. Was schon läuft und was noch fehlt:
@@ -8,10 +10,9 @@ Das Projekt steht am Anfang. Was schon läuft und was noch fehlt:
 |---|---|
 | Server mit Accounts, Kasse und Fuhrpark | läuft, siehe `server/` |
 | Web-Dashboard | läuft, wird vom Server ausgeliefert |
-| Werkzeuge für den Spielstand | erste Fassung, siehe `tools/` |
-| Save-Bibliothek in Rust | geplant |
-| Launcher | geplant |
-| Spiel-Plugin für Telemetrie | geplant |
+| Save-Bibliothek mit Kommandozeile | erste Fassung, siehe `crates/spedhub-save` und `tools/README.md` |
+| Launcher | erste Fassung, siehe `crates/spedhub-launcher` |
+| Spiel-Plugin für Telemetrie | erste Fassung, meldet Gameplay-Events, siehe `crates/spedhub-plugin` |
 
 Wichtig: Dass das Spiel einen von SpedHub bearbeiteten Spielstand fehlerfrei lädt, ist noch nicht im Spiel bestätigt. Bis dahin sind alle Aussagen zum Spielstand-Format vorläufig.
 
@@ -33,7 +34,10 @@ Danach liegt das Dashboard unter http://127.0.0.1:8787.
 | Ordner | Inhalt |
 |---|---|
 | `server/` | Backend und Dashboard, Details in `server/README.md` |
-| `tools/` | Hilfsprogramme für den Spielstand, Details in `tools/README.md` |
+| `crates/spedhub-save/` | Save-Bibliothek: Spielstand lesen, prüfen, schreiben, Lkw exportieren und einsetzen |
+| `crates/spedhub-plugin/` | Plugin für ETS2: meldet Aufträge, Strafen, Maut, Fähre und Zug an den Server |
+| `crates/spedhub-launcher/` | Launcher für Windows: anmelden, Fuhrpark, Lkw in den Spielstand schreiben, Spiel starten |
+| `tools/` | Bedienung von `spedhub-save` und die Python-Referenz, Details in `tools/README.md` |
 | `testdata/` | Kleine Test-Spielstände mit echtem Aufbau |
 | `docs/` | Architektur und Notizen zum Spielstand-Format |
 

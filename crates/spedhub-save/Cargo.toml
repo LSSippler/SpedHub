@@ -1,0 +1,25 @@
+[package]
+name = "spedhub-save"
+version = "0.1.0"
+edition = "2024"
+description = "Spielstände von ETS2 lesen und schreiben, Lkw exportieren, einsetzen und entfernen"
+
+[lib]
+name = "spedhub_save"
+path = "src/lib.rs"
+
+[[bin]]
+name = "spedhub-save"
+path = "src/main.rs"
+
+[dependencies]
+decrypt_truck = "1.3.6"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+
+# Nur für den Test, der eine verschlüsselte Datei (ScsC) baut. Alle drei sind schon
+# über decrypt_truck im Lockfile.
+[dev-dependencies]
+aes = "0.8.4"
+cbc = "0.1.2"
+flate2 = "1.1.11"
