@@ -1,0 +1,169 @@
+name: Release
+
+# Ein Tag wie v0.2.0 baut alles im Release-Modus und veröffentlicht ein GitHub-Release mit
+# Setup, Linux-Server und SHA256SUMS.txt. Anleitung in README.md, "So veröffentlichst du eine
+# Version".
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    name: Windows (Setup)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Rust installieren
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo-Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Tag mit der Version in Cargo.toml vergleichen
+        shell: pwsh
+        run: |
+          $version = ((cargo metadata --no-deps --format-version 1 --locked | ConvertFrom-Json).packages | Where-Object { $_.name -eq 'spedhub-launcher' }).version
+          if ("v$version" -ne $env:GITHUB_REF_NAME) {
+            Write-Host "::error::Der Tag $env:GITHUB_REF_NAME passt nicht zur Version $version in Cargo.toml. Erwartet ist der Tag v$version"
+            exit 1
+          }
+          Write-Host "Version $version"
+
+      - name: Tests
+        run: cargo test --workspace --locked
+
+      - name: Setup bauen
+        shell: pwsh
+        run: ./installer/build.ps1 -OutDir dist
+
+      - name: Setup hochladen
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-windows
+          path: dist/
+          if-no-files-found: error
+
+  linux:
+    name: Linux (Server, musl)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Rust installieren
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Cargo-Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Tag mit der Version in Cargo.toml vergleichen
+        run: |
+          VERSION=$(cargo metadata --no-deps --format-version 1 --locked | jq -r '.packages[] | select(.name == "spedhub-server") | .version')
+          if [ "v$VERSION" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Der Tag $GITHUB_REF_NAME passt nicht zur Version $VERSION in Cargo.toml. Erwartet ist der Tag v$VERSION"
+            exit 1
+          fi
+
+      - name: musl-Werkzeuge installieren
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Server bauen (statisch mit musl)
+        run: |
+          cargo build --release --locked -p spedhub-server --target x86_64-unknown-linux-musl
+          BIN=target/x86_64-unknown-linux-musl/release/spedhub-server
+          file "$BIN"
+          file "$BIN" | grep -Eq 'statically linked|static-pie linked'
+          ldd "$BIN" > ldd.txt 2>&1 || true
+          cat ldd.txt
+          if grep -q '=>' ldd.txt; then echo "::error::spedhub-server ist dynamisch gelinkt"; exit 1; fi
+          "$BIN" --version
+          mkdir -p dist
+          cp "$BIN" dist/spedhub-server-linux-x86_64
+          (cd dist && sha256sum spedhub-server-linux-x86_64 > spedhub-server-linux-x86_64.sha256)
+
+      - name: Server hochladen
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-linux
+          path: dist/
+          if-no-files-found: error
+
+  release:
+    name: GitHub-Release
+    needs: [windows, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Artefakte holen
+        uses: actions/download-artifact@v6
+        with:
+          path: artefakte
+          pattern: release-*
+          merge-multiple: true
+
+      - name: Prüfsummen und Release-Notes
+        run: |
+          TAG="$GITHUB_REF_NAME"
+          VERSION="${TAG#v}"
+          SETUP="SpedHub-Setup-$VERSION.exe"
+          SERVER="spedhub-server-linux-x86_64"
+          mkdir -p release
+          cp "artefakte/$SETUP" "artefakte/$SERVER" release/
+
+          # Eine gemeinsame SHA256SUMS.txt, gegen die Teil-Prüfsummen der Bau-Jobs geprüft
+          (cd release && sha256sum "$SETUP" "$SERVER" > SHA256SUMS.txt)
+          cat release/SHA256SUMS.txt
+          grep -F "  $SETUP" artefakte/SHA256SUMS.txt | (cd release && sha256sum -c -)
+          (cd artefakte && sha256sum -c "$SERVER.sha256")
+
+          # Commits seit dem letzten Tag, beim ersten Tag alle
+          PREV=$(git describe --tags --abbrev=0 --match 'v*.*.*' "$TAG^" 2>/dev/null || true)
+          if [ -n "$PREV" ]; then
+            RANGE="$PREV..$TAG"
+            SINCE="seit $PREV"
+          else
+            RANGE="$TAG"
+            SINCE="seit Beginn"
+          fi
+          {
+            echo "## Änderungen $SINCE"
+            echo
+            git log "$RANGE" --no-merges --pretty=format:"- %s"
+            echo
+            echo
+            echo "## Dateien"
+            echo
+            echo "- \`$SETUP\`: Setup für Windows mit Launcher, Plugin und optional dem Server für lokale Tests"
+            echo "- \`$SERVER\`: Server für Linux (x86_64, statisch gelinkt), zum Beispiel für den VPS"
+            echo "- \`SHA256SUMS.txt\`: Prüfsummen. Der Launcher prüft das Setup damit vor dem Start"
+            echo
+            echo "## Prüfsummen"
+            echo
+            echo '```'
+            cat release/SHA256SUMS.txt
+            echo '```'
+          } > notes.md
+          cat notes.md
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Release veröffentlichen
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" release/* \
+            --title "SpedHub $VERSION" \
+            --notes-file notes.md \
+            --verify-tag

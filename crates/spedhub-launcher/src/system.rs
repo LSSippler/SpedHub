@@ -59,6 +59,55 @@ pub fn unprotect(data: &[u8], method: &str) -> Result<Vec<u8>, String> {
     imp::unprotect(data, method)
 }
 
+/// Was die Registry über Steam weiß. Außerhalb von Windows leer.
+pub fn steam_registry() -> crate::steam::RegistryValues {
+    imp::steam_registry()
+}
+
+/// Art einer Meldung im Fenster.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageKind {
+    Info,
+    Warning,
+    Error,
+}
+
+/// Zeigt eine Meldung in einem eigenen Fenster (MessageBox) und wartet auf OK. Für die
+/// Kommandozeile, die keine Oberfläche hat. Außerhalb von Windows auf stderr.
+pub fn message_box(title: &str, text: &str, kind: MessageKind) {
+    imp::message_box(title, text, kind)
+}
+
+/// Fragt mit "Wiederholen" und "Abbrechen". `true` für Wiederholen. Außerhalb von Windows
+/// immer `false`.
+pub fn ask_retry(title: &str, text: &str) -> bool {
+    imp::ask_retry(title, text)
+}
+
+/// Merkt eine Datei zum Löschen beim nächsten Neustart von Windows vor (`MoveFileExW` mit
+/// `MOVEFILE_DELAY_UNTIL_REBOOT`, braucht Adminrechte). Außerhalb von Windows ein Fehler, dort
+/// lassen sich Dateien auch im Gebrauch löschen.
+pub fn delete_on_reboot(path: &std::path::Path) -> Result<(), String> {
+    imp::delete_on_reboot(path)
+}
+
+/// Lässt einen Ordner wählen. `None` bei Abbrechen. Außerhalb von Windows immer `None`.
+pub fn pick_folder(title: &str) -> Option<PathBuf> {
+    imp::pick_folder(title)
+}
+
+/// Startet `exe` mit Adminrechten (UAC, Verb `runas`) und wartet auf das Ende. Liefert den
+/// Exit-Code. Lehnt der Benutzer die Nachfrage ab, gibt es einen Fehler. Außerhalb von Windows
+/// startet es `exe` ohne Weiteres, zum Ausprobieren.
+pub fn run_elevated_and_wait(exe: &std::path::Path, parameters: &str) -> Result<i32, String> {
+    imp::run_elevated_and_wait(exe, parameters)
+}
+
+/// Öffnet eine Datei wie ein Doppelklick, für das geladene Setup.
+pub fn open_path(path: &std::path::Path) -> Result<(), String> {
+    imp::open_path(path)
+}
+
 #[cfg(windows)]
 mod imp {
     use std::{
@@ -66,16 +115,34 @@ mod imp {
         ptr,
     };
     use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE, LocalFree};
+    use windows_sys::Win32::Foundation::{ERROR_CANCELLED, GetLastError};
     use windows_sys::Win32::Security::Cryptography::{
         CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptProtectData, CryptUnprotectData,
     };
+    use windows_sys::Win32::Storage::FileSystem::{MOVEFILE_DELAY_UNTIL_REBOOT, MoveFileExW};
     use windows_sys::Win32::System::Com::CoTaskMemFree;
+    use windows_sys::Win32::System::Com::{
+        COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize,
+    };
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
         TH32CS_SNAPPROCESS,
     };
-    use windows_sys::Win32::UI::Shell::{FOLDERID_Documents, SHGetKnownFolderPath, ShellExecuteW};
-    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    use windows_sys::Win32::System::Registry::{
+        HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RegGetValueW,
+    };
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, INFINITE, WaitForSingleObject,
+    };
+    use windows_sys::Win32::UI::Shell::{
+        BIF_NEWDIALOGSTYLE, BIF_RETURNONLYFSDIRS, BROWSEINFOW, FOLDERID_Documents,
+        SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHBrowseForFolderW, SHELLEXECUTEINFOW,
+        SHGetKnownFolderPath, SHGetPathFromIDListW, ShellExecuteExW, ShellExecuteW,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        IDRETRY, MB_ICONERROR, MB_ICONINFORMATION, MB_ICONWARNING, MB_OK, MB_RETRYCANCEL,
+        MB_SETFOREGROUND, MessageBoxW, SW_SHOWNORMAL,
+    };
 
     pub const DPAPI: &str = "dpapi";
 
@@ -153,6 +220,217 @@ mod imp {
         } else {
             Err(format!(
                 "{url} ließ sich nicht öffnen. Ist Steam installiert? (Code {})",
+                result as isize
+            ))
+        }
+    }
+
+    /// Liest einen Text-Wert aus der Registry, `None`, wenn es ihn nicht gibt.
+    fn reg_string(root: HKEY, key: &str, value: &str) -> Option<String> {
+        let (key, value) = (wide(key), wide(value));
+        let mut size: u32 = 0;
+        // SAFETY: Erster Aufruf nur für die Größe, ohne Puffer.
+        let rc = unsafe {
+            RegGetValueW(
+                root,
+                key.as_ptr(),
+                value.as_ptr(),
+                RRF_RT_REG_SZ,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                &mut size,
+            )
+        };
+        if rc != 0 || size == 0 {
+            return None;
+        }
+        let mut buf = vec![0u16; (size as usize).div_ceil(2) + 1];
+        let mut bytes = (buf.len() * 2) as u32;
+        // SAFETY: buf hat bytes Bytes Platz, die API schreibt höchstens so viel.
+        let rc = unsafe {
+            RegGetValueW(
+                root,
+                key.as_ptr(),
+                value.as_ptr(),
+                RRF_RT_REG_SZ,
+                ptr::null_mut(),
+                buf.as_mut_ptr().cast(),
+                &mut bytes,
+            )
+        };
+        if rc != 0 {
+            return None;
+        }
+        let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+        let text = String::from_utf16_lossy(buf.get(..len).unwrap_or_default());
+        let text = text.trim().to_string();
+        (!text.is_empty()).then_some(text)
+    }
+
+    pub fn steam_registry() -> crate::steam::RegistryValues {
+        crate::steam::RegistryValues {
+            current_user_steam_path: reg_string(
+                HKEY_CURRENT_USER,
+                "Software\\Valve\\Steam",
+                "SteamPath",
+            ),
+            machine_wow64_install_path: reg_string(
+                HKEY_LOCAL_MACHINE,
+                "SOFTWARE\\WOW6432Node\\Valve\\Steam",
+                "InstallPath",
+            ),
+            machine_install_path: reg_string(
+                HKEY_LOCAL_MACHINE,
+                "SOFTWARE\\Valve\\Steam",
+                "InstallPath",
+            ),
+        }
+    }
+
+    pub fn message_box(title: &str, text: &str, kind: super::MessageKind) {
+        let icon = match kind {
+            super::MessageKind::Info => MB_ICONINFORMATION,
+            super::MessageKind::Warning => MB_ICONWARNING,
+            super::MessageKind::Error => MB_ICONERROR,
+        };
+        let (title, text) = (wide(title), wide(text));
+        // SAFETY: Beide Zeichenketten sind nullterminiert und leben bis nach dem Aufruf.
+        unsafe {
+            MessageBoxW(
+                ptr::null_mut(),
+                text.as_ptr(),
+                title.as_ptr(),
+                MB_OK | icon | MB_SETFOREGROUND,
+            )
+        };
+    }
+
+    pub fn ask_retry(title: &str, text: &str) -> bool {
+        let (title, text) = (wide(title), wide(text));
+        // SAFETY: Beide Zeichenketten sind nullterminiert und leben bis nach dem Aufruf.
+        let answer = unsafe {
+            MessageBoxW(
+                ptr::null_mut(),
+                text.as_ptr(),
+                title.as_ptr(),
+                MB_RETRYCANCEL | MB_ICONWARNING | MB_SETFOREGROUND,
+            )
+        };
+        answer == IDRETRY
+    }
+
+    pub fn delete_on_reboot(path: &std::path::Path) -> Result<(), String> {
+        let file: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+        // SAFETY: file ist nullterminiert und lebt bis nach dem Aufruf, kein Ziel heißt löschen.
+        let ok = unsafe { MoveFileExW(file.as_ptr(), ptr::null(), MOVEFILE_DELAY_UNTIL_REBOOT) };
+        if ok == 0 {
+            // SAFETY: direkt nach dem fehlgeschlagenen Aufruf
+            let err = unsafe { GetLastError() };
+            return Err(format!(
+                "{} ließ sich nicht zum Löschen beim Neustart vormerken (Fehler {err})",
+                path.display()
+            ));
+        }
+        Ok(())
+    }
+
+    /// Ordnerdialog der Shell (SHBrowseForFolderW). windows-sys bringt keine
+    /// COM-Schnittstellen mit, IFileOpenDialog bräuchte eine selbst gebaute vtable.
+    pub fn pick_folder(title: &str) -> Option<PathBuf> {
+        // SAFETY: COM für diesen Thread, der Dialog braucht es. Wird unten wieder beendet.
+        let hr = unsafe { CoInitializeEx(ptr::null(), COINIT_APARTMENTTHREADED as u32) };
+        let title = wide(title);
+        let mut display = vec![0u16; 260];
+        let info = BROWSEINFOW {
+            hwndOwner: ptr::null_mut(),
+            pidlRoot: ptr::null_mut(),
+            pszDisplayName: display.as_mut_ptr(),
+            lpszTitle: title.as_ptr(),
+            ulFlags: BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE,
+            lpfn: None,
+            lParam: 0,
+            iImage: 0,
+        };
+        // SAFETY: info zeigt auf gültige Puffer, die bis nach dem Aufruf leben.
+        let pidl = unsafe { SHBrowseForFolderW(&info) };
+        let result = if pidl.is_null() {
+            None
+        } else {
+            // MAX_PATH reicht laut Dokumentation von SHGetPathFromIDListW
+            let mut path = vec![0u16; 260];
+            // SAFETY: pidl kommt vom Dialog, path hat MAX_PATH Zeichen Platz.
+            let ok = unsafe { SHGetPathFromIDListW(pidl, path.as_mut_ptr()) } != 0;
+            // SAFETY: Den pidl gibt der Aufrufer mit CoTaskMemFree frei.
+            unsafe { CoTaskMemFree(pidl.cast()) };
+            ok.then(|| {
+                let len = path.iter().position(|&c| c == 0).unwrap_or(path.len());
+                PathBuf::from(OsString::from_wide(path.get(..len).unwrap_or_default()))
+            })
+        };
+        if hr >= 0 {
+            // SAFETY: passt zum erfolgreichen CoInitializeEx oben.
+            unsafe { CoUninitialize() };
+        }
+        result
+    }
+
+    pub fn run_elevated_and_wait(exe: &std::path::Path, parameters: &str) -> Result<i32, String> {
+        let verb = wide("runas");
+        let file: Vec<u16> = exe.as_os_str().encode_wide().chain([0]).collect();
+        let params = wide(parameters);
+        // SAFETY: Ein reines Datenstruct, Nullen sind ein gültiger Anfang.
+        let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
+        info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
+        info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC;
+        info.lpVerb = verb.as_ptr();
+        info.lpFile = file.as_ptr();
+        info.lpParameters = params.as_ptr();
+        info.nShow = SW_SHOWNORMAL;
+        // SAFETY: Alle Zeiger in info leben bis nach dem Aufruf.
+        let ok = unsafe { ShellExecuteExW(&mut info) } != 0;
+        if !ok {
+            // SAFETY: direkt nach dem fehlgeschlagenen Aufruf
+            let err = unsafe { GetLastError() };
+            return Err(if err == ERROR_CANCELLED {
+                "Die Nachfrage nach Adminrechten wurde abgelehnt, das Plugin ist nicht installiert"
+                    .into()
+            } else {
+                format!("Der Launcher ließ sich nicht mit Adminrechten starten (Fehler {err})")
+            });
+        }
+        if info.hProcess.is_null() {
+            return Err("Der Launcher mit Adminrechten lässt sich nicht verfolgen".into());
+        }
+        let mut code: u32 = 1;
+        // SAFETY: hProcess gehört uns (SEE_MASK_NOCLOSEPROCESS) und wird unten geschlossen.
+        unsafe {
+            WaitForSingleObject(info.hProcess, INFINITE);
+            GetExitCodeProcess(info.hProcess, &mut code);
+            CloseHandle(info.hProcess);
+        }
+        Ok(code as i32)
+    }
+
+    pub fn open_path(path: &std::path::Path) -> Result<(), String> {
+        let op = wide("open");
+        let file: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+        // SAFETY: Alle Zeichenketten sind nullterminiert und leben bis nach dem Aufruf.
+        let result = unsafe {
+            ShellExecuteW(
+                ptr::null_mut(),
+                op.as_ptr(),
+                file.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                SW_SHOWNORMAL,
+            )
+        };
+        if result as isize > 32 {
+            Ok(())
+        } else {
+            Err(format!(
+                "{} ließ sich nicht öffnen (Code {})",
+                path.display(),
                 result as isize
             ))
         }
@@ -253,6 +531,46 @@ mod imp {
             .spawn()
             .map(|_| ())
             .map_err(|e| format!("{url} ließ sich nicht öffnen: {e}"))
+    }
+
+    pub fn steam_registry() -> crate::steam::RegistryValues {
+        crate::steam::RegistryValues::default()
+    }
+
+    pub fn message_box(title: &str, text: &str, _kind: super::MessageKind) {
+        eprintln!("{title}: {text}");
+    }
+
+    pub fn ask_retry(title: &str, text: &str) -> bool {
+        eprintln!("{title}: {text}");
+        false
+    }
+
+    pub fn delete_on_reboot(path: &std::path::Path) -> Result<(), String> {
+        Err(format!(
+            "{}: Löschen beim Neustart gibt es nur unter Windows",
+            path.display()
+        ))
+    }
+
+    pub fn pick_folder(_title: &str) -> Option<PathBuf> {
+        None
+    }
+
+    pub fn run_elevated_and_wait(exe: &std::path::Path, parameters: &str) -> Result<i32, String> {
+        let status = std::process::Command::new(exe)
+            .args(parameters.split_whitespace())
+            .status()
+            .map_err(|e| format!("{} ließ sich nicht starten: {e}", exe.display()))?;
+        Ok(status.code().unwrap_or(1))
+    }
+
+    pub fn open_path(path: &std::path::Path) -> Result<(), String> {
+        std::process::Command::new("xdg-open")
+            .arg(path)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("{} ließ sich nicht öffnen: {e}", path.display()))
     }
 
     pub fn protect(data: &[u8]) -> Result<(Vec<u8>, &'static str), String> {

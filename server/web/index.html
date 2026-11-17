@@ -90,8 +90,11 @@
   .stand { font-weight: 600; }
   .stand.frei { color: var(--frei); }
   .stand.weg { color: var(--weg); }
+  .stand.werkstatt { color: var(--fehler); }
+  .schaden.hoch { color: var(--fehler); font-weight: 600; }
+  .knoepfe { display: flex; flex-wrap: wrap; gap: .5rem; justify-content: flex-end; }
   .rueckgabe { grid-column: 1 / -1; background: var(--papier); border: 1px solid var(--rand); padding: .75rem; margin-top: .5rem; }
-  @media (max-width: 34rem) { .lkw { grid-template-columns: minmax(0, 1fr); } }
+  @media (max-width: 34rem) { .lkw { grid-template-columns: minmax(0, 1fr); } .knoepfe { justify-content: flex-start; } }
 
   table { border-collapse: collapse; width: 100%; }
   th, td { text-align: left; padding: .45rem .75rem .45rem 0; border-bottom: 1px solid var(--rand); }
@@ -130,6 +133,32 @@
   .code { font-size: 1.56rem; font-weight: 700; letter-spacing: .12em; }
   details > summary { cursor: pointer; font-weight: 600; font-stretch: 80%; font-size: 1.125rem; }
   details[open] > summary { margin-bottom: .75rem; }
+
+  /* Online-Punkt bei den Fahrern */
+  .punkt { display: inline-block; width: .65rem; height: .65rem; border-radius: 50%; background: var(--rand);
+           margin-right: .4rem; vertical-align: baseline; }
+  .punkt.an { background: var(--frei); }
+  .fremd { color: var(--weg); font-weight: 600; }
+  .faehrt { color: var(--frei); font-weight: 600; }
+  #fahrer td { vertical-align: top; }
+  .unterwegs { min-width: 12rem; }
+  .wer-name { white-space: nowrap; }
+
+  dialog { border: 1px solid var(--rand); padding: 1.25rem; max-width: min(26rem, calc(100vw - 2rem)); background: var(--papier); color: inherit; }
+  dialog::backdrop { background: rgba(30, 42, 50, .35); }
+  dialog .fehlertext { color: var(--fehler); }
+
+  /* Ausgemustert und verkauft: eingeklappt unter dem Fuhrpark */
+  .abgaenge { margin-top: 1.25rem; }
+  .abgaenge .lkw { opacity: .8; }
+  .abgaenge .kz { font-size: 1.15rem; }
+  .stand.raus { color: var(--blass); }
+  /* Kleine Knöpfe im Kassenbuch */
+  .buch td button.mini { padding: .15rem .5rem; font-size: .8125rem; font-weight: 600; white-space: normal; text-align: left; margin-top: .25rem; }
+  .buch td .verknuepfen { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; margin-top: .35rem; }
+  .buch td .verknuepfen select { width: auto; max-width: 100%; padding: .2rem .35rem; font-size: .875rem; }
+  .budget-stand { margin-bottom: .75rem; }
+  .budget-stand .rest { font-size: 1.56rem; font-weight: 700; font-stretch: 80%; }
 
   #meldung { position: fixed; left: 50%; bottom: 1.25rem; transform: translateX(-50%); max-width: min(34rem, 92vw);
              padding: .7rem 1rem; background: var(--plane); color: #fff; border-radius: 3px; }
@@ -175,7 +204,11 @@ const speicher = {
 };
 
 const zustand = { token: speicher.get("token"), ich: null, firmaId: null, firma: null, lkw: [], buch: null, rueckgabe: null,
-                  laeufe: [], ungeklaert: [], offen: new Set() };
+                  laeufe: [], ungeklaert: [], offen: new Set(),
+                  // Verkaufen oder ausmustern: { id, art: "verkauf" | "ausmustern" }
+                  abgang: null, abgaengeOffen: false,
+                  // Kassenbuch: Buchung, die gerade als Lkw-Kauf verknüpft wird
+                  verknuepfen: null };
 let takt = null;
 
 class ApiFehler extends Error { constructor(status, text) { super(text); this.status = status; } }
@@ -224,6 +257,7 @@ async function versuche(aktion, knopf) {
 const euro = (n) => new Intl.NumberFormat("de-DE").format(n) + "\u00a0€";
 const km = (n) => new Intl.NumberFormat("de-DE").format(n) + "\u00a0km";
 const uhrzeit = (s) => new Date(s * 1000).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
+const datum = (s) => new Date(s * 1000).toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" });
 function wann(s) {
   const d = new Date(s * 1000);
   const heute = new Date().toDateString() === d.toDateString();
@@ -234,10 +268,15 @@ const modellName = (m) => m.split(/[._]/).filter(Boolean)
   .map((w) => (w.length <= 3 ? w.toUpperCase() : w[0].toUpperCase() + w.slice(1))).join(" ");
 
 const ARTEN = { lohn: "Lohnanteil (altes Modell)", auftrag: "Auftrag", strafe: "Strafe", maut: "Maut", faehre: "Fähre", zug: "Zug",
-                auftrag_abgebrochen: "Auftrag abgebrochen", ueberweisung: "Überweisung", betriebskosten: "Betriebskosten" };
+                auftrag_abgebrochen: "Auftrag abgebrochen", ueberweisung: "Überweisung", betriebskosten: "Betriebskosten",
+                betriebskosten_korrektur: "Betriebskosten, Korrektur", werkstatt: "Werkstatt", haftung: "Haftung",
+                lkw_verkauf: "Lkw-Verkauf" };
 /** "2026-11-16" wird zu "16.11.2026". */
 const tag = (d) => d.split("-").reverse().join(".");
 const cent = (n) => new Intl.NumberFormat("de-DE").format(n) + "\u00a0ct";
+/** Schaden mit höchstens einer Nachkommastelle: 12,5 %. */
+const zehntel = (n) => new Intl.NumberFormat("de-DE", { maximumFractionDigits: 1 }).format(n);
+const prozent = (n) => zehntel(n) + "\u00a0%";
 
 function feld(beschriftung, eingabe, klasse) {
   if (!eingabe.id) eingabe.id = "f" + Math.random().toString(36).slice(2, 9);
@@ -259,7 +298,50 @@ function zeigeKopf() {
   const rolle = zustand.firma ? (zustand.firma.your_role === "chef" ? "Chef" : "Fahrer") : null;
   wer.append(h("span", {}, zustand.ich.name, rolle ? ", " + rolle : ""));
   if (zustand.firma) wer.append(h("button", { class: "leise", onclick: () => versuche(zeigeFirmenwahl) }, "Firma wechseln"));
+  wer.append(h("button", { class: "leise", onclick: zeigePasswort }, "Passwort ändern"));
   wer.append(h("button", { class: "leise", onclick: (e) => versuche(abmelden, e.target) }, "Abmelden"));
+}
+
+/** Kleiner Dialog zum Ändern des Passworts. Danach sind alle anderen Anmeldungen ungültig. */
+function zeigePasswort() {
+  const alt = h("input", { type: "password", required: true, autocomplete: "current-password" });
+  const neu = h("input", { type: "password", required: true, minlength: 8, autocomplete: "new-password" });
+  const nochmal = h("input", { type: "password", required: true, minlength: 8, autocomplete: "new-password" });
+  const fehler = h("p", { class: "fehlertext klein", role: "alert" });
+  const dialog = h("dialog", { "aria-labelledby": "pwtitel" });
+  const zu = () => { dialog.close(); dialog.remove(); };
+  const senden = async (e) => {
+    e.preventDefault();
+    fehler.textContent = "";
+    if (neu.value !== nochmal.value) { fehler.textContent = "Die Wiederholung passt nicht zum neuen Passwort."; return; }
+    const knopf = e.submitter;
+    if (knopf) knopf.disabled = true;
+    try {
+      await api("POST", "/api/me/password", { old_password: alt.value, new_password: neu.value });
+      zu();
+      melde("Passwort geändert. Alle anderen Anmeldungen mit diesem Konto sind abgemeldet, auch Launcher und Plugin. Hier bleibst du angemeldet.");
+    } catch (err) {
+      if (err instanceof ApiFehler && err.status === 401) { zu(); abmeldenLokal(); melde("Deine Anmeldung ist abgelaufen. Melde dich neu an.", true); }
+      else fehler.textContent = err.message || String(err);
+    } finally {
+      if (knopf) knopf.disabled = false;
+    }
+  };
+  dialog.append(
+    h("h2", { id: "pwtitel" }, "Passwort ändern"),
+    h("p", { class: "klein blass" }, "Danach sind alle anderen Anmeldungen mit diesem Konto abgemeldet, auch Launcher und Plugin auf diesem und anderen Rechnern. Melde dich danach im Launcher neu an und starte das Spiel neu."),
+    h("form", { onsubmit: senden },
+      feld("Altes Passwort", alt),
+      feld("Neues Passwort, mindestens 8 Zeichen", neu),
+      feld("Neues Passwort wiederholen", nochmal),
+      fehler,
+      h("div", { class: "zeile" },
+        h("button", {}, "Passwort ändern"),
+        h("button", { type: "button", class: "leise", onclick: zu }, "Abbrechen"))));
+  dialog.addEventListener("cancel", () => setTimeout(() => dialog.remove(), 0));
+  document.body.append(dialog);
+  dialog.showModal();
+  alt.focus();
 }
 
 // ---------------------------------------------------------------- Anmelden
@@ -357,7 +439,7 @@ async function ladeFirma() {
 
 async function oeffneFirma(id) {
   clearInterval(takt);
-  zustand.firmaId = id; zustand.rueckgabe = null;
+  zustand.firmaId = id; zustand.rueckgabe = null; zustand.abgang = null; zustand.verknuepfen = null;
   await ladeFirma();
   speicher.set("firma", String(id));
   baueFirma();
@@ -382,7 +464,7 @@ function baueFirma() {
     h("div", { class: "stapel" },
       h("section", {},
         h("h2", {}, "Fuhrpark"),
-        h("p", { class: "blass klein" }, "Ausleihen sperrt den Lkw für alle anderen. In den Spielstand schreibt ihn später der Launcher."),
+        h("p", { class: "blass klein", id: "fuhrpark-hinweis" }),
         h("div", { id: "fuhrpark" })),
       h("section", {}, h("h2", {}, "Fahrer"), h("div", { id: "fahrer" })),
       chef ? baueBuero() : null,
@@ -394,10 +476,13 @@ function baueFirma() {
 function zeichneDaten() {
   if (!zustand.firma || !$("fuhrpark")) return;
   zeigeKopf();
-  if (zustand.rueckgabe == null) zeichneFuhrpark();
+  // Wo gerade jemand etwas eingibt, wird nicht neu gezeichnet
+  if (zustand.rueckgabe == null && zustand.abgang == null) zeichneFuhrpark();
   zeichneFahrer();
-  zeichneBuch();
+  if (zustand.verknuepfen == null) zeichneBuch();
+  zeichneBudget();
   fuelleFahrerwahl();
+  fuelleKennzeichen();
 }
 
 // ---- Fuhrpark
@@ -405,74 +490,227 @@ function zeichneDaten() {
 function zeichneFuhrpark() {
   const chef = zustand.firma.your_role === "chef";
   const box = $("fuhrpark");
-  if (!zustand.lkw.length) {
-    box.replaceChildren(h("p", {}, chef
+  $("fuhrpark-hinweis").textContent = "Ausleihen sperrt den Lkw für alle anderen. In den Spielstand schreibt ihn später der Launcher. "
+    + "Liegt der Schaden nach der Rückgabe über " + prozent(zustand.firma.damage_limit)
+    + ", kommt der Lkw in die Werkstatt und lässt sich erst nach der Reparatur wieder ausleihen.";
+  const aktiv = zustand.lkw.filter((t) => !t.retired);
+  const raus = zustand.lkw.filter((t) => t.retired);
+  const inhalt = [];
+  if (!aktiv.length) {
+    inhalt.push(h("p", {}, chef
       ? "Noch kein Lkw im Fuhrpark. Leg unten im Büro den ersten an."
       : "Noch kein Lkw im Fuhrpark. Der Chef legt die Lkw an."));
-    return;
   }
-  box.replaceChildren(...zustand.lkw.map((t) => {
-    const bei = t.leased_by;
-    const meiner = bei && bei.user_id === zustand.ich.user_id;
-    let knopf = null;
-    if (!bei) {
-      knopf = h("button", { onclick: (e) => versuche(async () => {
-        await api("POST", "/api/trucks/" + t.id + "/checkout");
-        await auffrischen();
-        melde(t.plate + " ist jetzt an dich verliehen.");
-      }, e.target) }, "Ausleihen");
-    } else if (meiner || chef) {
-      knopf = h("button", { class: "leise", onclick: () => { zustand.rueckgabe = t.id; zeichneFuhrpark(); } },
-        meiner ? "Zurückgeben" : "Zurücknehmen");
+  inhalt.push(...aktiv.map((t) => lkwZeile(t, chef)));
+  if (raus.length) {
+    // Ausgemustert und verkauft: eingeklappt, nur zum Nachsehen
+    const details = h("details", { class: "abgaenge", open: zustand.abgaengeOffen },
+      h("summary", {}, "Ausgemustert und verkauft (" + raus.length + ")"),
+      h("p", { class: "klein blass" }, "Diese Lkw lassen sich nicht mehr ausleihen. Ihre Buchungen bleiben im Kassenbuch."),
+      raus.map(abgangZeile));
+    details.addEventListener("toggle", () => { zustand.abgaengeOffen = details.open; });
+    inhalt.push(details);
+  }
+  box.replaceChildren(...inhalt);
+}
+
+/** Ein ausgemusterter oder verkaufter Lkw: Grund, Datum, beim Verkauf der Erlös. */
+function abgangZeile(t) {
+  const r = t.retired;
+  const was = r.reason === "verkauft"
+    ? "verkauft am " + datum(r.at) + (r.sale_price ? " für " + euro(r.sale_price) : "")
+    : "ausgemustert am " + datum(r.at);
+  return h("div", { class: "lkw" },
+    h("div", {}, h("span", { class: "kz" }, h("span", {}, t.plate))),
+    h("div", {},
+      h("div", { class: "modell" }, modellName(t.model)),
+      h("div", { class: "klein" }, km(t.odometer_km), ", ", h("span", { class: "stand raus" }, was)),
+      t.old_plates.length ? h("div", { class: "klein blass" }, "früher " + t.old_plates.join(", ")) : null),
+    h("div", {}));
+}
+
+function lkwZeile(t, chef) {
+  const bei = t.leased_by;
+  const meiner = bei && bei.user_id === zustand.ich.user_id;
+  const knoepfe = [];
+  if (!bei && !t.in_workshop) {
+    knoepfe.push(h("button", { onclick: (e) => versuche(async () => {
+      await api("POST", "/api/trucks/" + t.id + "/checkout");
+      await auffrischen();
+      melde(t.plate + " ist jetzt an dich verliehen.");
+    }, e.target) }, "Ausleihen"));
+  } else if (bei && (meiner || chef)) {
+    knoepfe.push(h("button", { class: "leise", onclick: () => { zustand.rueckgabe = t.id; zeichneFuhrpark(); } },
+      meiner ? "Zurückgeben" : "Zurücknehmen"));
+  }
+  // Werkstatt: nur der Chef, nur bei einem Lkw mit Schaden, der gerade nicht verliehen ist
+  if (chef && !bei && t.damage > 0) {
+    knoepfe.push(h("button", { class: t.in_workshop ? "" : "leise", onclick: (e) => versuche(async () => {
+      const r = await api("POST", "/api/trucks/" + t.id + "/repair", {});
+      await auffrischen();
+      melde(t.plate + " ist repariert" + (r.cost ? ", " + euro(r.cost) + " aus der Firmenkasse" : "") + ". Der Lkw ist wieder frei.");
+    }, e.target) }, "Reparieren lassen, " + euro(t.repair_cost)));
+  }
+  // Verkaufen und ausmustern: nur der Chef, nur wenn der Lkw nicht verliehen ist
+  if (chef && !bei) {
+    for (const [art, text] of [["verkauf", "Verkaufen"], ["ausmustern", "Ausmustern"]]) {
+      knoepfe.push(h("button", { class: "leise", onclick: () => { zustand.abgang = { id: t.id, art }; zeichneFuhrpark(); } }, text));
     }
-    const zeile = h("div", { class: "lkw" },
-      h("div", {}, h("span", { class: "kz" }, h("span", {}, t.plate))),
-      h("div", {},
-        h("div", { class: "modell" }, modellName(t.model)),
-        h("div", { class: "klein" }, km(t.odometer_km), ", ",
-          bei ? h("span", { class: "stand weg" }, meiner ? "bei dir" : "bei " + bei.name, " seit " + wann(bei.since))
-              : h("span", { class: "stand frei" }, "frei"))),
-      h("div", {}, zustand.rueckgabe === t.id ? null : knopf));
-    if (zustand.rueckgabe === t.id) zeile.append(baueRueckgabe(t));
-    return zeile;
-  }));
+  }
+  // Aus dem Herzschlag: der Ausleiher fährt gerade genau diesen Lkw
+  const faehrt = t.driving
+    ? h("div", { class: "klein faehrt" }, "wird gerade gefahren"
+        + (t.speed_kmh != null ? ", " + Math.round(t.speed_kmh) + " km/h" : "")
+        + (t.near_city ? ", bei " + t.near_city : ""))
+    : null;
+  // Nur der Chef sieht, wer einen Lkw fährt, ohne ihn geliehen zu haben
+  const fremd = (t.foreign_drivers || []).map((d) =>
+    h("div", { class: "klein fremd" }, d.name + " fährt diesen Lkw, ohne ihn geliehen zu haben"));
+  // Schaden aus dem Zustand der letzten Rückgabe. Dauerhafter Verschleiß lässt sich nicht reparieren.
+  const ueber = t.damage > zustand.firma.damage_limit;
+  const schaden = h("div", { class: "klein schaden" + (ueber ? " hoch" : "") },
+    "Schaden " + prozent(t.damage) + (t.damage_unfixable > 0 ? ", dauerhaft " + prozent(t.damage_unfixable) : ""));
+  const werkstatt = t.in_workshop && !chef
+    ? h("div", { class: "klein blass" }, "Ausleihen geht erst wieder, wenn der Chef ihn reparieren lässt.")
+    : null;
+  const stand = bei
+    ? h("span", { class: "stand weg" }, meiner ? "bei dir" : "bei " + bei.name, " seit " + wann(bei.since))
+    : t.in_workshop ? h("span", { class: "stand werkstatt" }, "in der Werkstatt")
+    : h("span", { class: "stand frei" }, "frei");
+  const offen = zustand.rueckgabe === t.id || (zustand.abgang && zustand.abgang.id === t.id);
+  const zeile = h("div", { class: "lkw" },
+    h("div", {}, h("span", { class: "kz" }, h("span", {}, t.plate))),
+    h("div", {},
+      h("div", { class: "modell" }, modellName(t.model)),
+      h("div", { class: "klein" }, km(t.odometer_km), ", ", stand),
+      schaden, werkstatt, faehrt, fremd),
+    h("div", { class: "knoepfe" }, offen ? null : knoepfe));
+  if (zustand.rueckgabe === t.id) zeile.append(baueRueckgabe(t));
+  if (zustand.abgang && zustand.abgang.id === t.id) zeile.append(baueAbgang(t, zustand.abgang.art));
+  return zeile;
+}
+
+/** Verkaufen (mit Erlös) oder ausmustern (mit Bestätigung). */
+function baueAbgang(t, art) {
+  const zu = () => { zustand.abgang = null; zeichneFuhrpark(); };
+  const fertig = async (r, text) => {
+    zustand.abgang = null;
+    await auffrischen();
+    melde(text);
+  };
+  if (art === "verkauf") {
+    const erloes = h("input", { type: "number", min: 0, max: 1000000000, required: true, value: 0 });
+    setTimeout(() => erloes.select(), 0);
+    return h("div", { class: "rueckgabe" },
+      h("p", { class: "klein" }, "Der Erlös geht in die Firmenkasse. Danach lässt sich " + t.plate
+        + " nicht mehr ausleihen, Buchungen und alte Kennzeichen bleiben."),
+      formular(async () => {
+          const preis = Number(erloes.value);
+          const r = await api("POST", "/api/trucks/" + t.id + "/sell", { price: preis });
+          await fertig(r, t.plate + " ist verkauft" + (preis ? ", " + euro(preis) + " in der Firmenkasse." : "."));
+        },
+        h("div", { class: "zeile" },
+          feld("Erlös in Euro", erloes),
+          h("button", {}, "Verkauf buchen"),
+          h("button", { type: "button", class: "leise", onclick: zu }, "Abbrechen"))));
+  }
+  return h("div", { class: "rueckgabe" },
+    h("p", { class: "klein" }, t.plate + " ausmustern? Er lässt sich danach nicht mehr ausleihen und steht unter "
+      + "\u201eAusgemustert und verkauft\u201c. Buchungen und alte Kennzeichen bleiben. Gebucht wird nichts."),
+    h("div", { class: "zeile" },
+      h("button", { type: "button", onclick: (e) => versuche(async () => {
+        const r = await api("POST", "/api/trucks/" + t.id + "/retire", {});
+        await fertig(r, t.plate + " ist ausgemustert.");
+      }, e.target) }, "Ausmustern bestätigen"),
+      h("button", { type: "button", class: "leise", onclick: zu }, "Abbrechen")));
+}
+
+/** Meldung nach einer Rückgabe: Schaden, Haftung und ob der Lkw jetzt in der Werkstatt steht. */
+function nachRueckgabe(t, r, anfang) {
+  let text = anfang + " Schaden " + prozent(r.damage) + ".";
+  if (r.liability > 0) {
+    const wer = r.liability_user_id === zustand.ich.user_id ? "deinem Lohnkonto"
+      : "dem Lohnkonto von " + ((t.leased_by && t.leased_by.name) || "dem Fahrer");
+    text += " Haftung für " + zehntel(r.damage_new) + " Prozentpunkte neuen Schaden: " + euro(r.liability) + " von " + wer + ".";
+  }
+  if (r.in_workshop) text += " Das ist über der Grenze von " + prozent(r.damage_limit) + ", der Lkw steht jetzt in der Werkstatt.";
+  melde(text);
 }
 
 function baueRueckgabe(t) {
+  const chef = zustand.firma.your_role === "chef";
+  const meiner = t.leased_by && t.leased_by.user_id === zustand.ich.user_id;
   const stand = h("input", { type: "number", min: t.odometer_km, value: t.odometer_km, required: true });
   const zu = () => { zustand.rueckgabe = null; zeichneFuhrpark(); };
+  // Ohne Kilometerstand nimmt nur der Chef zurück, mit dem letzten bekannten Zustand aus dem Herzschlag
+  const letzter = chef && !meiner && t.last_known
+    ? h("div", { style: "margin-top: .75rem" },
+        h("p", { class: "klein" }, "Letzter bekannter Zustand von " + wann(t.last_known.at)
+          + (t.last_known.odometer_km != null ? ", " + km(t.last_known.odometer_km) : "")
+          + ". Gedacht für den Fall, dass der Fahrer abgestürzt ist und keinen Spielstand mehr liefern kann."),
+        h("button", { type: "button", class: "leise", onclick: (e) => versuche(async () => {
+          const r = await api("POST", "/api/trucks/" + t.id + "/checkin", {});
+          zustand.rueckgabe = null;
+          await auffrischen();
+          nachRueckgabe(t, r, t.plate + " ist zurück mit dem letzten bekannten Zustand von " + wann(r.from_last_known.at) + ", " + km(r.driven_km) + " gefahren.");
+        }, e.target) }, "Mit letztem bekanntem Zustand zurücknehmen"))
+    : null;
   const form = formular(async () => {
       const r = await api("POST", "/api/trucks/" + t.id + "/checkin", { odometer_km: Number(stand.value) });
       zustand.rueckgabe = null;
       await auffrischen();
-      melde(t.plate + " ist zurück, " + km(r.driven_km) + " gefahren.");
+      nachRueckgabe(t, r, t.plate + " ist zurück, " + km(r.driven_km) + " gefahren.");
     },
     h("div", { class: "zeile" },
       feld("Kilometerstand bei Rückgabe", stand),
       h("button", {}, "Rückgabe buchen"),
       h("button", { type: "button", class: "leise", onclick: zu }, "Abbrechen")));
   setTimeout(() => stand.select(), 0);
-  return h("div", { class: "rueckgabe" }, form);
+  return h("div", { class: "rueckgabe" }, form, letzter);
 }
 
 // ---- Fahrer
+
+/** Wo ein Fahrer gerade ist, aus dem letzten Herzschlag. */
+function unterwegs(m) {
+  if (!m.online) return null;
+  const teile = [];
+  if (m.plate) teile.push(h("div", {}, "Lkw " + m.plate
+    + (m.speed_kmh != null ? ", " + Math.round(m.speed_kmh) + " km/h" : "")));
+  if (m.near_city) teile.push(h("div", { class: "klein" }, "bei " + m.near_city));
+  if (m.job) {
+    const j = m.job;
+    const strecke = j.source_city && j.target_city ? j.source_city + " nach " + j.target_city
+      : j.target_city ? "nach " + j.target_city : j.source_city ? "von " + j.source_city : "";
+    teile.push(h("div", { class: "klein" }, "Auftrag: " + [j.cargo, strecke].filter(Boolean).join(", ")));
+  } else {
+    teile.push(h("div", { class: "klein blass" }, "kein Auftrag"));
+  }
+  if (m.foreign_truck) teile.push(h("div", { class: "klein fremd" }, "fährt fremden Lkw " + m.foreign_truck.plate));
+  return teile;
+}
 
 function zeichneFahrer() {
   const zahl = (inhalt, minus) => h("td", { class: "zahl" + (minus ? " minus" : "") }, inhalt);
   $("fahrer").replaceChildren(
     h("div", { style: "overflow-x: auto" }, h("table", {},
-      h("thead", {}, h("tr", {}, h("th", {}, "Name"), h("th", {}, "Rolle"), h("th", { class: "zahl" }, "Level"),
+      h("thead", {}, h("tr", {}, h("th", {}, "Name"), h("th", {}, "Rolle"), h("th", {}, "Unterwegs"),
+        h("th", { class: "zahl" }, "Level"),
         h("th", { class: "zahl" }, "Firmen-km"), h("th", {}, "Lohnstufe"), h("th", { class: "zahl" }, "Lohnkonto"),
         h("th", { class: "zahl" }, "Offener Lohn"))),
       h("tbody", {}, zustand.firma.members.map((m) => h("tr", {},
-        h("td", {}, m.name),
+        h("td", {},
+          h("div", { class: "wer-name" }, h("span", { class: "punkt" + (m.online ? " an" : ""), "aria-hidden": "true" }), m.name),
+          h("div", { class: "klein blass wer-name" }, m.online ? "online"
+            : m.last_seen != null ? "zuletzt " + wann(m.last_seen) : "noch nie im Spiel")),
         h("td", {}, m.role === "chef" ? "Chef" : "Fahrer"),
+        h("td", { class: "unterwegs" }, unterwegs(m)),
         zahl(m.xp == null ? "?" : String(m.game_level)),
         zahl(km(m.company_km)),
         h("td", {}, m.stage == null ? "keine" : "Stufe " + m.stage + ", " + cent(m.cents_per_km) + " je km"),
         zahl(euro(m.wallet), m.wallet < 0),
         zahl(m.open_claim ? euro(m.open_claim) : "", m.open_claim > 0)))))),
-    h("p", { class: "klein blass" }, "Das Level kommt mit dem Geldabgleich aus dem Spielstand. Ein Fragezeichen heißt: noch kein Abgleich."));
+    h("p", { class: "klein blass" }, "Online ist, wessen Spiel sich in den letzten 30 Sekunden gemeldet hat. Das Level kommt mit dem Geldabgleich aus dem Spielstand. Ein Fragezeichen heißt: noch kein Abgleich."));
 }
 
 // ---- Kassenbuch
@@ -523,6 +761,41 @@ function baueUngeklaert() {
       }, e.target) }, "Schließen")))));
 }
 
+/** Als Lkw-Kauf verknüpfen: Knopf an unverknüpften Betriebskosten, Lösen an verknüpften (nur Chef). */
+function kaufKnoepfe(e) {
+  if (zustand.firma.your_role !== "chef") return null;
+  const id = zustand.firmaId;
+  if (e.truck_id != null) {
+    return h("button", { type: "button", class: "leise mini", onclick: (ev) => versuche(async () => {
+      await api("DELETE", "/api/companies/" + id + "/ledger/" + e.id + "/link-truck");
+      await auffrischen();
+      melde("Verknüpfung gelöst. Die Buchung steht wieder als Betriebskosten im Kassenbuch.");
+    }, ev.target) }, "Verknüpfung lösen");
+  }
+  if (e.kind !== "betriebskosten" || e.account !== "firma") return null;
+  if (zustand.verknuepfen !== e.id) {
+    return h("button", { type: "button", class: "leise mini", onclick: () => { zustand.verknuepfen = e.id; zeichneBuch(); } },
+      "Als Lkw-Kauf verknüpfen");
+  }
+  const aktiv = zustand.lkw.filter((t) => !t.retired);
+  const raus = zustand.lkw.filter((t) => t.retired);
+  const wahl = h("select", { "aria-label": "Welcher Lkw wurde gekauft" },
+    aktiv.concat(raus).map((t) => h("option", { value: t.id }, t.plate + (t.retired ? " (nicht mehr im Fuhrpark)" : ""))));
+  const zu = () => { zustand.verknuepfen = null; zeichneBuch(); };
+  if (!zustand.lkw.length) {
+    return h("div", { class: "verknuepfen" }, h("span", { class: "klein blass" }, "Noch kein Lkw im Fuhrpark."),
+      h("button", { type: "button", class: "leise mini", onclick: zu }, "Abbrechen"));
+  }
+  return h("div", { class: "verknuepfen" }, wahl,
+    h("button", { type: "button", class: "mini", onclick: (ev) => versuche(async () => {
+      const r = await api("POST", "/api/companies/" + id + "/ledger/" + e.id + "/link-truck", { truck_id: Number(wahl.value) });
+      zustand.verknuepfen = null;
+      await auffrischen();
+      melde("Verknüpft. Im Kassenbuch steht jetzt Lkw-Kauf " + r.truck_plate + ".");
+    }, ev.target) }, "Verknüpfen"),
+    h("button", { type: "button", class: "leise mini", onclick: zu }, "Abbrechen"));
+}
+
 function zeichneBuch() {
   const ich = zustand.firma.members.find((m) => m.user_id === zustand.ich.user_id);
   // Buchungen einer Lohnabrechnung stehen nicht einzeln da, sondern als eine Zeile je Abrechnung.
@@ -534,13 +807,19 @@ function zeichneBuch() {
     if (l) return laufZeilen(l);
     const betrag = h("span", { class: e.amount < 0 ? "minus" : "" }, (e.amount > 0 ? "+" : "") + euro(e.amount));
     const zusatz = [];
+    if (e.cargo) zusatz.push(e.cargo);
+    if (e.source_city && e.target_city) zusatz.push(e.source_city + " nach " + e.target_city);
+    else if (e.target_city) zusatz.push("nach " + e.target_city);
+    else if (e.source_city) zusatz.push("von " + e.source_city);
     if (e.distance_km != null) zusatz.push(km(e.distance_km));
     if (e.game_amount != null && e.game_amount !== e.amount && e.kind === "auftrag") zusatz.push("im Spiel " + euro(e.game_amount));
     if (e.note) zusatz.push(e.note);
-    const text = [ARTEN[e.kind] || e.kind, e.user ? ", " + e.user : "", zusatz.length ? " (" + zusatz.join(", ") + ")" : ""].join("");
+    // Als Lkw-Kauf verknüpfte Betriebskosten stehen mit dem aktuellen Kennzeichen da
+    const art = e.truck_plate != null ? "Lkw-Kauf " + e.truck_plate : ARTEN[e.kind] || e.kind;
+    const text = [art, e.user ? ", " + e.user : "", zusatz.length ? " (" + zusatz.join(", ") + ")" : ""].join("");
     return [h("tr", {},
       h("td", { class: "wann" }, wann(e.created_at)),
-      h("td", {}, text),
+      h("td", {}, text, kaufKnoepfe(e)),
       h("td", { class: "zahl" }, e.account === "firma" ? betrag : ""),
       h("td", { class: "zahl" }, e.account === "fahrer" ? betrag : ""))];
   });
@@ -574,6 +853,20 @@ function fuelleFahrerwahl() {
   wahl.dataset.stand = neu;
 }
 
+/** Vorschläge für das Kennzeichen im Testbereich: die Lkw des Fuhrparks, deiner zuerst. */
+function fuelleKennzeichen() {
+  const liste = $("kennzeichen");
+  if (!liste) return;
+  const meine = zustand.lkw.filter((t) => t.leased_by && t.leased_by.user_id === zustand.ich.user_id);
+  const rest = zustand.lkw.filter((t) => !meine.includes(t) && !t.retired);
+  const neu = JSON.stringify(meine.concat(rest).map((t) => t.plate));
+  if (liste.dataset.stand === neu) return;
+  liste.replaceChildren(...meine.concat(rest).map((t) => h("option", { value: t.plate })));
+  liste.dataset.stand = neu;
+  const feldKz = $("herzschlag-kz");
+  if (feldKz && !feldKz.value && meine.length) feldKz.value = meine[0].plate;
+}
+
 function baueBuero() {
   const id = zustand.firmaId;
   const f0 = zustand.firma;
@@ -581,6 +874,9 @@ function baueBuero() {
   const pauschale = h("input", { type: "number", min: 0, max: 100000, value: f0.daily_flat, required: true });
   const uhr = h("input", { type: "time", value: f0.payroll_time, required: true });
   const vorschuss = h("input", { type: "number", min: 0, max: 10000000, value: f0.advance, required: true });
+  const grenze = h("input", { type: "number", min: 0, max: 100, value: f0.damage_limit, required: true });
+  const satz = h("input", { type: "number", min: 0, max: 1000000, value: f0.repair_rate, required: true });
+  const haftung = h("input", { type: "number", min: 0, max: 100, value: f0.liability_percent, required: true });
   const kz = h("input", { required: true, maxlength: 12, placeholder: "SPED 001" });
   const modell = h("input", { required: true, placeholder: "scania.s_2016" });
   const stand = h("input", { type: "number", min: 0, value: 0, required: true });
@@ -590,6 +886,17 @@ function baueBuero() {
   const betrag = h("input", { type: "number", min: 1, required: true });
   const notiz = h("input", { maxlength: 80, placeholder: "zum Beispiel Vorschuss" });
   const code = zustand.firma.invite_code;
+  const bBetrag = h("input", { type: "number", min: 1, max: 1000000000, required: true });
+  const bNotiz = h("input", { maxlength: 80, placeholder: "zum Beispiel neuer Scania" });
+  const bForm = formular(async (f) => {
+      const r = await api("POST", "/api/companies/" + id + "/budgets", { amount: Number(bBetrag.value), note: bNotiz.value });
+      f.reset();
+      await auffrischen();
+      melde(euro(r.budget.amount) + " freigegeben. Beim nächsten Geldabgleich kommt der Betrag in deinen Spielstand.");
+    },
+    h("div", { class: "zeile" }, feld("Betrag in Euro", bBetrag), feld("Notiz", bNotiz)),
+    h("div", { class: "zeile", style: "margin-top: .75rem" }, h("button", {}, "Budget freigeben")));
+  bForm.id = "budget-form";
 
   return h("section", {},
     h("h2", {}, "Büro"),
@@ -616,6 +923,27 @@ function baueBuero() {
           feld("Betriebsvorschuss in Euro, zusätzlich zum Lohnkonto im Spiel", vorschuss),
           feld("Erlösfaktor: der gemeldete Erlös mal diese Zahl geht in die Kasse", faktor),
           h("button", {}, "Einstellungen speichern"))),
+      h("div", { class: "blatt" },
+        h("h3", {}, "Werkstatt und Haftung"),
+        h("p", { class: "klein" }, "Liegt der Schaden eines Lkw nach der Rückgabe über der Grenze, kommt er in die Werkstatt. Die Reparatur zahlt die Firmenkasse, danach ist er wieder frei. Für Schaden, der während seiner Leihe dazukommt, zahlt der Fahrer den Haftungsanteil aus dem Lohnkonto."),
+        formular(async () => {
+            await api("PATCH", "/api/companies/" + id, {
+              damage_limit: Number(grenze.value), repair_rate: Number(satz.value), liability_percent: Number(haftung.value) });
+            await auffrischen();
+            melde("Werkstatt und Haftung gespeichert. Die Grenze gilt ab der nächsten Rückgabe.");
+          },
+          feld("Schadensgrenze in Prozent", grenze),
+          feld("Werkstatt: Euro je Prozentpunkt Schaden", satz),
+          feld("Haftung: so viel Prozent des neuen Schadens zahlt der Fahrer", haftung),
+          h("button", {}, "Werkstatt und Haftung speichern"))),
+      h("div", { class: "blatt" },
+        h("h3", {}, "Anschaffungsbudget"),
+        h("p", { class: "klein" }, "Für einen Kauf im Spiel, etwa einen Lkw. Der Betrag kommt beim nächsten Geldabgleich zusätzlich "
+          + "zu Lohnkonto und Vorschuss in deinen Spielstand. Freigeben bucht nichts, die Kasse muss den Betrag aber decken. "
+          + "Was du im Spiel ausgibst, bucht der Abgleich als Betriebskosten und zieht es vom Budget ab, auch Tanken und Reparaturen. "
+          + "Den Kauf kannst du danach im Kassenbuch mit dem Lkw verknüpfen."),
+        h("div", { id: "budget-stand" }),
+        bForm),
       baueStufen(),
       h("div", { class: "blatt" },
         h("h3", {}, "Lkw anlegen"),
@@ -644,6 +972,32 @@ function baueBuero() {
           feld("Betrag in Euro", betrag),
           feld("Notiz", notiz),
           h("button", {}, "Überweisen")))));
+}
+
+/** Das offene Anschaffungsbudget mit Restbetrag. Ohne offenes Budget erscheint das Formular. */
+function zeichneBudget() {
+  const box = $("budget-stand");
+  const form = $("budget-form");
+  if (!box || !form) return;
+  const b = zustand.firma.budget || null;
+  const neu = JSON.stringify([b, zustand.firma.balance]);
+  if (box.dataset.stand === neu) return;
+  box.dataset.stand = neu;
+  form.hidden = !!b;
+  if (!b) {
+    box.replaceChildren(h("p", { class: "klein blass" }, "Gerade ist kein Budget offen. In der Kasse sind " + euro(zustand.firma.balance) + "."));
+    return;
+  }
+  box.replaceChildren(h("div", { class: "budget-stand" },
+    h("div", { class: "klein blass" }, "Offen seit " + wann(b.created_at) + (b.note ? ", " + b.note : "")),
+    h("div", { class: "rest" }, euro(b.rest)),
+    h("p", { class: "klein" }, "übrig von " + euro(b.amount) + ". Als Betriebskosten gebucht: " + euro(b.consumed)
+      + ". Beim Schließen wird nichts gebucht, der Rest kommt beim nächsten Abgleich nicht mehr in den Spielstand."),
+    h("button", { type: "button", class: "leise", onclick: (e) => versuche(async () => {
+      const r = await api("POST", "/api/companies/" + zustand.firmaId + "/budgets/" + b.id + "/close", {});
+      await auffrischen();
+      melde("Budget geschlossen. Beim nächsten Abgleich entfallen die restlichen " + euro(r.budget.rest) + " im Spiel.");
+    }, e.target) }, "Budget schließen")));
 }
 
 function baueStufen() {
@@ -703,6 +1057,15 @@ function baueTestbuchung() {
   const geld = h("input", { type: "number", required: true });
   const xp = h("input", { type: "number", min: 0 });
 
+  const hbKz = h("input", { required: true, maxlength: 64, list: "kennzeichen", placeholder: "SPED 001" });
+  hbKz.id = "herzschlag-kz";
+  const hbKm = h("input", { type: "number", min: 0, step: "any" });
+  const hbTempo = h("input", { type: "number", min: 0, max: 1000, step: "any", value: 85 });
+  const hbStadt = h("input", { maxlength: 64 });
+  const hbFracht = h("input", { maxlength: 64 });
+  const hbVon = h("input", { maxlength: 64 });
+  const hbNach = h("input", { maxlength: 64 });
+
   return h("details", {},
     h("summary", {}, "Ereignis von Hand buchen"),
     h("p", { class: "klein blass" }, "Zum Testen ohne Spiel. Sonst meldet das Plugin diese Ereignisse von selbst. Gebucht wird auf dich als Fahrer."),
@@ -710,11 +1073,11 @@ function baueTestbuchung() {
         const ereignis = "hand-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
         const daten = { event_id: ereignis, type: art.value, amount: Number(betrag.value), note: notiz.value };
         if (art.value === "job_delivered" && strecke.value !== "") daten.distance_km = Number(strecke.value);
-        await api("POST", "/api/companies/" + id + "/events", daten);
+        const r = await api("POST", "/api/companies/" + id + "/events", daten);
         f.reset();
         streckeFeld.hidden = false;
         await auffrischen();
-        melde("Gebucht.");
+        melde(r.late ? "Gebucht. Das Ereignis lag vor deinem letzten Abgleich, der Abgleich wurde korrigiert." : "Gebucht.");
       },
       h("div", { class: "zeile" }, feld("Was ist passiert", art, "breit"), feld("Betrag in Euro", betrag), streckeFeld, feld("Notiz", notiz), h("button", {}, "Buchen"))),
     h("h3", { style: "margin-top: 1.5rem" }, "Geldabgleich testen"),
@@ -730,9 +1093,30 @@ function baueTestbuchung() {
         else if (r.booked.length) text = "Erwartet " + euro(r.expected) + ", Betriebskosten " + euro(-r.booked[0].amount) + " gebucht.";
         else if (r.unexplained) text = "Erwartet " + euro(r.expected) + ", " + euro(r.unexplained.amount) + " ungeklärt.";
         else text = "Erwartet " + euro(r.expected) + ", passt.";
-        melde(text + " Neuer Kontostand im Spiel: " + euro(r.write_money) + ".");
+        melde(text + " Neuer Kontostand im Spiel: " + euro(r.write_money)
+          + (r.budget ? ", davon Anschaffungsbudget " + euro(r.budget) : "") + ".");
       },
       h("div", { class: "zeile" }, feld("Kontostand im Spiel", geld), feld("Erfahrungspunkte", xp), h("button", {}, "Abgleichen"))),
+    h("h3", { style: "margin-top: 1.5rem" }, "Herzschlag senden"),
+    h("p", { class: "klein blass" }, "Tut so, als liefe dein Spiel: Du bist 30 Sekunden online. Ist das Kennzeichen dein geliehener Lkw, gilt der Stand als sein letzter bekannter Zustand. Sonst schickt das Plugin alle 10 Sekunden einen. Fracht, Von und Nach leer heißt: kein Auftrag."),
+    h("datalist", { id: "kennzeichen" }),
+    formular(async () => {
+        const daten = { plate: hbKz.value };
+        if (hbKm.value !== "") daten.odometer_km = Number(hbKm.value);
+        if (hbTempo.value !== "") daten.speed_kmh = Number(hbTempo.value);
+        if (hbStadt.value.trim()) daten.near_city = hbStadt.value;
+        daten.job = hbFracht.value.trim() || hbVon.value.trim() || hbNach.value.trim()
+          ? { cargo: hbFracht.value, source_city: hbVon.value, target_city: hbNach.value } : null;
+        const r = await api("POST", "/api/companies/" + id + "/heartbeat", daten);
+        await auffrischen();
+        melde(r.leased_truck_id != null
+          ? "Herzschlag gesendet. Der Stand gilt als letzter bekannter Zustand deines Lkw."
+          : "Herzschlag gesendet. Du bist jetzt 30 Sekunden online.");
+      },
+      h("div", { class: "zeile" }, feld("Kennzeichen", hbKz), feld("Kilometerstand", hbKm), feld("Geschwindigkeit in km/h", hbTempo),
+        feld("Stadt in der Nähe", hbStadt)),
+      h("div", { class: "zeile", style: "margin-top: .75rem" }, feld("Fracht", hbFracht), feld("Von", hbVon), feld("Nach", hbNach),
+        h("button", {}, "Herzschlag senden"))),
     chef ? h("div", {},
       h("h3", { style: "margin-top: 1.5rem" }, "Lohnabrechnung"),
       h("p", { class: "klein blass" }, "Rechnet sofort alles seit der letzten Abrechnung ab. Die tägliche Abrechnung macht danach dort weiter."),

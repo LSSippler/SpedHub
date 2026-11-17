@@ -51,4 +51,4 @@ Die erste Fassung des Einsetzens, in Python. Die Rust-Bibliothek macht dasselbe 
 python tools\transplant.py quelle.sii ziel.sii ergebnis.sii
 ```
 
-Ob das Spiel das Ergebnis lädt, ist noch nicht bestätigt.
+Im Spiel geladen wurde ein Spielstand, den `spedhub-save` gebaut hat, siehe `docs/save-format.md`, Abschnitt "Im Spiel bestätigt". Das Ergebnis des Skripts selbst ist dort nicht geprüft.

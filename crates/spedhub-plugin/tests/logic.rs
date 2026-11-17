@@ -128,10 +128,20 @@ fn notizen_ohne_zusatzwerte_und_grenzfaelle() {
     let b = translate(&d).unwrap().unwrap().with_id("a-2".into());
     let json = serde_json::to_string(&b).unwrap();
     assert!(!json.contains("distance_km"), "{json}");
+    assert!(!json.contains("occurred_at"), "{json}");
     let old: Booking =
         serde_json::from_str(r#"{"event_id":"a-3","type":"tollgate","amount":5,"note":"Maut"}"#)
             .unwrap();
     assert_eq!(old.distance_km, None);
+    assert_eq!(old.occurred_at, None);
+    // Mit Zeitpunkt geht er als Unix-Sekunden mit
+    let b = translate(&d)
+        .unwrap()
+        .unwrap()
+        .with_id_at("a-4".into(), 1_795_000_000);
+    assert_eq!(b.occurred_at, Some(1_795_000_000));
+    let json = serde_json::to_string(&b).unwrap();
+    assert!(json.contains(r#""occurred_at":1795000000"#), "{json}");
     // Unbekannte Strafe bleibt mit Originaltext, fehlende Strafe ist schlicht "Strafe"
     let f = GameplayData {
         fine_amount: Some(10),
@@ -369,6 +379,8 @@ fn postausgang_ueberlebt_kaputte_zeilen() {
             amount: 10,
             distance_km: None,
             note: "Maut".into(),
+            occurred_at: Some(1_795_000_000 + i64::from(n)),
+            ..Default::default()
         },
     };
     let (mut outbox, notes) = Outbox::open(paths.outbox(), paths.rejected());
@@ -393,4 +405,185 @@ fn postausgang_ueberlebt_kaputte_zeilen() {
     outbox.remove_first(1).unwrap();
     assert_eq!(read_entries(&paths.outbox()), vec![entry(2)]);
     let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn zeitpunkt_wird_beim_annehmen_gesetzt_und_bleibt_im_postausgang() {
+    let dir = temp_dir("zeitpunkt");
+    let paths = Paths::new(&dir);
+    // Ein Server, der nie erreichbar ist: alles bleibt im Postausgang
+    write_config(&paths, "http://127.0.0.1:1", "token", 7);
+    // Eine Zeile von einem älteren Plugin ohne Zeitpunkt liegt schon im Postausgang
+    fs::write(
+        paths.outbox(),
+        r#"{"company_id":7,"booking":{"event_id":"alt-1-1","type":"tollgate","amount":5,"note":"Maut"}}"#
+            .to_string()
+            + "\n",
+    )
+    .unwrap();
+
+    let before = spedhub_plugin::event::unix_now();
+    let agent = Agent::start(&paths, fast()).unwrap();
+    let toll = GameplayData {
+        pay_amount: Some(40),
+        ..data("player.tollgate.paid")
+    };
+    let id = match agent.submit(&toll) {
+        spedhub_plugin::Submitted::Queued(id) => id,
+        other => panic!("{other:?}"),
+    };
+    let after = spedhub_plugin::event::unix_now();
+    wait_until("Event im Postausgang", || {
+        read_entries(&paths.outbox()).len() == 2
+    });
+    agent.shutdown();
+
+    // Neustart des Spiels: der Zeitpunkt ist noch da, die alte Zeile liest sich weiter
+    let (outbox, _) = Outbox::open(paths.outbox(), paths.rejected());
+    let entries = outbox.entries();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].booking.event_id, "alt-1-1");
+    assert_eq!(entries[0].booking.occurred_at, None);
+    assert_eq!(entries[1].booking.event_id, id);
+    let at = entries[1].booking.occurred_at.expect("Zeitpunkt fehlt");
+    assert!(
+        (before..=after).contains(&at),
+        "{at} nicht in {before}..={after}"
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+// ------------------------------------------------------------------- Herzschlag
+
+use spedhub_plugin::telemetry::{JobInfo, Snapshot, readable_plate};
+
+#[test]
+fn kennzeichen_aus_dem_spiel_lesbar_machen() {
+    assert_eq!(readable_plate("SPED 001"), "SPED 001");
+    assert_eq!(readable_plate("SPED 001|_germany"), "SPED 001");
+    assert_eq!(
+        readable_plate(
+            "DD<offset hshift=4 vshift=-5><img src=/material/ui/lp/germany/dresden.mat color=FFFFFFFF><offset hshift=4 vshift=5>RI 772"
+        ),
+        "DD RI 772"
+    );
+    assert_eq!(readable_plate("<img src=/a.mat>"), "");
+    assert_eq!(readable_plate(&"A".repeat(100)).len(), 64);
+}
+
+#[test]
+fn herzschlag_nur_wenn_das_spiel_laeuft_und_ein_kennzeichen_bekannt_ist() {
+    // Am Anfang pausiert, bis das SDK `started` meldet
+    let mut s = Snapshot::default();
+    assert!(s.paused);
+    s.set_truck(Some("SPED 001"), Some(800.0));
+    assert_eq!(s.heartbeat(), None, "pausiert");
+    s.paused = false;
+    s.set_truck(Some("  "), None);
+    assert_eq!(s.heartbeat(), None, "ohne Kennzeichen");
+
+    s.set_truck(Some("EF<img src=/lp.mat> XU 577|germany"), Some(800.0));
+    s.odometer_km = Some(12_345.5);
+    s.wear_engine = Some(0.05);
+    s.wear_transmission = Some(1.2);
+    s.wear_cabin = Some(f32::NAN);
+    s.wear_wheels = Some(-0.1);
+    s.fuel_liters = Some(200.0);
+    s.speed_ms = Some(-10.0);
+    let hb = s.heartbeat().unwrap();
+    assert_eq!(hb.plate, "EF XU 577");
+    assert_eq!(hb.odometer_km, Some(12_345.5));
+    let wear = hb.wear.clone().unwrap();
+    assert!((wear.engine.unwrap() - 0.05).abs() < 1e-6);
+    assert_eq!(wear.transmission, Some(1.0), "auf 1 begrenzt");
+    assert_eq!(wear.cabin, None, "NaN fällt weg");
+    assert_eq!(wear.chassis, None);
+    assert_eq!(wear.wheels, Some(0.0));
+    assert_eq!(hb.fuel_liters, Some(200.0));
+    assert_eq!(hb.fuel_relative, Some(0.25));
+    assert!(
+        (hb.speed_kmh.unwrap() - 36.0).abs() < 1e-4,
+        "rückwärts zählt positiv"
+    );
+    assert_eq!(hb.near_city, None, "gibt das SDK nicht her");
+    // So geht er an den Server: ohne Stadt, Auftrag ausdrücklich null
+    let v = serde_json::to_value(&hb).unwrap();
+    assert!(v.get("near_city").is_none());
+    assert!(v["job"].is_null());
+    assert!(v["wear"].get("cabin").is_none());
+
+    // Ohne Tankgröße kein relativer Tank, ohne Werte kein Verschleiß
+    let mut t = Snapshot {
+        paused: false,
+        ..Default::default()
+    };
+    t.set_truck(Some("SPED 001"), Some(0.0));
+    t.fuel_liters = Some(100.0);
+    let hb = t.heartbeat().unwrap();
+    assert_eq!(
+        (hb.fuel_relative, hb.wear, hb.speed_kmh),
+        (None, None, None)
+    );
+
+    // Pause und Weiterfahren
+    s.paused = true;
+    assert_eq!(s.heartbeat(), None);
+}
+
+#[test]
+fn letzter_auftrag_bleibt_bis_zur_buchung() {
+    let mut s = Snapshot::default();
+    let job = JobInfo::new(
+        Some(" Holz\nbretter ".into()),
+        Some("Berlin".into()),
+        Some("Hamburg".into()),
+    );
+    assert_eq!(job.cargo.as_deref(), Some("Holz bretter"));
+    s.set_job(Some(job.clone()));
+    assert_eq!(s.job, Some(job.clone()));
+    // Das SDK leert die Job-Konfiguration, zum Beispiel vor dem Event job.delivered
+    s.set_job(None);
+    assert_eq!(s.job, None);
+    assert_eq!(
+        s.last_job,
+        Some(job.clone()),
+        "der letzte nicht leere bleibt"
+    );
+    // Ein Auftrag ohne Angaben zählt als keiner
+    s.set_job(Some(JobInfo::new(Some(" ".into()), None, None)));
+    assert_eq!(s.job, None);
+    assert_eq!(s.last_job, Some(job));
+}
+
+#[test]
+fn alte_und_neue_zeilen_im_postausgang_mit_fracht() {
+    // Eine Zeile von vor dem Herzschlag: ohne Fracht und Städte
+    let old: Entry = serde_json::from_str(
+        r#"{"company_id":7,"booking":{"event_id":"alt-1-1","type":"job_delivered","amount":5,"distance_km":12,"note":"x","occurred_at":1795000000}}"#,
+    )
+    .unwrap();
+    assert_eq!(old.booking.cargo, None);
+    assert_eq!(old.booking.target_city, None);
+    // Ohne Fracht wird auch nichts davon geschrieben
+    let line = serde_json::to_string(&old).unwrap();
+    assert!(!line.contains("cargo") && !line.contains("city"), "{line}");
+
+    // Mit Fracht: hin und zurück
+    let new = Booking {
+        event_id: "neu-1-1".into(),
+        kind: "job_delivered".into(),
+        amount: 100,
+        ..Default::default()
+    }
+    .with_job(Some(JobInfo::new(
+        Some("Holz".into()),
+        Some("Berlin".into()),
+        None,
+    )));
+    let line = serde_json::to_string(&new).unwrap();
+    assert!(line.contains(r#""cargo":"Holz""#), "{line}");
+    assert!(!line.contains("target_city"), "{line}");
+    let back: Booking = serde_json::from_str(&line).unwrap();
+    assert_eq!(back, new);
+    assert_eq!(back.source_city.as_deref(), Some("Berlin"));
 }

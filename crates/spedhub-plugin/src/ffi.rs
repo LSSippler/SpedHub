@@ -5,17 +5,29 @@
 //! jede Panic ab. Zur Sicherheit ist hier jeder eigene Hook noch einmal in `catch_unwind`
 //! gepackt, damit auch ein Fehler in SpedHub-Code nie bis ins Spiel durchschlägt.
 //!
-//! Diese Schicht kopiert nur die Werte aus dem SDK in [`GameplayData`] und reicht sie an den
-//! [`Agent`] weiter. Die ganze Logik liegt in den anderen Modulen.
+//! Diese Schicht kopiert nur die Werte aus dem SDK in [`GameplayData`] und in den
+//! [`Snapshot`](crate::telemetry::Snapshot) des [`Agent`] und reicht sie weiter. Die ganze
+//! Logik liegt in den anderen Modulen.
+//!
+//! Für den Herzschlag abonniert: die Kanäle `truck.odometer`, `truck.wear.engine`,
+//! `truck.wear.transmission`, `truck.wear.cabin`, `truck.wear.chassis`, `truck.wear.wheels`,
+//! `truck.fuel.amount` und `truck.speed`, die Konfigurationen `truck` (`license.plate`,
+//! `fuel.capacity`) und `job` (`cargo`, `source.city`, `destination.city`) und die Ereignisse
+//! `paused` und `started`. Alles davon ist optional: Fehlt etwas im Spiel, bleibt der Wert leer,
+//! und die DLL lädt trotzdem. Eine Stadt in der Nähe liefert das SDK nicht.
 
 use crate::agent::{Agent, Settings};
 use crate::config::Paths;
 use crate::event::GameplayData;
+use crate::telemetry::JobInfo;
+use scs_sdk_plugin::sdk::channels::truck as ch;
+use scs_sdk_plugin::sdk::configuration::{attributes as cfg, ids as cfg_ids};
 use scs_sdk_plugin::sdk::gameplay::attributes as attr;
 use scs_sdk_plugin::sdk::{LogLevel, TelemetryApiVersion, game};
 use scs_sdk_plugin::{
-    Game, GameCompatibility, GameplayEvent, PluginCompatibility, PluginContext, PluginMetadata,
-    PluginResult, TelemetryEvent, TelemetryEventKind, TelemetryPlugin,
+    ChannelUpdate, ConfigurationEvent, Game, GameCompatibility, GameplayEvent, PluginCompatibility,
+    PluginContext, PluginMetadata, PluginResult, TelemetryEvent, TelemetryEventKind,
+    TelemetryPlugin,
 };
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -50,6 +62,18 @@ impl TelemetryPlugin for SpedHubPlugin {
             Ok(Ok(agent)) => {
                 // Nur wer konfiguriert ist, meldet sich für Events an.
                 context.subscribe_event(TelemetryEventKind::Gameplay)?;
+                // Für den Herzschlag, alles optional
+                context.subscribe_event_optional(TelemetryEventKind::Paused)?;
+                context.subscribe_event_optional(TelemetryEventKind::Started)?;
+                context.subscribe_event_optional(TelemetryEventKind::Configuration)?;
+                context.subscribe_optional(ch::ODOMETER)?;
+                context.subscribe_optional(ch::WEAR_ENGINE)?;
+                context.subscribe_optional(ch::WEAR_TRANSMISSION)?;
+                context.subscribe_optional(ch::WEAR_CABIN)?;
+                context.subscribe_optional(ch::WEAR_CHASSIS)?;
+                context.subscribe_optional(ch::WEAR_WHEELS)?;
+                context.subscribe_optional(ch::FUEL)?;
+                context.subscribe_optional(ch::SPEED)?;
                 self.agent = Some(agent);
                 context.log(LogLevel::Message, format_args!("SpedHub: aktiv"));
             }
@@ -72,12 +96,20 @@ impl TelemetryPlugin for SpedHubPlugin {
 
     fn event(&mut self, _context: &mut PluginContext<'_>, event: TelemetryEvent<'_>) {
         let Some(agent) = &self.agent else { return };
-        let TelemetryEvent::Gameplay(gameplay) = event else {
-            return;
-        };
-        let _ = catch_unwind(AssertUnwindSafe(|| {
-            agent.submit(&copy_gameplay(gameplay));
+        let _ = catch_unwind(AssertUnwindSafe(|| match event {
+            TelemetryEvent::Gameplay(gameplay) => {
+                agent.submit(&copy_gameplay(gameplay));
+            }
+            TelemetryEvent::Paused => agent.telemetry().set_paused(true),
+            TelemetryEvent::Started => agent.telemetry().set_paused(false),
+            TelemetryEvent::Configuration(c) => copy_configuration(agent, c),
+            _ => {}
         }));
+    }
+
+    fn channel(&mut self, _context: &mut PluginContext<'_>, update: ChannelUpdate<'_>) {
+        let Some(agent) = &self.agent else { return };
+        let _ = catch_unwind(AssertUnwindSafe(|| copy_channel(agent, update)));
     }
 
     fn shutdown(&mut self, _context: &mut PluginContext<'_>) {
@@ -103,6 +135,51 @@ fn copy_gameplay(g: GameplayEvent<'_>) -> GameplayData {
         cargo_damage: g.get(attr::CARGO_DAMAGE),
         source_name: g.string_owned(attr::SOURCE_NAME),
         target_name: g.string_owned(attr::TARGET_NAME),
+    }
+}
+
+/// Kopiert einen Kanalwert in den Snapshot.
+fn copy_channel(agent: &Agent, u: ChannelUpdate<'_>) {
+    let value = |c| u.value(c);
+    agent.telemetry().update(|s| {
+        if u.is(ch::ODOMETER) {
+            s.odometer_km = value(ch::ODOMETER);
+        } else if u.is(ch::WEAR_ENGINE) {
+            s.wear_engine = value(ch::WEAR_ENGINE);
+        } else if u.is(ch::WEAR_TRANSMISSION) {
+            s.wear_transmission = value(ch::WEAR_TRANSMISSION);
+        } else if u.is(ch::WEAR_CABIN) {
+            s.wear_cabin = value(ch::WEAR_CABIN);
+        } else if u.is(ch::WEAR_CHASSIS) {
+            s.wear_chassis = value(ch::WEAR_CHASSIS);
+        } else if u.is(ch::WEAR_WHEELS) {
+            s.wear_wheels = value(ch::WEAR_WHEELS);
+        } else if u.is(ch::FUEL) {
+            s.fuel_liters = value(ch::FUEL);
+        } else if u.is(ch::SPEED) {
+            s.speed_ms = value(ch::SPEED);
+        }
+    });
+}
+
+/// Kopiert die Lkw- und die Job-Konfiguration in den Snapshot. Eine leere Job-Konfiguration
+/// heißt: kein Auftrag.
+fn copy_configuration(agent: &Agent, c: ConfigurationEvent<'_>) {
+    if c.is(cfg_ids::TRUCK) {
+        let plate = c.string_owned(cfg::LICENSE_PLATE);
+        let capacity = c.get(cfg::FUEL_CAPACITY);
+        agent
+            .telemetry()
+            .update(|s| s.set_truck(plate.as_deref(), capacity));
+    } else if c.is(cfg_ids::JOB) {
+        let job = c.has_attributes().then(|| {
+            JobInfo::new(
+                c.string_owned(cfg::CARGO),
+                c.string_owned(cfg::SOURCE_CITY),
+                c.string_owned(cfg::DESTINATION_CITY),
+            )
+        });
+        agent.telemetry().update(|s| s.set_job(job));
     }
 }
 

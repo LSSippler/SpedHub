@@ -1,24 +1,31 @@
 //! Warteschlange und Sender-Thread.
 //!
 //! Der Spiel-Thread ruft nur [`Agent::submit`] auf. Das übersetzt das Event, vergibt die
-//! `event_id` und legt es in einen Kanal, der nie blockiert. Kein Dateizugriff, kein Netz.
+//! `event_id`, merkt sich den Zeitpunkt (`occurred_at`, Systemzeit) und legt es in einen
+//! Kanal, der nie blockiert. Kein Dateizugriff, kein Netz.
 //!
 //! Der Sender-Thread schreibt jedes Event zuerst in den Postausgang und schickt dann alles,
 //! was dort liegt, der Reihe nach an den Server. Ist der Server nicht erreichbar, wartet er
 //! und versucht es später wieder, mit wachsender Pause bis zu `retry_max`. Beim nächsten
 //! Start des Spiels geht es mit dem Postausgang weiter.
+//!
+//! Ein eigener Herzschlag-Thread liest alle `heartbeat_interval` den [`Telemetry`]-Snapshot
+//! und schickt einen Herzschlag, wenn das Spiel läuft, nicht pausiert ist und ein Kennzeichen
+//! bekannt ist. Herzschläge kommen nie in den Postausgang: Geht einer nicht durch, ist er
+//! verloren. Weil der Thread eigen ist, hält ein hängender Herzschlag keine Buchung auf.
 
 use crate::config::{Config, ConfigError, Paths};
-use crate::event::{GameplayData, translate};
+use crate::event::{GameplayData, translate, unix_now};
 use crate::ids::{IdGenerator, StartNote};
 use crate::log::Logger;
 use crate::outbox::{Entry, Outbox};
 use crate::send::{Outcome, Sender};
+use crate::telemetry::Telemetry;
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, RecvTimeoutError},
     },
     thread::JoinHandle,
@@ -34,6 +41,8 @@ pub struct Settings {
     pub retry_max: Duration,
     /// Höchstdauer einer Anfrage. Bestimmt auch, wie lange das Beenden höchstens dauert.
     pub request_timeout: Duration,
+    /// Abstand zwischen zwei Herzschlägen
+    pub heartbeat_interval: Duration,
 }
 
 impl Default for Settings {
@@ -42,8 +51,27 @@ impl Default for Settings {
             retry_initial: Duration::from_secs(5),
             retry_max: Duration::from_secs(300),
             request_timeout: Duration::from_secs(3),
+            heartbeat_interval: Duration::from_secs(10),
         }
     }
+}
+
+/// Zähler des Herzschlag-Threads, zum Nachsehen in Tests und im Log.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct HeartbeatStats {
+    /// Wie oft der Takt geschlagen hat
+    pub ticks: u64,
+    /// Wie oft ein Herzschlag rausging (Spiel lief, Kennzeichen bekannt)
+    pub attempts: u64,
+    /// Wie viele der Server angenommen hat
+    pub delivered: u64,
+}
+
+#[derive(Default)]
+struct Counters {
+    ticks: AtomicU64,
+    attempts: AtomicU64,
+    delivered: AtomicU64,
 }
 
 /// Was [`Agent::submit`] mit einem Event gemacht hat.
@@ -70,6 +98,11 @@ pub struct Agent {
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
     logger: Arc<Logger>,
+    telemetry: Telemetry,
+    /// Beim Beenden fallen lassen: Dann wacht der Herzschlag-Thread auf und hört auf.
+    heartbeat_stop: Option<mpsc::Sender<()>>,
+    heartbeat: Option<JoinHandle<()>>,
+    counters: Arc<Counters>,
 }
 
 impl Agent {
@@ -123,6 +156,35 @@ impl Agent {
                 None
             }
         };
+
+        let telemetry = Telemetry::default();
+        let counters = Arc::new(Counters::default());
+        let (heartbeat_stop, heartbeat_rx) = mpsc::channel();
+        let heartbeat = {
+            let telemetry = telemetry.clone();
+            let counters = counters.clone();
+            let logger = logger.clone();
+            let config = config.clone();
+            std::thread::Builder::new()
+                .name("spedhub-heartbeat".into())
+                .spawn(move || {
+                    run_heartbeat(
+                        &heartbeat_rx,
+                        &telemetry,
+                        &config,
+                        settings,
+                        &counters,
+                        &logger,
+                    )
+                })
+        };
+        let heartbeat = match heartbeat {
+            Ok(h) => Some(h),
+            Err(e) => {
+                logger.write(&format!("Herzschlag-Thread ließ sich nicht starten: {e}"));
+                None
+            }
+        };
         Ok(Agent {
             tx,
             ids,
@@ -130,7 +192,26 @@ impl Agent {
             stop,
             worker,
             logger,
+            telemetry,
+            heartbeat_stop: Some(heartbeat_stop),
+            heartbeat,
+            counters,
         })
+    }
+
+    /// Die laufenden Werte aus dem Spiel. Die FFI-Schicht schreibt hinein, der
+    /// Herzschlag-Thread liest.
+    pub fn telemetry(&self) -> &Telemetry {
+        &self.telemetry
+    }
+
+    /// Was der Herzschlag-Thread bisher getan hat.
+    pub fn heartbeat_stats(&self) -> HeartbeatStats {
+        HeartbeatStats {
+            ticks: self.counters.ticks.load(Ordering::SeqCst),
+            attempts: self.counters.attempts.load(Ordering::SeqCst),
+            delivered: self.counters.delivered.load(Ordering::SeqCst),
+        }
     }
 
     /// Nimmt ein Event aus dem Spiel an. Blockiert nie und greift nicht auf Dateien oder das
@@ -138,10 +219,22 @@ impl Agent {
     pub fn submit(&self, data: &GameplayData) -> Submitted {
         match translate(data) {
             Ok(Some(draft)) => {
+                // Fracht und Städte kommen aus der letzten Job-Konfiguration. Abgeliefert oder
+                // abgebrochen: Der Auftrag ist erledigt und gilt für kein späteres Event.
+                let job = match draft.kind {
+                    "job_delivered" => self.telemetry.take_last_job(),
+                    "job_cancelled" => {
+                        self.telemetry.take_last_job();
+                        None
+                    }
+                    _ => None,
+                };
+                // Der Zeitpunkt wird hier festgehalten, nicht beim Senden: Das Event kann lange
+                // im Postausgang liegen.
                 let event_id = self.ids.next();
                 let entry = Entry {
                     company_id: self.company_id,
-                    booking: draft.with_id(event_id.clone()),
+                    booking: draft.with_id_at(event_id.clone(), unix_now()).with_job(job),
                 };
                 let _ = self.tx.send(Message::Entry(entry));
                 Submitted::Queued(event_id)
@@ -163,10 +256,18 @@ impl Agent {
     fn stop_worker(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
         let _ = self.tx.send(Message::Stop);
+        // Beide Threads bekommen das Signal, bevor auf einen gewartet wird. So dauert das
+        // Beenden höchstens eine Anfrage lang, nicht zwei.
+        drop(self.heartbeat_stop.take());
         if let Some(worker) = self.worker.take()
             && worker.join().is_err()
         {
             self.logger.write("Sender-Thread ist abgestürzt");
+        }
+        if let Some(heartbeat) = self.heartbeat.take()
+            && heartbeat.join().is_err()
+        {
+            self.logger.write("Herzschlag-Thread ist abgestürzt");
         }
     }
 }
@@ -175,6 +276,51 @@ impl Drop for Agent {
     fn drop(&mut self) {
         // Der Thread darf die DLL nie überleben: Das Spiel kann Plugins entladen.
         self.stop_worker();
+    }
+}
+
+/// Der Herzschlag-Thread: schlägt alle `heartbeat_interval`, bis `stop` fällt.
+fn run_heartbeat(
+    stop: &mpsc::Receiver<()>,
+    telemetry: &Telemetry,
+    config: &Config,
+    settings: Settings,
+    counters: &Counters,
+    logger: &Logger,
+) {
+    let sender = Sender::new(settings.request_timeout);
+    let mut failing = false;
+    // Läuft, bis `stop` fällt (Disconnected) oder etwas schickt
+    while let Err(RecvTimeoutError::Timeout) = stop.recv_timeout(settings.heartbeat_interval) {
+        let beat = catch_unwind(AssertUnwindSafe(|| {
+            counters.ticks.fetch_add(1, Ordering::SeqCst);
+            // Pausiert oder ohne Kennzeichen: nichts senden
+            let Some(heartbeat) = telemetry.snapshot().heartbeat() else {
+                return;
+            };
+            counters.attempts.fetch_add(1, Ordering::SeqCst);
+            match sender.heartbeat(config, config.company_id, &heartbeat) {
+                Ok(()) => {
+                    counters.delivered.fetch_add(1, Ordering::SeqCst);
+                    if failing {
+                        logger.write("Herzschläge kommen wieder an");
+                    }
+                    failing = false;
+                }
+                Err(reason) => {
+                    // Nur der erste Fehler kommt ins Log, sonst liefe es alle 10 Sekunden voll
+                    if !failing {
+                        logger.write(&format!(
+                            "Herzschlag nicht angekommen: {reason}. Herzschläge werden verworfen, bis der Server wieder antwortet"
+                        ));
+                    }
+                    failing = true;
+                }
+            }
+        }));
+        if beat.is_err() {
+            logger.write("Interner Fehler im Herzschlag-Thread, es geht weiter");
+        }
     }
 }
 

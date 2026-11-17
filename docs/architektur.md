@@ -26,11 +26,12 @@ Nicht Teil des Projekts: ein eigener Multiplayer, Eingriffe in den Arbeitsspeich
 
 | Baustein | Aufgabe | Stand |
 |---|---|---|
-| Server (`server/`) | Accounts, Firma, Kasse, Fuhrpark, Leihen, tägliche Lohnabrechnung, Geldabgleich | läuft |
+| Server (`server/`) | Accounts, Firma, Kasse, Fuhrpark, Leihen, tägliche Lohnabrechnung, Geldabgleich mit spät gemeldeten Ereignissen, Herzschlag und Online-Status, Schaden und Werkstatt, Anschaffungen, Verkauf und Ausmusterung | läuft |
 | Dashboard (`server/web/`) | Weboberfläche für Chef und Fahrer | läuft |
-| Save-Bibliothek (`crates/spedhub-save`) | Spielstand lesen und schreiben, Lkw exportieren, einsetzen, entfernen, Kontostand setzen | erste Fassung, im Spiel noch nicht geprüft |
-| Launcher (`crates/spedhub-launcher`) | Anmelden, Abgleich, Spielstand vorbereiten, Spiel starten, Abgleich beim Beenden | erste Fassung: Anmelden, Fuhrpark, Ausleihen und Zurückgeben, Lkw in den Spielstand schreiben, Geldabgleich, `plugin.json`, Spiel starten. Aufräumen des Profils: offen |
-| Spiel-Plugin (`crates/spedhub-plugin`) | Telemetrie-Ereignisse melden, Quicksave und Quickload auslösen (Telemetry SDK und Input SDK) | Gameplay-Events: erste Fassung, im Spiel noch nicht geprüft. Quicksave und Quickload: offen |
+| Save-Bibliothek (`crates/spedhub-save`) | Spielstand lesen und schreiben, Lkw exportieren, wiedererkennen, einsetzen, entfernen, Kontostand setzen | erste Fassung. Einsetzen in einen Spielstand ohne eigenen Lkw im Spiel bestätigt (1.62), Kontostand, Einsetzen neben eigene Lkw und Entfernen noch nicht |
+| Launcher (`crates/spedhub-launcher`) | Anmelden, Abgleich, Spielstand vorbereiten, Spiel starten, Abgleich beim Beenden, Plugin installieren, Updates | erste Fassung: Anmelden, Passwort ändern, Fuhrpark mit Schaden und Werkstatt, Ausleihen und Zurückgeben, Lkw übernehmen und Kauf verknüpfen, Lkw in den Spielstand schreiben, Geldabgleich, `plugin.json`, Plugin installieren, Updates, Spiel starten. Aufräumen des Profils und Abgleich beim Beenden: offen |
+| Spiel-Plugin (`crates/spedhub-plugin`) | Telemetrie-Ereignisse und Herzschlag melden, Quicksave und Quickload auslösen (Telemetry SDK und Input SDK) | Gameplay-Events und Herzschlag: erste Fassung, im Spiel noch nicht geprüft. Quicksave und Quickload: offen |
+| Setup (`installer/`, `.github/workflows/release.yml`) | Launcher, Plugin und optional Server installieren, Plugin ins Spiel kopieren, Releases mit Prüfsummen | erste Fassung. Die CI baut das Setup auf dem Windows-Runner, installiert ist es auf einem echten Windows noch nicht |
 | Overlay | Kasse und Fuhrpark im Spiel | offen |
 | Convoy Dedicated Server | Die gemeinsame Session, offizieller Server von SCS | offen |
 
@@ -42,7 +43,7 @@ Spiel (ETS2)  <->  Plugin  <->  Launcher  <->  Server
 Convoy Dedicated Server (nur gemeinsames Fahren, kennt weder Geld noch Fuhrpark)
 ```
 
-In der ersten Fassung schickt das Plugin Gameplay-Events direkt an den Server, über `POST /api/companies/{id}/events`. Server, Token und Firma liest es aus `%LOCALAPPDATA%\SpedHub\plugin.json`, die später der Launcher schreibt. Ist der Server nicht erreichbar, sammelt das Plugin die Events in einem Postausgang und schickt sie nach. Details in `crates/spedhub-plugin/README.md`.
+In der ersten Fassung schickt das Plugin Gameplay-Events direkt an den Server, über `POST /api/companies/{id}/events`, und alle 10 Sekunden einen Herzschlag über `POST /api/companies/{id}/heartbeat`. Server, Token und Firma liest es aus `%LOCALAPPDATA%\SpedHub\plugin.json`, die der Launcher schreibt, sobald eine Firma gewählt ist. Ist der Server nicht erreichbar, sammelt das Plugin die Events in einem Postausgang und schickt sie nach. Details in `crates/spedhub-plugin/README.md`.
 
 ## Abläufe
 
@@ -65,7 +66,34 @@ Den Bauplan eines geliehenen Lkw legt der Launcher in `leases\` ab. Fehlt er dor
 
 ### Rückgabe
 
-Beim Wechsel und beim Beenden liest der Launcher Kilometerstand, Verschleiß und Tank aus dem Spielstand und meldet sie dem Server. Der zählt die Revision des Lkw hoch und gibt ihn frei. Nach einem Absturz nimmt der Server den letzten Zustand aus der Telemetrie.
+Beim Wechsel und beim Beenden liest der Launcher Kilometerstand, Verschleiß und Tank aus dem Spielstand und meldet sie dem Server. Der zählt die Revision des Lkw hoch und gibt ihn frei.
+
+Nach einem Absturz gibt es keinen Spielstand mit dem letzten Stand. Dafür gibt es den letzten bekannten Zustand aus dem Herzschlag (siehe unten): Der Chef nimmt den Lkw ohne Kilometerstand zurück, der Server übernimmt Kilometerstand, Verschleiß und Tank aus dem letzten Herzschlag des Ausleihers mit diesem Lkw und sagt, von wann er ist. Gibt es keinen, muss der Kilometerstand angegeben werden. Fahrer selbst geben immer einen Kilometerstand an. Jede Rückgabe leert den letzten bekannten Zustand.
+
+### Online und Herzschlag
+
+Das Plugin schickt alle 10 Sekunden einen Herzschlag an `POST /api/companies/{id}/heartbeat`, solange das Spiel läuft und nicht pausiert ist: Kennzeichen, Kilometerstand, Verschleiß, Tank, Geschwindigkeit und den laufenden Auftrag aus der Job-Konfiguration des SDK. Eine Stadt in der Nähe liefert das SDK nicht. Herzschläge gehen nie in den Postausgang, ein verlorener wird nicht nachgeschickt.
+
+- Online ist, wer sich in den letzten 30 Sekunden gemeldet hat. Der Server hält nur den letzten Herzschlag je Fahrer und Firma (`presence`).
+- Das Kennzeichen wird ohne Markup und Land mit den aktuellen und den alten Kennzeichen des Fuhrparks verglichen. Passen mehrere Lkw, gewinnt der eigene geliehene, auch über ein altes Kennzeichen, das inzwischen ein anderer Lkw trägt.
+- Fährt der Fahrer seinen geliehenen Firmen-Lkw, wird der Herzschlag zum letzten bekannten Zustand des Lkw (`trucks.last_*`). Nur gemeldete Werte überschreiben den Zustand vom Ausleihen, ein Kilometerstand unter dem vom Ausleihen zählt nicht.
+- Fährt er einen Firmen-Lkw, den er nicht geliehen hat, sieht der Chef eine Markierung. Zurückgeschrieben wird nichts, der Spielstand bleibt Sache des Launchers.
+- Im Fuhrpark sehen alle, ob ein verliehener Lkw gerade gefahren wird.
+
+### Anmeldung
+
+Tokens laufen nach 30 Tagen ohne Benutzung ab. Wer sein Passwort ändert, meldet alle anderen Anmeldungen ab, die benutzte bleibt. Launcher und Plugin teilen sich einen Token und bleiben deshalb angemeldet, wenn das Passwort im Launcher geändert wird. Das Dashboard hat einen eigenen Token. Wird das Passwort dort geändert, sind Launcher und Plugin abgemeldet, auch auf demselben Rechner: Bis zur neuen Anmeldung im Launcher und zum nächsten Spielstart gehen keine Herzschläge durch, Buchungen warten im Postausgang.
+
+### Schaden und Werkstatt
+
+Reparaturen im Spiel zahlt der Fahrer mit Geld aus dem Spiel, das über den Geldabgleich als Betriebskosten bei der Firma landet. Gibt er einen Lkw beschädigt zurück, bekäme der nächste Fahrer den Schaden mit. Deshalb:
+
+- **Schaden:** Der Server rechnet je Lkw aus dem gespeicherten Zustand einen Schaden in Prozent, die gewichtete Summe der reparierbaren Verschleißwerte, auf eine Nachkommastelle gerundet. Gewichtung (`server/src/damage.rs`, `WEIGHTS`): Motor 30, Getriebe 20, Kabine 10, Fahrgestell 25, Räder 15 (Mittelwert über die Achsen). Fehlende Felder zählen als 0. Der dauerhafte Verschleiß (`*_unfixable`) zählt nicht als Schaden und wird mit derselben Gewichtung getrennt angezeigt.
+- **Werkstatt:** Liegt der Schaden nach einer Rückgabe über der Schadensgrenze der Firma (Standard 25 Prozent), steht der Lkw in der Werkstatt und lässt sich nicht ausleihen. Das gilt auch, wenn der Chef mit dem letzten bekannten Zustand zurücknimmt.
+- **Reparatur:** Der Chef lässt einen Lkw reparieren, der nicht verliehen ist. Kosten: Schaden mal Satz je Prozentpunkt (Standard 150 Euro), aus der Firmenkasse. Reicht sie nicht, geht es nicht. Kostet die Reparatur 0 Euro, geht sie immer, auch bei einer Kasse im Minus. Danach ist der reparierbare Verschleiß im gespeicherten Zustand 0, der dauerhafte bleibt, die Revision steigt und der Lkw ist frei.
+- **Haftung:** Je Firma ein Anteil in Prozent (Standard 0). Bei der Rückgabe zahlt der Ausleiher diesen Anteil des Schadens, der während seiner Leihe dazugekommen ist (Kosten der Werkstatt dafür), aus seinem Lohnkonto an die Firmenkasse. Der Schaden beim Ausleihen steht dafür in `leases.damage_out` und zählt nicht.
+
+Einstellungen, Formeln und Buchungsarten (`werkstatt`, `haftung`) im Detail in `server/README.md`, Abschnitt "Schaden und Werkstatt".
 
 ### Kasse
 
@@ -100,15 +128,60 @@ Abrechnungen, Zeilen je Fahrer, offene Forderungen und bezahlte Pauschaltage lie
 
 Das Konto im Spiel ist nur eine Anzeige: Lohnkonto plus Betriebsvorschuss (je Firma, Standard 2000 Euro). Vom Vorschuss zahlt der Fahrer im Spiel Tanken und Reparaturen. Bei jedem Abgleich:
 
-1. Der Launcher liest Kontostand und Erfahrungspunkte aus dem neuesten Spielstand und schickt sie an `POST /api/companies/{id}/sync`.
-2. Erwarteter Stand = Stand nach dem letzten Abgleich plus `game_amount` aller seitdem gemeldeten Ereignisse dieses Fahrers. Der Erlösfaktor zählt hier nicht, im Spiel kam ja der gemeldete Betrag an.
+1. Der Launcher liest Kontostand, Erfahrungspunkte und die Änderungszeit von `game.sii` aus dem neuesten Spielstand und schickt sie an `POST /api/companies/{id}/sync`.
+2. Erwarteter Stand = Stand nach dem letzten Abgleich plus `game_amount` aller Ereignisse dieses Fahrers im Fenster des Abgleichs (siehe unten). Der Erlösfaktor zählt hier nicht, im Spiel kam ja der gemeldete Betrag an.
 3. Fehlt Geld, bucht die Firma die Differenz als Betriebskosten.
 4. Ist mehr Geld da als erklärbar, wird nichts gutgeschrieben. Es entsteht ein ungeklärter Betrag, den der Chef im Dashboard sieht und schließt.
-5. Der Server antwortet mit dem neuen Kontostand: Lohnkonto plus Vorschuss, nie unter 0. Der Launcher schreibt ihn in `bank.money_account` und `info_money_account` eines neuen Speicherplatzes, abgesichert wie beim Einsetzen, und meldet danach, dass er geschrieben hat.
+5. Der Server antwortet mit dem neuen Kontostand: Lohnkonto plus Vorschuss, beim Chef plus der Rest eines offenen Anschaffungsbudgets (siehe Anschaffungen), nie unter 0. Der Launcher schreibt ihn in `bank.money_account` und `info_money_account` eines neuen Speicherplatzes, abgesichert wie beim Einsetzen, und meldet danach, dass er geschrieben hat.
 
 Der erste Abgleich eines Fahrers bucht nichts und setzt nur den Stand. Strafen und Abbrüche zahlt der Fahrer aus dem Lohnkonto, Maut, Fähre und Zug die Firma.
 
-Die Abgleichpunkte liegen in `sync_points`: was im Spielstand stand, was geschrieben werden sollte und ob der Launcher das bestätigt hat. Ohne Bestätigung, etwa weil das Spiel zwischendurch gestartet wurde, rechnet der nächste Abgleich vom vorgefundenen Stand. Bekannte Lücke: Meldet das Plugin ein Ereignis erst nach dem Abgleich, obwohl es im Spiel vorher geschah, erscheint der Betrag einmal als ungeklärt und beim nächsten Abgleich als Betriebskosten.
+Die Abgleichpunkte liegen in `sync_points`: was im Spielstand stand, was geschrieben werden sollte und ob der Launcher das bestätigt hat. Ohne Bestätigung, etwa weil das Spiel zwischendurch gestartet wurde, rechnet der nächste Abgleich vom vorgefundenen Stand.
+
+Welche Ereignisse zu welchem Abgleich gehören, entscheidet der Zeitpunkt, zu dem sie im Spiel passiert sind, nicht wann sie beim Server ankommen. Alle Zeitpunkte kommen dafür von derselben Uhr, der des Fahrer-PCs:
+
+- `occurred_at` eines Ereignisses: Systemzeit, zu der das Plugin es angenommen hat. Sie bleibt im Postausgang erhalten.
+- `cutoff` eines Abgleichs: Änderungszeit von `game.sii` des gelesenen Spielstands. Der Kontostand darin enthält genau die Ereignisse bis hier.
+- `written_at`: wann der Launcher den neuen Spielstand geschrieben hat, mit der Bestätigung gemeldet.
+
+Fehlt `cutoff` oder `written_at` (älterer Launcher, Dashboard) oder ist er unplausibel, gilt der Empfang beim Server. Ein `cutoff` liegt nie vor dem Beginn seines Fensters, so überlappen sich Fenster auch dann nicht, wenn Abgleiche mit verschiedenen Uhren kommen. Jeder Abgleich k beginnt das nächste Fenster bei `written_at`, wenn bestätigt, sonst bei `cutoff`. Das Fenster von Abgleich k reicht von dort bis `cutoff` von k. Zwischen `cutoff` und `written_at` war das Spiel zu, Ereignisse mit Zeitpunkt dort zählen in keinem Fenster.
+
+Kommt ein Ereignis an, dessen Zeitpunkt in einem schon abgeglichenen Fenster liegt, steckte sein Spielbetrag schon im damaligen Kontostand. Der Server bucht es wie jedes andere und korrigiert dazu diesen Abgleich: Er rechnet die Differenz neu und bucht nur den Unterschied, als `betriebskosten_korrektur` (Gutschrift) oder weitere `betriebskosten`. Ein offener ungeklärter Betrag wird kleiner oder geschlossen. Alte Buchungen bleiben unverändert. Ereignisse vor dem ersten Abgleich stecken im Anfangsstand und ändern nichts. Je Abgleich merkt sich der Server dafür die aktuelle Differenz, die gebuchten Betriebskosten und den ungeklärten Betrag. Die Lohnabrechnung zählt weiter nach dem Empfang beim Server, damit abgeschlossene Abrechnungen bleiben, wie sie sind.
+
+Ein Ereignis ohne plausiblen eigenen Zeitpunkt (älteres Plugin, Dashboard) zählt nach dem Empfang: im ersten Abgleich, der nach ihm beim Server ankommt. Der Server vergleicht dafür nur die Reihenfolge des Empfangs, nie seine Uhr mit der des Fahrer-PCs, und ein solches Ereignis korrigiert nie einen alten Abgleich.
+
+### Anschaffungen
+
+Kauft der Chef im Spiel einen Lkw, bezahlt er ihn mit Geld aus dem Spiel, und der Geldabgleich bucht den Kaufpreis wie Tanken als Betriebskosten aus der Firmenkasse. Damit er dafür im Spiel genug Geld hat:
+
+- **Anschaffungsbudget:** Der Chef gibt im Büro des Dashboards einen Betrag frei. Die Kasse muss ihn decken, gebucht wird aber nichts. Höchstens ein Budget je Firma ist offen. Beim Geldabgleich des Chefs kommt der Rest des Budgets zusätzlich zu Lohnkonto und Vorschuss in den Spielstand.
+- **Rest:** Betrag minus alle Betriebskosten des Chefs, die nach der Freigabe gebucht wurden (abzüglich Korrekturen), nie unter 0. Spät gebuchte Betriebskosten und Korrekturen zählen nur, wenn ihr Abgleich nach der Freigabe lag. Auch Tanken und Reparaturen nach der Freigabe zählen. So kommt ein schon ausgegebener Teil nie ein zweites Mal ins Spiel.
+- **Kein Doppelabzug:** Der nächste Abgleich rechnet vom geschriebenen Stand inklusive Budget. Was der Chef ausgibt, fehlt dort genau einmal und wird genau einmal als Betriebskosten gebucht. Danach sinkt der Rest um denselben Betrag, und der neu geschriebene Stand stimmt mit dem im Spiel überein.
+- **Schließen:** bucht nichts. Der nächste Abgleich findet im Spiel den erwarteten Stand, bucht also keine Betriebskosten, und schreibt ohne den Rest.
+- **Lkw-Kauf verknüpfen:** Übernimmt der Chef den gekauften Lkw im Launcher, verknüpft er die Betriebskosten-Buchung des Kaufs mit dem Lkw (auch im Kassenbuch des Dashboards). Die Buchung bleibt, wie sie ist, das Kassenbuch zeigt "Lkw-Kauf SPED 004". Die Verknüpfung liegt getrennt vom Journal in `purchase_links`.
+- **Verkaufen und ausmustern:** Der Chef nimmt einen Lkw, der nicht verliehen ist, aus dem Fuhrpark. Beim Verkauf geht der Erlös als `lkw_verkauf` in die Kasse. Solche Lkw lassen sich nicht mehr ausleihen, bleiben aber mit Buchungen und alten Kennzeichen in der Liste und zählen beim Herzschlag nicht mehr als Firmen-Lkw. Ihr Kennzeichen darf ein neuer Lkw bekommen, beim alten wandert es zu den früheren Kennzeichen.
+
+Rechenweg, Schnittstelle und Beispiel in `server/README.md`, Abschnitt "Anschaffungen".
+
+## Installation und Updates
+
+Eine Versionsnummer für alles: `[workspace.package] version` in der `Cargo.toml` im Wurzelordner gilt für Server, Save-Bibliothek, Plugin, Launcher und Setup.
+
+```
+Tag v0.2.1 --> GitHub Actions (release.yml)
+                 Windows: Tests, Release-Build, installer/build.ps1 + Inno Setup --> SpedHub-Setup-0.2.1.exe
+                 Linux:   spedhub-server, musl, statisch                      --> spedhub-server-linux-x86_64
+                 Release: SHA256SUMS.txt, Notes aus git log                    --> GitHub-Release
+```
+
+- **Setup** (`installer/spedhub.iss`, Inno Setup 6, deutsch): Launcher und Plugin-DLL nach `Programme\SpedHub`, Verknüpfungen im Startmenü und, abwählbar, auf dem Desktop. Optional, standardmäßig abgewählt, "Server für lokale Tests" mit einer Verknüpfung, die `spedhub-server.exe --local` startet. Am Ende ruft das Setup mit seinen Adminrechten `spedhub-launcher.exe --install-plugin` auf.
+- **Plugin installieren**: Die Suche nach ETS2 steckt im Launcher (`src/steam.rs`), damit sie in Rust getestet ist: Steam-Ordner aus der Registry, alle Bibliotheken aus `libraryfolders.vdf`, App-ID 227300, `installdir` aus dem App-Manifest. Ziel ist `bin\win_x64\plugins`. Kopiert wird über eine temporäre Datei, eine ältere DLL wird ersetzt, bei laufendem Spiel nichts. Der Launcher zeigt "Plugin installiert / veraltet / fehlt" über die SHA-256 und startet sich für "Plugin installieren" über UAC neu. Ist das Spiel nicht gefunden, wählt er den Ordner vorher ohne Adminrechte und übergibt ihn, denn mit Adminrechten kann er unter einem anderen Konto laufen. Aus demselben Grund meldet das Setup einen von Hand gewählten Ordner über eine Datei zurück und merkt ihn als ursprünglicher Benutzer (`--report-game-dir`, `--remember-game-dir`).
+- **Deinstallation**: entfernt Programm und Plugin (`--uninstall-plugin`, still mit `--quiet`), das Plugin zuerst, solange der Launcher noch da ist. Läuft das Spiel, fragt der Launcher mit Wiederholen und Abbrechen. Bei Abbrechen und bei einer stillen Deinstallation wird die DLL umbenannt, sodass das Spiel sie nicht mehr lädt, und zum Löschen beim nächsten Neustart von Windows vorgemerkt. Reste räumt die nächste Installation weg. "Anmeldung, Einstellungen und Backups behalten?" steht auf Ja, mit Nein wird `%LOCALAPPDATA%\SpedHub` des deinstallierenden Benutzers gelöscht.
+- **Updates**: Der Launcher fragt beim Start die öffentliche API der GitHub-Releases ab. Bei einer neueren Version zeigt er einen Hinweis. Erst auf Knopfdruck lädt er Setup und `SHA256SUMS.txt`, prüft die SHA-256 und startet das Setup nur, wenn sie passt. Kein stilles Update.
+- **Versionsprüfung**: Launcher und Plugin schicken `X-SpedHub-Version`. Beim Anmelden antwortet der Server mit `server_version` und `compatible`. Gleiche Haupt- und Nebenversion passen zusammen. Sonst warnen Launcher (gelber Hinweis) und Server (Log), gesperrt wird nichts.
+- **VPS**: Der Server kommt als statisch gelinktes Linux-Binary ins Release, siehe `server/README.md`, Abschnitt "Auf einem VPS".
+
+Wie man ein Release macht, steht in `README.md`, Abschnitt "So veröffentlichst du eine Version".
 
 ## Das Lkw-Paket
 
@@ -118,31 +191,40 @@ So liegt ein Firmen-Lkw auf dem Server (`trucks.package` und `trucks.state`):
 - **Zustand:** Kilometerstand, Wartungs-Kilometer, Verschleiß je Bauteil, Tank.
 - **Kennzeichen:** eindeutig je Lkw und Firma, aber nicht dauerhaft: Das Spiel kann es ersetzen (im Spiel bestätigt). Der Launcher meldet das neue Kennzeichen bei der Rückgabe, der Server behält die alten in `old_plates`. So lässt sich auch Telemetrie mit einem alten Kennzeichen noch zuordnen. Im Spielstand erkennt SpedHub den Lkw über Modell und Teile wieder, nicht über das Kennzeichen.
 - **Abhängigkeiten:** alle `data_path`-Einträge. Daraus ergibt sich, welche DLCs und Mods ein Fahrer braucht.
-- **Revision:** steigt bei jeder Rückgabe.
+- **Revision:** steigt bei jeder Rückgabe und bei jeder Reparatur in der Werkstatt.
 
 ## Reihenfolge
 
-1. Tests von Hand im Spiel (siehe unten)
-2. Save-Bibliothek in Rust
-3. Launcher mit Leihe vor dem Start, Plugin für Telemetrie, Geldabgleich
-4. Lkw-Wechsel im laufenden Spiel, Overlay
-5. Convoy-Server, Lkw-Kauf für die Firma, Wirtschafts-Mod
-6. Härten: Versionssperre, Backups, Mod-Lkw
+1. Tests von Hand im Spiel: Einsetzen bestätigt, der Rest steht unten
+2. Save-Bibliothek in Rust: erste Fassung
+3. Launcher mit Leihe vor dem Start, Plugin für Telemetrie, Geldabgleich: erste Fassung. Dazu gekommen sind spät gemeldete Ereignisse, Herzschlag und Online-Status, Werkstatt und Haftung, Setup und Updates
+4. Aufräumen des Profils beim Start, Lkw-Wechsel im laufenden Spiel, Overlay: offen
+5. Lkw-Kauf für die Firma (Anschaffungsbudget, Kauf verknüpfen, Verkauf): erste Fassung. Convoy-Server und Wirtschafts-Mod: offen
+6. Härten: Backups vor jedem Schreiben gibt es. Versionssperre und Mod-Lkw: offen
 
-## Offene Tests im Spiel
+## Offene Tests im Spiel und auf Windows
+
+Bestätigt ist mit 1.62: Ein mit `spedhub-save` eingesetzter Lkw lädt als eigener, aktiver Lkw in der Heimatgarage, mit Zubehör, Kilometern, Verschleiß und Tank, und der nächste Autosave ist intakt. Das Spiel vergibt dabei alle `_nameless`-Namen neu und kann das Kennzeichen ersetzen. Details in `docs/save-format.md`, Abschnitt "Im Spiel bestätigt". Offen ist:
 
 | Test | Frage |
 |---|---|
-| Lkw verpflanzen | Lädt 1.62 einen Spielstand mit eingesetztem fremdem Lkw fehlerfrei? Stimmen Kilometer, Schaden und Tuning? Wo steht der Lkw? |
+| Kennzeichen | Warum ersetzt das Spiel das Kennzeichen, bei jedem Laden oder nur einmal? Woher kommt `Economy reset - company mismatch`? |
+| Einsetzen neben eigene Lkw | Lädt ein Spielstand, in dem der bisherige eigene Lkw in einen freien Stellplatz gezogen ist? |
+| Neuer Speicherplatz | Erscheint ein vom Launcher angelegter Speicherplatz im Spiel? |
 | Save-Cache | Übernimmt das laufende Spiel einen geänderten Spielstand zuverlässig, auch beim zweiten Mal? Seit 1.50 gibt es einen Datei-Cache, der alte Versionen liefern kann |
-| Kontostand | Übernimmt das Spiel den beim Geldabgleich geschriebenen Kontostand? |
+| Kontostand | Übernimmt das Spiel den beim Geldabgleich geschriebenen Kontostand, auch mit dem Rest eines Anschaffungsbudgets beim Chef? |
 | Level | Passt das aus `info_players_experience` berechnete Level zu dem, das das Spiel anzeigt? |
+| Reparierter Lkw | Nimmt das Spiel einen nach der Werkstatt mit reparierbarem Verschleiß 0 eingesetzten Lkw so an? |
 | Lkw entfernen | Lädt ein Spielstand, dessen aktiver Lkw ersatzlos entfernt wurde? |
+| Plugin und Events | Lädt das Spiel die DLL, kommen die Gameplay-Events mit den erwarteten Beträgen an? |
+| Herzschlag | Liefern die Kanäle die erwarteten Einheiten (Kilometer, Verschleiß 0 bis 1, Liter, Meter je Sekunde)? Welches Format hat `license.plate` genau? Ist die Job-Konfiguration bei `job.delivered` noch gefüllt? |
+| Plugin-Installation | Findet der Launcher ETS2 auf einem echten Windows über Registry und `libraryfolders.vdf`? Klappen Neustart über UAC, Ersetzen und Entfernen bei laufendem Spiel? |
+| Setup | Installation, Deinstallation und Update über den Launcher auf einem echten Windows, auch mit einem Standardbenutzer, der im UAC-Dialog einen Admin angibt |
 | Laden im Convoy | Bleibt die Verbindung beim Laden stehen? |
 | Sicht der anderen | Sehen Mitspieler nach einem Lkw-Wechsel sofort den neuen Lkw? |
 | Session-Ende | Welcher Spielstand liegt nach "behalten" oder "zurücksetzen" auf der Platte? |
 
-Solange der erste Test offen ist, sind alle Angaben zum Einsetzen vorläufig.
+Was hier offen ist, gilt als vorläufig. Code am Spielstand bleibt so gebaut, dass sich die Feldliste in `crates/spedhub-save/src/layout.rs` leicht anpassen lässt.
 
 ## Fremde Bausteine
 

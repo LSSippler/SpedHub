@@ -127,6 +127,14 @@ pub fn format_day(day: i64) -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
+/// Zeitpunkt als `16.11.2026 10:00` in Berlin, für Notizen im Kassenbuch.
+pub fn format_local(t: i64) -> String {
+    let local = t + offset(t);
+    let (y, m, d) = civil_from_days(local.div_euclid(DAY));
+    let minute = local.rem_euclid(DAY) / 60;
+    format!("{d:02}.{m:02}.{y:04} {}", format_minute(minute))
+}
+
 /// `4:00` als `04:00`.
 pub fn format_minute(minute: i64) -> String {
     format!("{:02}:{:02}", minute / 60, minute % 60)
@@ -210,6 +218,11 @@ mod tests {
         assert_eq!(parse_minute("4"), None);
         assert_eq!(parse_minute("-1:00"), None);
         assert_eq!(format_minute(240), "04:00");
+        assert_eq!(
+            format_local(berlin(2026, 11, 16, 10, 5)),
+            "16.11.2026 10:05"
+        );
+        assert_eq!(format_local(berlin(2026, 7, 1, 0, 30)), "01.07.2026 00:30");
     }
 
     #[test]

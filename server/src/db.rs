@@ -135,7 +135,8 @@ CREATE TABLE IF NOT EXISTS wage_claims (
 );
 -- Abgleichpunkte: was der Launcher im Spielstand vorgefunden hat und was er schreiben sollte.
 -- Grundlage für den nächsten Abgleich ist write_money, wenn written = 1, sonst ingame_money.
--- last_ledger_id: Ereignisse mit größerer id kamen danach.
+-- last_ledger_id: größte Buchung beim Abgleich. Ereignisse mit Zeitpunkt wählt seit November
+-- 2026 der Zeitpunkt (siehe COLUMNS), Ereignisse ohne zählen, wenn sie danach ankamen.
 CREATE TABLE IF NOT EXISTS sync_points (
     id              INTEGER PRIMARY KEY,
     company_id      INTEGER NOT NULL REFERENCES companies(id),
@@ -162,6 +163,49 @@ CREATE TABLE IF NOT EXISTS unexplained (
     closed_by   INTEGER REFERENCES users(id),
     close_note  TEXT NOT NULL DEFAULT ''
 );
+-- Wer gerade fährt: der letzte Herzschlag je Fahrer und Firma. Das ist Zustand, kein Journal,
+-- jede Meldung überschreibt die vorige. `data` hält alle gemeldeten Werte als JSON. `truck_id`
+-- ist der Firmen-Lkw, zu dem das Kennzeichen passt, `own_lease` = 1, wenn der Fahrer ihn
+-- gerade geliehen hat.
+CREATE TABLE IF NOT EXISTS presence (
+    company_id  INTEGER NOT NULL REFERENCES companies(id),
+    user_id     INTEGER NOT NULL REFERENCES users(id),
+    last_seen   INTEGER NOT NULL,
+    plate       TEXT NOT NULL,
+    data        TEXT NOT NULL DEFAULT '{}',
+    truck_id    INTEGER REFERENCES trucks(id),
+    own_lease   INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (company_id, user_id)
+);
+-- Anschaffungsbudget: Der Chef gibt einen Betrag aus der Kasse frei, der beim Geldabgleich
+-- zusätzlich in seinen Spielstand kommt. Das ist kein Journal und bucht nichts. Verbraucht ist,
+-- was danach als Betriebskosten des Chefs gebucht wird: Buchungen mit einer id über
+-- `ledger_from` (größte Buchung bei der Freigabe) und, wenn geschlossen, bis `ledger_to`.
+-- Spät gebuchte Betriebskosten und Korrekturen zählen nur, wenn ihr Abgleich (`ledger.sync_id`)
+-- nach der Freigabe lag, also eine id über `sync_from` (größter Abgleich bei der Freigabe) hat.
+CREATE TABLE IF NOT EXISTS purchase_budgets (
+    id           INTEGER PRIMARY KEY,
+    company_id   INTEGER NOT NULL REFERENCES companies(id),
+    user_id      INTEGER NOT NULL REFERENCES users(id),
+    amount       INTEGER NOT NULL CHECK (amount > 0),
+    note         TEXT NOT NULL DEFAULT '',
+    created_at   INTEGER NOT NULL,
+    ledger_from  INTEGER NOT NULL,
+    sync_from    INTEGER NOT NULL DEFAULT 0,
+    closed_at    INTEGER,
+    closed_by    INTEGER REFERENCES users(id),
+    ledger_to    INTEGER
+);
+-- Höchstens ein offenes Budget je Firma
+CREATE UNIQUE INDEX IF NOT EXISTS one_open_budget ON purchase_budgets(company_id) WHERE closed_at IS NULL;
+-- Eine Betriebskosten-Buchung ist der Kauf dieses Lkw. Die Buchung selbst bleibt, wie sie ist,
+-- die Verknüpfung ändert nur die Anzeige im Kassenbuch.
+CREATE TABLE IF NOT EXISTS purchase_links (
+    ledger_id   INTEGER PRIMARY KEY REFERENCES ledger(id),
+    truck_id    INTEGER NOT NULL REFERENCES trucks(id),
+    linked_by   INTEGER NOT NULL REFERENCES users(id),
+    created_at  INTEGER NOT NULL
+);
 "#;
 
 /// Spalten, die nach der ersten Fassung dazukamen. `CREATE TABLE IF NOT EXISTS` legt sie in einer
@@ -182,12 +226,68 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("companies", "advance", "INTEGER NOT NULL DEFAULT 2000"),
     // Ab hier wird abgerechnet. Davor galt der Lohnanteil.
     ("companies", "payroll_from", "INTEGER"),
+    // Letzte Benutzung eines Tokens. Nach 30 Tagen ohne Benutzung läuft er ab.
+    ("tokens", "last_used", "INTEGER"),
+    // Letzter bekannter Zustand eines verliehenen Lkw aus dem Herzschlag des Ausleihers:
+    // wann, Kilometerstand und Zustand (JSON wie `state`). Wird bei jeder Rückgabe geleert.
+    ("trucks", "last_seen_at", "INTEGER"),
+    ("trucks", "last_odometer_km", "INTEGER"),
+    ("trucks", "last_state", "TEXT"),
     // Voller Betrag aus dem Spiel mit Vorzeichen, wie er den Kontostand im Spiel verändert hat
     ("ledger", "game_amount", "INTEGER"),
     // Gefahrene Kilometer eines abgelieferten Auftrags
     ("ledger", "distance_km", "INTEGER"),
     // Gehört zu dieser Lohnabrechnung
     ("ledger", "payroll_id", "INTEGER"),
+    // Wann das Ereignis im Spiel passiert ist (Uhr des Fahrer-PCs, Unix-Sekunden). Leer, wenn
+    // der Client keinen plausiblen Zeitpunkt geschickt hat, und bei alten Buchungen. Dann
+    // zählt das Ereignis im ersten Abgleich, der nach ihm ankommt (siehe last_ledger_id).
+    ("ledger", "occurred_at", "INTEGER"),
+    // Fracht, Start- und Zielstadt eines abgelieferten Auftrags, wie das Plugin sie aus der
+    // Job-Konfiguration des SDK kennt. Leer bei allen anderen und bei alten Buchungen.
+    ("ledger", "cargo", "TEXT"),
+    ("ledger", "source_city", "TEXT"),
+    ("ledger", "target_city", "TEXT"),
+    // Bei Buchungen aus einem spät gemeldeten Ereignis (`betriebskosten` und
+    // `betriebskosten_korrektur`): der Abgleich, dessen Fenster neu gerechnet wurde. Sonst leer.
+    ("ledger", "sync_id", "INTEGER"),
+    // Abgleich: Zeitpunkt des gelesenen Spielstands. Der Kontostand darin enthält die
+    // Ereignisse bis hier.
+    ("sync_points", "cutoff", "INTEGER"),
+    // Wann der Launcher den neuen Spielstand geschrieben hat, gesetzt mit der Bestätigung
+    ("sync_points", "written_at", "INTEGER"),
+    // Kontostand im Spiel minus erwarteter Stand, mit spät gemeldeten Ereignissen korrigiert
+    ("sync_points", "diff", "INTEGER"),
+    // Für dieses Fenster gebuchte Betriebskosten (positiv), abzüglich Korrekturen
+    ("sync_points", "costs_booked", "INTEGER NOT NULL DEFAULT 0"),
+    // Diesem Fenster zugerechneter ungeklärter Betrag
+    (
+        "sync_points",
+        "unexplained_attributed",
+        "INTEGER NOT NULL DEFAULT 0",
+    ),
+    // Schadensgrenze in Prozent: Liegt ein Lkw nach der Rückgabe darüber, kommt er in die
+    // Werkstatt und lässt sich nicht ausleihen
+    ("companies", "damage_limit", "INTEGER NOT NULL DEFAULT 25"),
+    // Werkstatt: Euro je Prozentpunkt Schaden
+    ("companies", "repair_rate", "INTEGER NOT NULL DEFAULT 150"),
+    // Haftung: so viel Prozent des neuen Schadens zahlt der Fahrer bei der Rückgabe
+    (
+        "companies",
+        "liability_percent",
+        "INTEGER NOT NULL DEFAULT 0",
+    ),
+    // 1, solange der Lkw in der Werkstatt steht. Gesetzt bei der Rückgabe, gelöscht bei der
+    // Reparatur.
+    ("trucks", "in_workshop", "INTEGER NOT NULL DEFAULT 0"),
+    // Schaden in Prozent beim Ausleihen. Leer bei Leihen von vor der Werkstatt, dann gilt der
+    // gespeicherte Zustand, der sich während einer Leihe nicht ändert.
+    ("leases", "damage_out", "REAL"),
+    // Ausgemustert oder verkauft: wann, warum ('ausgemustert' oder 'verkauft') und beim Verkauf
+    // der Erlös. Solche Lkw lassen sich nicht mehr ausleihen, bleiben aber in der Geschichte.
+    ("trucks", "retired_at", "INTEGER"),
+    ("trucks", "retired_reason", "TEXT"),
+    ("trucks", "sale_price", "INTEGER"),
 ];
 
 /// Fünf Lohnstufen von 40 bis 80 Cent je Kilometer: (Level im Spiel, Firmenkilometer, Cent je km).
@@ -210,6 +310,20 @@ fn migrate(conn: &Connection, now: i64) -> rusqlite::Result<()> {
             conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"))?;
         }
     }
+    // Abgleichpunkte von vor den Abgleichfenstern: Zeitpunkt ist der Empfang beim Server,
+    // Differenz und Aufteilung so, wie der Abgleich damals gebucht hat
+    conn.execute_batch(
+        "UPDATE sync_points SET cutoff = created_at WHERE cutoff IS NULL;
+         UPDATE sync_points SET diff = ingame_money - expected,
+                                costs_booked = MAX(0, expected - ingame_money),
+                                unexplained_attributed = MAX(0, ingame_money - expected)
+         WHERE diff IS NULL AND expected IS NOT NULL;",
+    )?;
+    // Tokens von vor dem Ablauf gelten ab jetzt als benutzt
+    conn.execute(
+        "UPDATE tokens SET last_used = ?1 WHERE last_used IS NULL",
+        [now],
+    )?;
     // Firmen aus der Zeit des Lohnanteils werden ab jetzt abgerechnet, nicht rückwirkend
     conn.execute(
         "UPDATE companies SET payroll_from = ?1 WHERE payroll_from IS NULL",

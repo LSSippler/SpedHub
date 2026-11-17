@@ -14,7 +14,10 @@ use spedhub_launcher::settings::AppPaths;
 use spedhub_save::{
     Save, info_money, info_name, money, set_money, set_truck_state, truck_state, write_save,
 };
-use std::{fs, time::SystemTime};
+use std::{
+    fs,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 #[test]
 fn anmelden_und_fehler_im_klartext() {
@@ -317,8 +320,8 @@ fn slot_count(profile: &std::path::Path) -> usize {
     fs::read_dir(profile.join("save")).unwrap().count()
 }
 
-/// Wie das Spiel einen Speicherplatz neu schreibt: Kontostand ändern, Änderungszeit jetzt.
-fn play(slot_dir: &std::path::Path, money_now: i64) {
+/// Wie das Spiel einen Speicherplatz neu schreibt: Kontostand ändern, Änderungszeit `at`.
+fn play(slot_dir: &std::path::Path, money_now: i64, at: SystemTime) {
     let path = slot_dir.join("game.sii");
     let (mut save, _) = Save::read(&path).unwrap();
     set_money(&mut save, money_now).unwrap();
@@ -327,8 +330,19 @@ fn play(slot_dir: &std::path::Path, money_now: i64) {
         .write(true)
         .open(&path)
         .unwrap()
-        .set_modified(SystemTime::now())
+        .set_modified(at)
         .unwrap();
+}
+
+/// `t` als Unix-Sekunden, wie das Plugin den Zeitpunkt eines Events schickt.
+fn unix(t: SystemTime) -> i64 {
+    t.duration_since(UNIX_EPOCH).unwrap().as_secs() as i64
+}
+
+/// Sekunden vor jetzt. Die Tests legen ihre Zeitpunkte in die jüngste Vergangenheit und mit
+/// Abstand zueinander, damit sie nicht davon abhängen, wie schnell die Sekunde umspringt.
+fn ago(start: SystemTime, secs: u64) -> SystemTime {
+    start - Duration::from_secs(secs)
 }
 
 #[test]
@@ -346,6 +360,11 @@ fn geld_abgleichen_mit_neuem_speicherplatz() {
         json!({ "advance": 3000 }),
     );
 
+    // Zeitpunkte: Der Spielstand "autosave" ist 60 Sekunden alt. Der Launcher schreibt den
+    // ersten Abgleich vor 50 Sekunden, das Spiel liefert den Auftrag vor 45 und speichert
+    // vor 40, der zweite Abgleich schreibt vor 30 Sekunden.
+    let start = SystemTime::now();
+
     // Erster Abgleich: nichts gebucht, neuer Speicherplatz mit 0 + 3000
     let before = slot_count(&docs.nordfracht);
     let o = sync_and_write(
@@ -355,7 +374,7 @@ fn geld_abgleichen_mit_neuem_speicherplatz() {
         None,
         &backups,
         &FakeGame::closed(),
-        SystemTime::now(),
+        ago(start, 50),
     )
     .unwrap();
     assert!(o.sync.first);
@@ -377,12 +396,14 @@ fn geld_abgleichen_mit_neuem_speicherplatz() {
     let mine = m.members.iter().find(|x| x.user_id == me.user_id).unwrap();
     assert_eq!((mine.game_level, mine.stage), (0, Some(1)));
 
-    // Im Spiel: Auftrag über 1500 €, 200 € fürs Tanken. Das Plugin meldet den Auftrag.
-    play(&o.deployed.slot_dir, 3000 + 1500 - 200);
+    // Im Spiel: Auftrag über 1500 €, 200 € fürs Tanken. Das Plugin meldet den Auftrag mit
+    // dem Zeitpunkt, zu dem er passiert ist.
+    play(&o.deployed.slot_dir, 3000 + 1500 - 200, ago(start, 40));
     post_raw(
         &format!("{url}/api/companies/{}/events", s.company),
         s.fahrer.token().unwrap(),
-        json!({ "event_id": "job-1", "type": "job_delivered", "amount": 1500, "distance_km": 400 }),
+        json!({ "event_id": "job-1", "type": "job_delivered", "amount": 1500, "distance_km": 400,
+                "occurred_at": unix(ago(start, 45)) }),
     );
     let o = sync_and_write(
         &s.fahrer,
@@ -391,10 +412,12 @@ fn geld_abgleichen_mit_neuem_speicherplatz() {
         None,
         &backups,
         &FakeGame::closed(),
-        SystemTime::now(),
+        ago(start, 30),
     )
     .unwrap();
     assert!(!o.sync.first);
+    // Der Server hat die Speicherzeit des gelesenen Spielstands bekommen
+    assert_eq!(o.sync.saved_at, Some(unix(ago(start, 40))));
     assert_eq!(o.sync.expected, Some(4500));
     assert_eq!(o.sync.booked.len(), 1);
     assert_eq!(
@@ -448,6 +471,92 @@ fn geld_abgleichen_mit_neuem_speicherplatz() {
     assert!(o.sync.booked.is_empty());
     assert!(o.sync.unexplained.is_none());
     assert!(describe(&o.sync).contains("Kontostand passt"));
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn spaet_gemeldeter_auftrag_nach_dem_abgleich() {
+    let dir = temp_dir("spaet");
+    let s = setup(&dir);
+    let url = s.server.url();
+    let docs = documents("spaet-docs");
+    let backups = dir.join("backups");
+    let start = SystemTime::now();
+    let sync = |now: SystemTime| {
+        sync_and_write(
+            &s.fahrer,
+            s.company,
+            &docs.nordfracht,
+            None,
+            &backups,
+            &FakeGame::closed(),
+            now,
+        )
+        .unwrap()
+    };
+
+    // Erster Abgleich, geschrieben vor 50 Sekunden: 0 + 2000
+    let o = sync(ago(start, 50));
+    assert!(o.sync.first && o.confirmed);
+    assert_eq!(o.sync.write_money, 2000);
+
+    // Im Spiel ein Auftrag über 1000 € vor 45 Sekunden, gespeichert vor 40. Das Plugin
+    // erreicht den Server erst nach dem nächsten Abgleich.
+    play(&o.deployed.slot_dir, 3000, ago(start, 40));
+    let o = sync(ago(start, 30));
+    assert!(o.confirmed);
+    assert_eq!(o.sync.expected, Some(2000));
+    assert!(o.sync.booked.is_empty());
+    let entry = o.sync.unexplained.clone().unwrap();
+    assert_eq!(entry.amount, 1000);
+    assert!(describe(&o.sync).contains("1000 € mehr im Spiel als erklärt"));
+
+    let events = format!("{url}/api/companies/{}/events", s.company);
+    let r = post_raw(
+        &events,
+        s.fahrer.token().unwrap(),
+        json!({ "event_id": "job-1", "type": "job_delivered", "amount": 1000, "distance_km": 300,
+                "occurred_at": unix(ago(start, 45)) }),
+    );
+    // Der Auftrag erklärt den Betrag: ungeklärt ist geschlossen, Betriebskosten gibt es keine
+    assert_eq!(r["late"]["sync_id"], o.sync.sync_id);
+    assert_eq!(r["late"]["booked"], json!([]));
+    assert_eq!(r["late"]["unexplained"]["id"], entry.id);
+    assert_eq!(r["late"]["unexplained"]["closed"], true);
+    let u = send_raw(
+        "GET",
+        &format!("{url}/api/companies/{}/unexplained?all=true", s.company),
+        &s.chef_token,
+        json!({}),
+    );
+    assert_eq!(
+        u["entries"][0]["note"],
+        "Durch spät gemeldete Ereignisse erklärt"
+    );
+    assert!(u["entries"][0]["closed_at"].is_i64());
+
+    // Der nächste Abgleich ohne Fahrt zählt den Auftrag nicht noch einmal
+    let o = sync(SystemTime::now());
+    assert_eq!(o.sync.expected, Some(2000));
+    assert!(o.sync.booked.is_empty());
+    assert!(o.sync.unexplained.is_none());
+    assert!(describe(&o.sync).contains("Kontostand passt"));
+
+    // Die Firma hat den ganzen Erlös, nirgends Betriebskosten
+    assert_eq!(s.chef.company(s.company).unwrap().balance, 1000);
+    let l = send_raw(
+        "GET",
+        &format!("{url}/api/companies/{}/ledger", s.company),
+        &s.chef_token,
+        json!({}),
+    );
+    let kinds: Vec<&str> = l["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, vec!["auftrag"]);
     let _ = fs::remove_dir_all(dir);
 }
 
@@ -552,4 +661,425 @@ fn bauplan_vom_server_wenn_hier_keiner_liegt() {
         .unwrap();
     assert_eq!(back.odometer_km, 3865);
     let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn passwort_aendern_der_launcher_bleibt_angemeldet() {
+    let dir = temp_dir("passwort");
+    let s = setup(&dir);
+    let url = s.server.url();
+    // Eine zweite Anmeldung, zum Beispiel im Dashboard
+    let mut dashboard = Client::new(&url);
+    dashboard.login("Fahrer", "geheim1234").unwrap();
+
+    // Fehler im Klartext, ohne dass die Anmeldung als abgelaufen gilt
+    let e = s
+        .fahrer
+        .change_password("falsch123", "neuesPasswort1")
+        .unwrap_err();
+    assert_eq!(e.to_string(), "Server: Das alte Passwort stimmt nicht");
+    assert!(!e.is_unauthorized());
+    let e = s.fahrer.change_password("geheim1234", "kurz").unwrap_err();
+    assert_eq!(
+        e.to_string(),
+        "Server: Das neue Passwort braucht mindestens 8 Zeichen"
+    );
+    dashboard.me().unwrap();
+
+    // Ändern: Der Token des Launchers gilt weiter, der zweite nicht mehr
+    s.fahrer
+        .change_password("geheim1234", "neuesPasswort1")
+        .unwrap();
+    assert_eq!(s.fahrer.me().unwrap().name, "Fahrer");
+    let e = dashboard.me().unwrap_err();
+    assert!(e.is_unauthorized(), "{e:?}");
+    // Die Chefin ist unberührt, anmelden geht nur noch mit dem neuen Passwort
+    s.chef.me().unwrap();
+    assert!(
+        Client::new(&url)
+            .login("Fahrer", "geheim1234")
+            .unwrap_err()
+            .is_unauthorized()
+    );
+    Client::new(&url).login("Fahrer", "neuesPasswort1").unwrap();
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn fuhrpark_zeigt_ob_der_lkw_gerade_gefahren_wird() {
+    let dir = temp_dir("faehrt");
+    let s = setup(&dir);
+    let url = s.server.url();
+    let truck = post_raw(
+        &format!("{url}/api/companies/{}/trucks", s.company),
+        &s.chef_token,
+        json!({ "plate": "SPED 001", "model": "scania.s_2016", "odometer_km": 1000 }),
+    );
+    let id = truck["id"].as_i64().unwrap();
+    s.fahrer.checkout(id).unwrap();
+    let t = &s.fahrer.trucks(s.company).unwrap()[0];
+    assert!(!t.driving);
+    assert_eq!(t.speed_kmh, None);
+
+    // Herzschlag, wie ihn das Plugin schickt
+    post_raw(
+        &format!("{url}/api/companies/{}/heartbeat", s.company),
+        s.fahrer.token().unwrap(),
+        json!({ "plate": "SPED 001", "speed_kmh": 85.0 }),
+    );
+    let t = &s.chef.trucks(s.company).unwrap()[0];
+    assert!(t.driving);
+    assert_eq!(t.speed_kmh, Some(85.0));
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn rueckgabe_mit_viel_verschleiss_bringt_den_lkw_in_die_werkstatt() {
+    let dir = temp_dir("werkstatt");
+    let s = setup(&dir);
+    let url = s.server.url();
+    let docs = documents("werkstatt-docs");
+    let backups = dir.join("backups");
+
+    // Chef übernimmt den Scania aus dem Spielstand, der Fahrer leiht ihn und setzt ihn ein
+    let quelle = docs.nordfracht.join("save").join("1").join("game.sii");
+    let truck_id = s
+        .chef
+        .add_truck(
+            s.company,
+            &new_truck_from_save(&quelle, "SPED 001").unwrap(),
+        )
+        .unwrap();
+    let before = s.fahrer.trucks(s.company).unwrap().remove(0);
+    assert!(!before.in_workshop);
+    let checkout = s.fahrer.checkout(truck_id).unwrap();
+    let package = package_from_checkout(&checkout.truck).unwrap();
+    let deployed = deploy_truck(
+        &docs.nordfracht,
+        &package,
+        &backups,
+        &FakeGame::closed(),
+        SystemTime::now(),
+    )
+    .unwrap();
+
+    // Im Spiel einen Unfall gebaut: viel Verschleiß an Motor und Fahrgestell
+    let game_path = deployed.slot_dir.join("game.sii");
+    let (mut save, _) = Save::read(&game_path).unwrap();
+    let mut state = truck_state(&save, Some("SPED 001")).unwrap();
+    state.odometer += 120;
+    state.engine_wear = 0.5;
+    state.chassis_wear = 0.6;
+    set_truck_state(&mut save, Some("SPED 001"), &state).unwrap();
+    write_save(&game_path, &save).unwrap();
+
+    // Rückgabe über den echten Ablauf: Zustand aus dem Spielstand lesen und melden
+    let back = read_for_return(&docs.nordfracht, "SPED 001", None)
+        .unwrap()
+        .unwrap();
+    let r = s
+        .fahrer
+        .checkin(truck_id, back.odometer_km, Some(&back.state), None)
+        .unwrap();
+    assert!(r.in_workshop, "{r:?}");
+    assert!(r.damage > 25.0, "{r:?}");
+    assert_eq!(r.liability, 0, "Haftung steht auf 0");
+
+    // Die Fuhrparkliste zeigt die Werkstatt und den Schaden
+    let t = s.fahrer.trucks(s.company).unwrap().remove(0);
+    assert!(t.in_workshop);
+    assert!(t.leased_by.is_none());
+    assert_eq!(t.damage, r.damage);
+    assert!(t.damage_text().starts_with(&format!(
+        "{} %",
+        spedhub_launcher::client::format_percent(r.damage)
+    )));
+    assert_eq!(t.repair_cost, (t.damage * 150.0).round() as i64);
+
+    // Ausleihen gibt eine Meldung im Klartext, auch für den Chef
+    let e = s.fahrer.checkout(truck_id).unwrap_err();
+    assert_eq!(
+        e.to_string(),
+        "Server: Der Lkw steht in der Werkstatt. Ausleihen geht erst, wenn der Chef ihn reparieren lässt"
+    );
+    assert!(s.chef.checkout(truck_id).is_err());
+
+    // Kasse füllen, reparieren lassen, danach geht es wieder
+    post_raw(
+        &format!("{url}/api/companies/{}/events", s.company),
+        s.fahrer.token().unwrap(),
+        json!({ "event_id": "job-1", "type": "job_delivered", "amount": 100000 }),
+    );
+    post_raw(
+        &format!("{url}/api/trucks/{truck_id}/repair"),
+        &s.chef_token,
+        json!({}),
+    );
+    let t = s.fahrer.trucks(s.company).unwrap().remove(0);
+    assert!(!t.in_workshop);
+    assert_eq!(t.damage, 0.0);
+    let again = s.fahrer.checkout(truck_id).unwrap();
+    let p = package_from_checkout(&again.truck).unwrap();
+    assert_eq!((p.state.engine_wear, p.state.chassis_wear), (0.0, 0.0));
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn schaden_als_text() {
+    let mut t: spedhub_launcher::client::Truck = serde_json::from_value(json!({
+        "id": 1, "plate": "SPED 001", "model": "scania.s_2016", "odometer_km": 1000, "rev": 1,
+        "leased_by": null
+    }))
+    .unwrap();
+    // Ältere Server ohne Schaden
+    assert_eq!((t.damage, t.in_workshop, t.repair_cost), (0.0, false, 0));
+    assert_eq!(t.damage_text(), "0 %");
+    t.damage = 12.5;
+    assert_eq!(t.damage_text(), "12,5 %");
+    t.damage_unfixable = 3.0;
+    assert_eq!(t.damage_text(), "12,5 %, dauerhaft 3 %");
+}
+
+#[test]
+fn uebernommenen_lkw_als_kauf_verknuepfen() {
+    let dir = temp_dir("kauf");
+    let s = setup(&dir);
+    let url = s.server.url();
+    let docs = documents("kauf-docs");
+    let company = s.company;
+
+    // Kasse füllen, dann Anschaffungsbudget freigeben
+    post_raw(
+        &format!("{url}/api/companies/{company}/events"),
+        s.fahrer.token().unwrap(),
+        json!({ "event_id": "job-1", "type": "job_delivered", "amount": 100000 }),
+    );
+    let first = s.chef.sync(company, 2000, None, None).unwrap();
+    assert_eq!((first.budget, first.write_money), (0, 2000));
+    s.chef.sync_written(company, first.sync_id, None).unwrap();
+    post_raw(
+        &format!("{url}/api/companies/{company}/budgets"),
+        &s.chef_token,
+        json!({ "amount": 60000, "note": "Neuer Scania" }),
+    );
+
+    // Der Abgleich schreibt Lohnkonto plus Vorschuss plus Budget
+    let r = s.chef.sync(company, 2000, None, None).unwrap();
+    assert_eq!((r.budget, r.write_money), (60000, 62000));
+    assert!(
+        describe(&r).contains(
+            "Neuer Kontostand im Spiel: 62000 € (Lohnkonto 0 € plus Vorschuss 2000 € plus Anschaffungsbudget 60000 €)"
+        ),
+        "{}",
+        describe(&r)
+    );
+    s.chef.sync_written(company, r.sync_id, None).unwrap();
+
+    // Im Spiel für 45000 € gekauft: genau einmal Betriebskosten, der Rest sinkt
+    let r = s.chef.sync(company, 62000 - 45000, None, None).unwrap();
+    assert_eq!(r.booked.len(), 1);
+    assert_eq!(
+        (r.booked[0].kind.as_str(), r.booked[0].amount),
+        ("betriebskosten", -45000)
+    );
+    assert_eq!((r.budget, r.write_money), (15000, 17000));
+    s.chef.sync_written(company, r.sync_id, None).unwrap();
+
+    // Lkw übernehmen, dann den Kauf verknüpfen, wie es der Launcher nach "Lkw übernehmen" anbietet
+    let quelle = docs.nordfracht.join("save").join("1").join("game.sii");
+    let truck_id = s
+        .chef
+        .add_truck(company, &new_truck_from_save(&quelle, "SPED 001").unwrap())
+        .unwrap();
+    let candidates = s.chef.purchase_candidates(company).unwrap();
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].amount, -45000);
+    let now = unix(SystemTime::now());
+    assert!(
+        candidates[0]
+            .label(now)
+            .starts_with("45000 Euro, gerade eben (Abgleich: erwartet 62000 €"),
+        "{}",
+        candidates[0].label(now)
+    );
+    let e = s.fahrer.purchase_candidates(company).unwrap_err();
+    assert_eq!(e.to_string(), "Server: Das darf nur der Chef");
+
+    let linked = s
+        .chef
+        .link_purchase(company, candidates[0].id, truck_id)
+        .unwrap();
+    assert_eq!(
+        (
+            linked.ledger_id,
+            linked.truck_id,
+            linked.truck_plate.as_str()
+        ),
+        (candidates[0].id, truck_id, "SPED 001")
+    );
+    let e = s
+        .chef
+        .link_purchase(company, candidates[0].id, truck_id)
+        .unwrap_err();
+    assert_eq!(
+        e.to_string(),
+        "Server: Die Buchung ist schon als Kauf von SPED 001 verknüpft"
+    );
+    assert!(s.chef.purchase_candidates(company).unwrap().is_empty());
+    let ledger = get_raw(
+        &format!("{url}/api/companies/{company}/ledger"),
+        &s.chef_token,
+    );
+    let entry = ledger["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["id"] == candidates[0].id)
+        .unwrap();
+    assert_eq!(entry["truck_plate"], "SPED 001");
+    assert_eq!(entry["amount"], -45000);
+
+    // Ausgemustert: steht weiter in der Liste, lässt sich aber nicht mehr ausleihen
+    post_raw(
+        &format!("{url}/api/trucks/{truck_id}/retire"),
+        &s.chef_token,
+        json!({}),
+    );
+    let t = s.fahrer.trucks(company).unwrap().remove(0);
+    let retired = t.retired.clone().unwrap();
+    assert_eq!(
+        (retired.reason.as_str(), retired.text()),
+        ("ausgemustert", "ausgemustert".into())
+    );
+    let e = s.fahrer.checkout(truck_id).unwrap_err();
+    assert_eq!(
+        e.to_string(),
+        "Server: Der Lkw ist ausgemustert und lässt sich nicht mehr ausleihen"
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn kauf_und_abgang_als_text() {
+    use spedhub_launcher::client::{PurchaseCandidate, Retired, Truck, age_text};
+    assert_eq!(age_text(-5), "gerade eben");
+    assert_eq!(age_text(59), "gerade eben");
+    assert_eq!(age_text(60), "vor 1 Minute");
+    assert_eq!(age_text(5 * 60 + 10), "vor 5 Minuten");
+    assert_eq!(age_text(3600), "vor 1 Stunde");
+    assert_eq!(age_text(3 * 3600), "vor 3 Stunden");
+    assert_eq!(age_text(86_400), "vor 1 Tag");
+    assert_eq!(age_text(4 * 86_400), "vor 4 Tagen");
+    let c = PurchaseCandidate {
+        id: 1,
+        created_at: 1000,
+        amount: -45000,
+        note: String::new(),
+    };
+    assert_eq!(c.label(1000 + 7200), "45000 Euro, vor 2 Stunden");
+
+    let sold = |p: Option<i64>| Retired {
+        reason: "verkauft".into(),
+        at: 0,
+        sale_price: p,
+    };
+    assert_eq!(sold(Some(30000)).text(), "verkauft für 30000 Euro");
+    assert_eq!(sold(Some(0)).text(), "verkauft");
+    assert_eq!(sold(None).text(), "verkauft");
+
+    // Ältere Server ohne Abgang und ohne Budget
+    let t: Truck = serde_json::from_value(json!({
+        "id": 1, "plate": "SPED 001", "model": "scania.s_2016", "odometer_km": 1000, "rev": 1,
+        "leased_by": null
+    }))
+    .unwrap();
+    assert_eq!(t.retired, None);
+    let t: Truck = serde_json::from_value(json!({
+        "id": 1, "plate": "SPED 001", "model": "scania.s_2016", "odometer_km": 1000, "rev": 1,
+        "leased_by": null, "retired": { "reason": "verkauft", "at": 5, "sale_price": 100 }
+    }))
+    .unwrap();
+    assert_eq!(t.retired.unwrap().text(), "verkauft für 100 Euro");
+}
+
+#[test]
+fn version_beim_anmelden_pruefen() {
+    let dir = temp_dir("version");
+    let server = TestServer::start(&dir.join("server.db"));
+    let url = server.url();
+    let own = spedhub_launcher::version::VERSION;
+
+    let mut c = Client::new(&url);
+    let login = c.register("Alex", "geheim1234").unwrap();
+    assert_eq!(login.server_version.as_deref(), Some(own));
+    assert_eq!(login.compatible, Some(true));
+    assert_eq!(login.version_warning(), None);
+    let login = Client::new(&url).login("Alex", "geheim1234").unwrap();
+    assert_eq!(login.compatible, Some(true));
+
+    let health = Client::new(&url).health().unwrap();
+    assert!(health.ok);
+    assert_eq!(health.version.as_deref(), Some(own));
+    assert_eq!(
+        spedhub_launcher::client::version_warning(health.version.as_deref()),
+        None
+    );
+
+    // Ein Server, der nicht passt, oder einer ohne Version (vor 0.2)
+    let w = spedhub_launcher::client::version_warning(Some("9.9.0")).unwrap();
+    assert!(w.contains("9.9.0") && w.contains(own), "{w}");
+    let old: spedhub_launcher::client::Login =
+        serde_json::from_value(json!({ "user_id": 1, "name": "Alex", "token": "t" })).unwrap();
+    assert_eq!(old.server_version, None);
+    assert!(
+        old.version_warning()
+            .unwrap()
+            .contains("meldet keine Version")
+    );
+}
+
+#[test]
+fn version_geht_bei_jeder_anfrage_mit() {
+    use std::io::{Read, Write};
+    // Ein Server, der nur den Kopf festhält und mit einer Anmeldung antwortet
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for _ in 0..2 {
+            let (mut s, _) = listener.accept().unwrap();
+            let mut head = Vec::new();
+            let mut byte = [0u8; 1];
+            while !head.ends_with(b"\r\n\r\n") && s.read(&mut byte).unwrap_or(0) == 1 {
+                head.push(byte[0]);
+            }
+            let text = String::from_utf8_lossy(&head).to_lowercase();
+            let len: usize = text
+                .lines()
+                .find_map(|l| l.strip_prefix("content-length:"))
+                .and_then(|v| v.trim().parse().ok())
+                .unwrap_or(0);
+            let mut body = vec![0u8; len];
+            let _ = s.read_exact(&mut body);
+            let answer = r#"{"user_id":1,"name":"Alex","token":"t","server_version":"0.1.0","compatible":false,"ok":true,"version":"0.1.0"}"#;
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\ncontent-length: {}\r\n\r\n{answer}",
+                answer.len()
+            );
+            let _ = s.write_all(reply.as_bytes());
+            tx.send(text).unwrap();
+        }
+    });
+    let expected = format!("x-spedhub-version: {}", spedhub_launcher::version::VERSION);
+    let login = Client::new(&url).login("Alex", "geheim1234").unwrap();
+    let head = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(head.contains(&expected), "{head}");
+    assert_eq!(login.compatible, Some(false));
+    if !spedhub_launcher::version::VERSION.starts_with("0.1.") {
+        assert!(login.version_warning().unwrap().contains("Version 0.1.0"));
+    }
+    Client::new(&url).health().unwrap();
+    let head = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(head.starts_with("get /api/health"), "{head}");
+    assert!(head.contains(&expected), "{head}");
 }

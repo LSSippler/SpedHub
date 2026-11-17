@@ -12,6 +12,7 @@
 //! Beträge sind in der Spielwährung, bei ETS2 also Euro. Bei `job_delivered` geht außerdem die
 //! Strecke als `distance_km` mit, der Server schreibt sie dem Fahrer als Firmenkilometer gut.
 
+use crate::telemetry::JobInfo;
 use serde::{Deserialize, Serialize};
 
 /// Die Werte eines Gameplay-Events, so wie die FFI-Schicht sie aus dem SDK kopiert.
@@ -32,7 +33,7 @@ pub struct GameplayData {
 }
 
 /// Eine Buchung, wie sie an `POST /api/companies/{id}/events` geht.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Booking {
     pub event_id: String,
     #[serde(rename = "type")]
@@ -42,6 +43,40 @@ pub struct Booking {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub distance_km: Option<i64>,
     pub note: String,
+    /// Wann das Event im Spiel passiert ist: Systemzeit dieses Rechners, Unix-Sekunden UTC.
+    /// Der Server ordnet das Event damit dem richtigen Geldabgleich zu, auch wenn es erst
+    /// später ankommt. Ältere Zeilen im Postausgang haben das Feld nicht.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurred_at: Option<i64>,
+    /// Fracht, Start- und Zielstadt, nur bei `job_delivered`. Aus der letzten nicht leeren
+    /// Job-Konfiguration des SDK. Ältere Zeilen im Postausgang haben die Felder nicht.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cargo: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_city: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_city: Option<String>,
+}
+
+impl Booking {
+    /// Hängt Fracht und Städte eines Auftrags an.
+    pub fn with_job(self, job: Option<JobInfo>) -> Booking {
+        let job = job.unwrap_or_default();
+        Booking {
+            cargo: job.cargo,
+            source_city: job.source_city,
+            target_city: job.target_city,
+            ..self
+        }
+    }
+}
+
+/// Jetzt als Unix-Sekunden UTC, nach der Systemuhr.
+pub fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 /// Eine Buchung ohne `event_id`. Die vergibt der Aufrufer.
@@ -54,6 +89,7 @@ pub struct Draft {
 }
 
 impl Draft {
+    /// Die Buchung mit `event_id`, ohne Zeitpunkt.
     pub fn with_id(self, event_id: String) -> Booking {
         Booking {
             event_id,
@@ -61,6 +97,18 @@ impl Draft {
             amount: self.amount,
             distance_km: self.distance_km,
             note: self.note,
+            occurred_at: None,
+            cargo: None,
+            source_city: None,
+            target_city: None,
+        }
+    }
+
+    /// Die Buchung mit `event_id` und dem Zeitpunkt im Spiel (Unix-Sekunden UTC).
+    pub fn with_id_at(self, event_id: String, occurred_at: i64) -> Booking {
+        Booking {
+            occurred_at: Some(occurred_at),
+            ..self.with_id(event_id)
         }
     }
 }

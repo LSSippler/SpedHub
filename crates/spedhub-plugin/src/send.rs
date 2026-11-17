@@ -2,7 +2,12 @@
 
 use crate::config::Config;
 use crate::event::Booking;
+use crate::telemetry::Heartbeat;
 use std::time::Duration;
+
+/// Header mit der Version des Plugins, wie beim Launcher. Der Server kann daran erkennen, ob
+/// Plugin und Server zusammenpassen.
+pub const VERSION_HEADER: &str = "X-SpedHub-Version";
 
 /// Was mit einem Event passiert ist.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,6 +47,7 @@ impl Sender {
             .agent
             .post(&url)
             .header("Authorization", &format!("Bearer {}", config.token))
+            .header(VERSION_HEADER, env!("CARGO_PKG_VERSION"))
             .send_json(booking);
         let mut response = match response {
             Ok(r) => r,
@@ -63,6 +69,38 @@ impl Sender {
             },
             400 | 422 => Outcome::Rejected(format!("{status}: {}", server_error(&body))),
             _ => Outcome::Retry(format!("{status}: {}", server_error(&body))),
+        }
+    }
+}
+
+impl Sender {
+    /// Schickt einen Herzschlag. Ein Fehler heißt nur: Dieser Herzschlag ist verloren. Er wird
+    /// nicht wiederholt und nicht gespeichert.
+    pub fn heartbeat(
+        &self,
+        config: &Config,
+        company_id: i64,
+        heartbeat: &Heartbeat,
+    ) -> Result<(), String> {
+        let url = format!("{}/api/companies/{company_id}/heartbeat", config.server_url);
+        let mut response = self
+            .agent
+            .post(&url)
+            .header("Authorization", &format!("Bearer {}", config.token))
+            .header(VERSION_HEADER, env!("CARGO_PKG_VERSION"))
+            .send_json(heartbeat)
+            .map_err(|e| format!("Server nicht erreichbar: {e}"))?;
+        let status = response.status().as_u16();
+        let body = response
+            .body_mut()
+            .with_config()
+            .limit(64 * 1024)
+            .read_to_string()
+            .unwrap_or_default();
+        if (200..300).contains(&status) {
+            Ok(())
+        } else {
+            Err(format!("{status}: {}", server_error(&body)))
         }
     }
 }

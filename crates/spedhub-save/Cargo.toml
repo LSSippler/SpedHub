@@ -1,7 +1,7 @@
 [package]
 name = "spedhub-save"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 description = "Spielstände von ETS2 lesen und schreiben, Lkw exportieren, einsetzen und entfernen"
 
 [lib]
