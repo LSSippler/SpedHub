@@ -73,3 +73,17 @@ jobs:
           name: spedhub-plugin-windows-x64
           path: dist/
           if-no-files-found: error
+
+      - name: Launcher bauen
+        shell: pwsh
+        run: |
+          cargo build --release -p spedhub-launcher
+          New-Item -ItemType Directory -Force dist-launcher | Out-Null
+          Copy-Item target/release/spedhub-launcher.exe, crates/spedhub-launcher/README.md dist-launcher/
+
+      - name: Launcher hochladen
+        uses: actions/upload-artifact@v6
+        with:
+          name: spedhub-launcher-windows-x64
+          path: dist-launcher/
+          if-no-files-found: error

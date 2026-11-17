@@ -28,7 +28,7 @@ Nicht Teil des Projekts: ein eigener Multiplayer, Eingriffe in den Arbeitsspeich
 | Server (`server/`) | Accounts, Firma, Kasse, Fuhrpark, Leihen | läuft |
 | Dashboard (`server/web/`) | Weboberfläche für Chef und Fahrer | läuft |
 | Save-Bibliothek (`crates/spedhub-save`) | Spielstand lesen und schreiben, Lkw exportieren, einsetzen, entfernen, Kontostand setzen | erste Fassung, im Spiel noch nicht geprüft |
-| Launcher | Anmelden, Abgleich, Spielstand vorbereiten, Spiel starten, Abgleich beim Beenden | offen |
+| Launcher (`crates/spedhub-launcher`) | Anmelden, Abgleich, Spielstand vorbereiten, Spiel starten, Abgleich beim Beenden | erste Fassung: Anmelden, Fuhrpark, Ausleihen und Zurückgeben, Lkw in den Spielstand schreiben, `plugin.json`, Spiel starten. Aufräumen des Profils und Geldabgleich: offen |
 | Spiel-Plugin (`crates/spedhub-plugin`) | Telemetrie-Ereignisse melden, Quicksave und Quickload auslösen (Telemetry SDK und Input SDK) | Gameplay-Events: erste Fassung, im Spiel noch nicht geprüft. Quicksave und Quickload: offen |
 | Overlay | Kasse und Fuhrpark im Spiel | offen |
 | Convoy Dedicated Server | Die gemeinsame Session, offizieller Server von SCS | offen |
@@ -51,6 +51,8 @@ In der ersten Fassung schickt das Plugin Gameplay-Events direkt an den Server, �
 2. Der Launcher holt Kontostand, geliehene Lkw und Fuhrpark vom Server.
 3. Der Launcher räumt das Firmenprofil auf: Firmen-Lkw, die laut Server nicht an diesen Fahrer verliehen sind, kommen raus. Verliehene werden aus dem Serverstand neu eingesetzt. Der Kontostand wird auf den Serverwert gesetzt.
 4. Der Launcher startet das Spiel. Den Convoy betritt der Fahrer selbst über den Session-Browser, ein automatischer Beitritt ist nicht möglich.
+
+Stand der ersten Fassung: Schritt 3 gibt es noch nicht. Der Launcher räumt nicht auf und setzt den Kontostand nicht. Er setzt einen geliehenen Lkw in den neuesten Spielstand ein und legt das Ergebnis als neuen Speicherplatz `SpedHub: <Kennzeichen>` an, statt einen vorhandenen zu überschreiben. Steht der Lkw schon im neuesten Spielstand, etwa nach einer früheren Leihe, bricht das Einsetzen mit einer Meldung ab. Details in `crates/spedhub-launcher/README.md`.
 
 ### Lkw ausleihen
 

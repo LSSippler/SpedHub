@@ -120,6 +120,16 @@ pub mod money {
     pub const INFO_FIELD: &str = "info_money_account";
 }
 
+/// `info.sii`: eine Unit `save_container` mit dem Namen des Speicherplatzes für das Menü.
+pub mod info {
+    pub const KIND: &str = "save_container";
+    /// Angezeigter Name, Zeichenkette in Anführungszeichen. Bei Autosaves leer.
+    pub const NAME: &str = "name";
+    /// Zeitpunkt des Speicherns in Sekunden seit 1970. Vermutlich sortiert das Spiel danach,
+    /// bestätigt ist das nicht.
+    pub const FILE_TIME: &str = "file_time";
+}
+
 /// Neue Unit-Namen sehen aus wie die des Spiels: `_nameless.2ff.<hhhh>.<llll>`, die hinteren
 /// Gruppen vierstellig mit führenden Nullen, die letzte Stelle immer `8`. In echten
 /// Spielständen ist das bei allen Namen so. Gezählt wird ab `_nameless.2ff.7a11.0008` in

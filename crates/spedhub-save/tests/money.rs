@@ -62,3 +62,29 @@ fn fehlerfaelle_beim_kontostand() {
     assert!(set_money(&mut game, 5).is_err());
     assert_eq!(game, before);
 }
+
+#[test]
+fn name_und_zeit_des_speicherplatzes() {
+    let mut info = load(INFO);
+    assert_eq!(spedhub_save::info_name(&info).unwrap(), "");
+    spedhub_save::set_info_name(&mut info, "SpedHub: SPED 001").unwrap();
+    spedhub_save::set_info_file_time(&mut info, 1_800_000_000).unwrap();
+    assert_eq!(spedhub_save::info_name(&info).unwrap(), "SpedHub: SPED 001");
+    assert_eq!(
+        info.dump(),
+        text(INFO)
+            .replace(" name: \"\"\r\n", " name: \"SpedHub: SPED 001\"\r\n")
+            .replace(" file_time: 1794131316\r\n", " file_time: 1800000000\r\n")
+    );
+    for bad in ["", "mit \"Anführung\"", "Müller", &"x".repeat(65)] {
+        assert!(
+            matches!(
+                spedhub_save::set_info_name(&mut info, bad),
+                Err(Error::InvalidInput(_))
+            ),
+            "{bad:?}"
+        );
+    }
+    // game.sii hat keinen save_container
+    assert!(spedhub_save::set_info_name(&mut load(ZIEL), "x").is_err());
+}

@@ -20,6 +20,7 @@ Vor jedem Commit müssen Tests und Clippy sauber durchlaufen.
 - `server/`: Backend (axum, rusqlite) und Dashboard (`server/web/index.html`, wird per `include_str!` eingebaut)
 - `crates/spedhub-save/`: Save-Bibliothek und Kommandozeile `spedhub-save`. Alle Feldnamen stehen in `src/layout.rs`
 - `crates/spedhub-plugin/`: Telemetrie-Plugin (DLL) für ETS2, meldet Gameplay-Events an den Server. Logik ohne Spiel testbar, `src/ffi.rs` ist die einzige Stelle mit SDK-Bezug
+- `crates/spedhub-launcher/`: Launcher für Windows (egui/eframe). Logik in testbaren Modulen, nur `src/main.rs` ist Oberfläche. Am Spielstand arbeitet er nur über `spedhub-save`
 - `tools/transplant.py`: Python-Referenz für das Einsetzen eines Lkw
 - `testdata/`: verkleinerte, anonymisierte Spielstände aus ETS2 1.62
 - `docs/`: Architektur und Save-Format

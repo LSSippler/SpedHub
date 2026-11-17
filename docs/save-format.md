@@ -196,6 +196,17 @@ Noch nicht im Spiel geprüft. `spedhub-save` entfernt einen eigenen Lkw so:
 Der Kontostand steht in `bank.money_account`, immer in Euro, als ganze Zahl. Derselbe Betrag steht in `info.sii` in `save_container.info_money_account` für den Ladebildschirm (siehe `testdata/ziel_info.sii`). `spedhub-save money --set` schreibt beide Dateien gemeinsam oder keine.
 
 `info.sii` hat nur die eine Unit `save_container`. Sie enthält außerdem Name, Spielzeit, Save-Version (`version: 105`) und die DLC-Liste (`dependencies[]`).
+
+## Neuer Speicherplatz
+
+Noch nicht im Spiel geprüft. Der Launcher schreibt einen geliehenen Lkw nicht in einen vorhandenen Speicherplatz, sondern legt einen neuen an:
+
+- Ordner ist die nächste freie Nummer unter `save\` (`1`, `2`, …), so wie das Spiel eigene Spielstände nummeriert.
+- `game.sii` ist der neueste Spielstand mit eingesetztem Lkw, als Klartext.
+- `info.sii` ist die des Ausgangs-Speicherplatzes mit zwei Änderungen: `name` wird `"SpedHub: <Kennzeichen>"`, `file_time` die aktuelle Zeit in Sekunden seit 1970. Zeilenende und Dateiende bleiben, wie das Spiel sie geschrieben hat. Beide Felder stehen in `crates/spedhub-save/src/layout.rs` (`info`).
+- `preview.tga` fehlt, wie bei Autosaves.
+
+Offen ist, ob das Spiel den Speicherplatz in der Liste zeigt, ob es nach `file_time` sortiert und ob es einen Klartext-`game.sii` in einem sonst verschlüsselt gespeicherten Profil lädt.
 ## Offen
 
 - Ob das Spiel das Ergebnis des Einsetzens lädt, ist noch nicht bestätigt.
@@ -205,4 +216,5 @@ Der Kontostand steht in `bank.money_account`, immer in Euro, als ganze Zahl. Der
 - Wie das Spiel ein `game.sii` als Klartext schreibt (`g_save_format 2`): Zeilenende, Einrückung, Dateiende.
 - Ob das Spiel die von `spedhub-save` vergebenen Unit-Namen annimmt. Sie haben jetzt die Form der echten Namen, geprüft ist es noch nicht.
 - Ob `owned_trucks[]` beim Entfernen eines Lkw angepasst werden muss.
+- Ob ein vom Launcher angelegter Speicherplatz im Spiel erscheint und lädt, siehe oben.
 - Lkw mit Mod-Teilen.

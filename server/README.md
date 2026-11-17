@@ -126,7 +126,7 @@ Die Kasse ist ein Journal. Kassenstand und Lohnkonten sind immer die Summe der B
 - Lkw-Kauf für die Firma
 - Online-Status der Fahrer
 - Ablauf von Tokens, Passwort ändern
-- Der Launcher, der diese Schnittstelle benutzt. Save-Bibliothek und Spiel-Plugin gibt es in einer ersten Fassung
+- Firma gründen und beitreten im Launcher, bisher nur im Dashboard. Launcher, Save-Bibliothek und Spiel-Plugin gibt es in einer ersten Fassung
 
 ## Aufbau
 
