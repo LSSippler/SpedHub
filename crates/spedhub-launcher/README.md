@@ -31,7 +31,7 @@ Unten im Fenster steht die Version des Launchers, etwa `SpedHub 0.2.0`.
 | Spiel nicht gefunden | Weder über Steam noch in den Einstellungen ist ein Spielordner bekannt. Darunter steht, warum |
 | Keine Plugin-DLL neben dem Launcher | Selbst gebauter Launcher ohne DLL daneben, es lässt sich nichts vergleichen |
 
-"Plugin installieren" startet den Launcher über die Nachfrage nach Adminrechten (UAC) mit `--install-plugin` neu. Das Fenster bleibt offen und zeigt danach den neuen Stand. Läuft das Spiel, wird nichts ersetzt: Die DLL ist dann geladen, die Meldung sagt "Spiel beenden". "Ordner wählen" erscheint, wenn das Spiel nicht gefunden wurde. Der gewählte Ordner muss `bin\win_x64` enthalten und wird in `launcher.json` gemerkt.
+"Plugin installieren" startet den Launcher über die Nachfrage nach Adminrechten (UAC) mit `--install-plugin` neu. Das Fenster bleibt offen und zeigt danach den neuen Stand. Läuft das Spiel, wird nichts ersetzt: Die DLL ist dann geladen, die Meldung sagt "Spiel beenden". "Ordner wählen" erscheint, wenn das Spiel nicht gefunden wurde. Der gewählte Ordner muss `bin\win_x64` enthalten und wird in `launcher.json` gemerkt. "Plugin installieren" lässt in diesem Fall zuerst den Ordner wählen, ohne Adminrechte, und übergibt ihn dann.
 
 So sucht der Launcher das Spiel (`src/steam.rs`):
 
@@ -65,11 +65,15 @@ Der Launcher schickt bei jeder Anfrage seine Version im Header `X-SpedHub-Versio
 | `spedhub-launcher.exe` | Oberfläche |
 | `spedhub-launcher.exe --install-plugin` | Plugin ins Spiel kopieren, eine ältere DLL ersetzen. Findet er das Spiel nicht: Meldung und Ordnerdialog |
 | `spedhub-launcher.exe --install-plugin --game-dir "D:\Spiele\ETS2"` | Dasselbe in diesen Spielordner, der Ordner wird gemerkt |
-| `spedhub-launcher.exe --uninstall-plugin` | Plugin aus dem gemerkten und dem über Steam gefundenen Spielordner entfernen. Fehlt es, ist das kein Fehler |
-| `--quiet` zusätzlich | Keine Fenster, nur der Exit-Code. Für eine stille Installation |
+| `spedhub-launcher.exe --uninstall-plugin` | Plugin aus dem gemerkten und dem über Steam gefundenen Spielordner entfernen. Fehlt es, ist das kein Fehler. Läuft das Spiel: Nachfrage mit Wiederholen und Abbrechen, bei Abbrechen wird die DLL umbenannt (endet nicht mehr auf `.dll`, das Spiel lädt sie nicht mehr) und zum Löschen beim nächsten Neustart von Windows vorgemerkt |
+| `spedhub-launcher.exe --install-plugin --report-game-dir <Datei>` | Für das Setup: einen von Hand gewählten Spielordner zusätzlich in diese Datei schreiben (UTF-8 mit BOM) |
+| `spedhub-launcher.exe --remember-game-dir "D:\Spiele\ETS2"` | Für das Setup: den Spielordner prüfen und in `launcher.json` des aufrufenden Benutzers merken |
+| `--quiet` zusätzlich | Keine Fenster, nur der Exit-Code. Für eine stille Installation. Beim Entfernen wird dann nicht gefragt, sondern gleich umbenannt |
 | `spedhub-launcher.exe --version` | Version in einem Fenster |
 
-Ohne Oberfläche gibt es keine Ausgabe auf der Konsole, Rückmeldung kommt über den Exit-Code: `0` erledigt, `1` Fehler (stand in einer MessageBox), `2` Spiel nicht gefunden und kein Ordner gewählt, `3` unbekannte Option. In den Spielordner unter `Programme` darf je nach Rechner nur ein Admin schreiben, deshalb ruft das Setup `--install-plugin` mit seinen Adminrechten auf und die Deinstallation `--uninstall-plugin`.
+Ohne Oberfläche gibt es keine Ausgabe auf der Konsole, Rückmeldung kommt über den Exit-Code: `0` erledigt, `1` Fehler (stand in einer MessageBox), `2` Spiel nicht gefunden und kein Ordner gewählt, `3` unbekannte Option. In den Spielordner unter `Programme` darf je nach Rechner nur ein Admin schreiben, deshalb ruft das Setup `--install-plugin` mit seinen Adminrechten auf und die Deinstallation `--uninstall-plugin`, still mit `--quiet`.
+
+Mit Adminrechten kann der Launcher unter einem anderen Konto laufen, wenn ein Standardbenutzer im UAC-Dialog die Anmeldung eines Admins eingibt. Ein dort gewählter Spielordner landete in dessen `launcher.json`. Deshalb wählt die Oberfläche den Ordner bei "Spiel nicht gefunden" selbst, bevor sie sich über UAC neu startet, und übergibt ihn mit `--game-dir`. Der Launcher mit Adminrechten fragt dann nicht noch einmal. Das Setup lässt sich einen von Hand gewählten Ordner mit `--report-game-dir` melden und merkt ihn mit `--remember-game-dir` als der Benutzer, der das Setup gestartet hat.
 
 ## Bedienung
 
@@ -117,7 +121,7 @@ Beide Zeitpunkte kommen von der Uhr dieses Rechners, genau wie die Zeitpunkte, d
 
 Startet das Spiel zwischen Schritt 3 und 4, wird nichts geschrieben. Der Server rechnet beim nächsten Abgleich dann vom gelesenen Kontostand weiter.
 
-Wichtig: Ob das Spiel den geänderten Kontostand übernimmt und ob das Level aus den Erfahrungspunkten zum Level im Spiel passt, ist noch nicht im Spiel geprüft.
+Wichtig: Ob das Spiel den geänderten Kontostand übernimmt, auch mit dem Rest eines Anschaffungsbudgets, und ob das Level aus den Erfahrungspunkten zum Level im Spiel passt, ist noch nicht im Spiel geprüft.
 
 ## Was beim Schreiben in den Spielstand passiert
 
@@ -142,14 +146,14 @@ Alles liegt in `%LOCALAPPDATA%\SpedHub`:
 | `leases\<id>.json` | Bauplan geliehener Lkw, als Zwischenspeicher. Fehlt er, holt der Launcher ihn vom Server. Das dürfen nur du als Ausleiher und der Chef |
 | `backups\` | Kopien der Speicherplätze, aus denen der Launcher einen neuen gemacht hat |
 
-Die Deinstallation fragt "Anmeldung, Einstellungen und Backups behalten?", Standard ist Ja. Mit Nein löscht sie diesen Ordner. Gemeint ist der Ordner des Benutzers, der deinstalliert. Läuft `--install-plugin` aus dem Setup mit einem anderen Admin-Konto, merkt es sich einen gewählten Spielordner in dessen `launcher.json`. Das Setup kopiert das Plugin trotzdem, der Launcher findet es über Steam oder "Ordner wählen".
+Die Deinstallation fragt "Anmeldung, Einstellungen und Backups behalten?", Standard ist Ja. Mit Nein löscht sie diesen Ordner. Gemeint ist der Ordner des Benutzers, der deinstalliert. Läuft `--install-plugin` aus dem Setup mit einem anderen Admin-Konto, schreibt es einen gewählten Spielordner zusätzlich in eine Datei, und das Setup merkt ihn mit `--remember-game-dir` in der `launcher.json` des Benutzers, der das Setup gestartet hat.
 
 ## Aufbau
 
 | Datei | Inhalt |
 |---|---|
 | `src/main.rs` | Oberfläche (egui/eframe) und Weiche zur Kommandozeile. Alles, was dauert, läuft in einem eigenen Thread |
-| `src/cli.rs` | `--install-plugin`, `--uninstall-plugin`: Argumente, Ablauf mit Ordnerwahl |
+| `src/cli.rs` | Kommandozeile ohne Oberfläche: `--install-plugin`, `--uninstall-plugin`, `--remember-game-dir`, `--version`, Argumente, Ablauf mit Ordnerwahl, Exit-Codes |
 | `src/steam.rs` | ETS2 über Registry-Werte, `libraryfolders.vdf` und App-Manifest finden, eigener VDF-Leser |
 | `src/plugin_install.rs` | Plugin kopieren, ersetzen, entfernen, Stand über SHA-256 |
 | `src/update.rs` | GitHub-Releases abfragen, Setup laden und gegen `SHA256SUMS.txt` prüfen |

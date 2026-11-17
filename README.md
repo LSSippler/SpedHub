@@ -2,20 +2,30 @@
 
 [![CI](https://github.com/LSSippler/SpedHub/actions/workflows/ci.yml/badge.svg)](https://github.com/LSSippler/SpedHub/actions/workflows/ci.yml)
 
-SpedHub macht aus Euro Truck Simulator 2 eine echte Firma. Mehrere Fahrer fahren zusammen im Convoy, die Einnahmen gehen in eine gemeinsame Kasse, und wer keinen eigenen Lkw hat, leiht sich einen aus dem Fuhrpark der Firma. Der geliehene Lkw landet wirklich im eigenen Spielstand, mit Kilometerstand, Schaden und Tuning.
+SpedHub macht aus Euro Truck Simulator 2 eine echte Firma. Mehrere Fahrer fahren zusammen im Convoy des Spiels, die Einnahmen gehen in eine gemeinsame Kasse, und wer keinen eigenen Lkw hat, leiht sich einen aus dem Fuhrpark der Firma. Der geliehene Lkw landet wirklich im eigenen Spielstand, mit Kilometerstand, Verschleiß und Tuning.
 
-Das Projekt steht am Anfang. Was schon läuft und was noch fehlt:
+## Was SpedHub kann
+
+- **Kasse und Lohn.** Erlöse aus Aufträgen gehen ganz in die Firmenkasse, auf Wunsch mit einem Erlösfaktor für Wirtschafts-Mods. Einmal am Tag bekommt jeder Fahrer seinen Lohn: Kilometer mal Cent je km seiner Lohnstufe, dazu eine Tagespauschale. Die Lohnstufe hängt am Level im Spiel und an den Firmenkilometern. Reicht die Kasse nicht, bleibt der Rest als offene Lohnforderung stehen. Die Kasse ist ein Journal, Korrekturen sind neue Buchungen.
+- **Geldabgleich.** Im Spiel hat jeder Fahrer sein Lohnkonto plus einen Betriebsvorschuss der Firma. Der Launcher gleicht den Kontostand im Spielstand mit dem Server ab: Was fehlt, etwa fürs Tanken, bucht die Firma als Betriebskosten, was nicht erklärbar mehr ist, sieht der Chef. Ereignisse, die erst nach dem Abgleich ankommen, ordnet der Server über ihren Zeitpunkt im Spiel dem richtigen Abgleich zu und korrigiert ihn mit einer neuen Buchung.
+- **Fuhrpark und Leihe.** Der Chef übernimmt Lkw aus seinem Spielstand in den Fuhrpark. Fahrer leihen sie im Launcher aus, der sie in einen neuen Speicherplatz einsetzt, und geben sie zurück. Der Lkw wird über Modell und Teile wiedererkannt, auch wenn das Spiel das Kennzeichen ersetzt hat.
+- **Herzschlag und Online-Status.** Das Plugin meldet Aufträge, Strafen, Maut, Fähre und Zug und schickt alle 10 Sekunden einen Herzschlag. Das Dashboard zeigt, wer online ist, mit welchem Lkw und welchem Auftrag, der Launcher, welcher geliehene Lkw gerade fährt. Nach einem Absturz nimmt der Chef einen Lkw mit dem letzten bekannten Zustand zurück.
+- **Werkstatt und Haftung.** Der Server rechnet aus dem Verschleiß einen Schaden in Prozent. Über der Schadensgrenze steht ein Lkw nach der Rückgabe in der Werkstatt, bis der Chef ihn aus der Kasse reparieren lässt. Mit einem Haftungsanteil zahlt der Fahrer einen Teil des neuen Schadens aus seinem Lohnkonto.
+- **Anschaffungen.** Der Chef gibt ein Anschaffungsbudget frei, das beim Geldabgleich zusätzlich in seinen Spielstand kommt. Den Kauf im Spiel bucht der Abgleich genau einmal, danach lässt er sich als Lkw-Kauf mit dem Lkw verknüpfen. Lkw lassen sich verkaufen oder ausmustern.
+- **Setup und Updates.** Ein Setup für Windows installiert Launcher und Plugin und findet das Spiel über Steam. Der Launcher meldet neue Versionen und installiert sie auf Knopfdruck nach geprüfter Prüfsumme. Für den eigenen Server gibt es ein statisches Linux-Programm.
 
 | Baustein | Stand |
 |---|---|
-| Server mit Accounts, Kasse und Fuhrpark | läuft, siehe `server/` |
+| Server mit Accounts, Kasse, Lohn, Fuhrpark, Geldabgleich, Online-Status, Werkstatt und Anschaffungen | läuft, siehe `server/` |
 | Web-Dashboard | läuft, wird vom Server ausgeliefert |
 | Save-Bibliothek mit Kommandozeile | erste Fassung, siehe `crates/spedhub-save` und `tools/README.md` |
 | Launcher | erste Fassung, siehe `crates/spedhub-launcher` |
+| Spiel-Plugin für Telemetrie | erste Fassung, meldet Gameplay-Events und Herzschlag, siehe `crates/spedhub-plugin` |
 | Setup und Updates | erste Fassung, siehe Installation und `installer/` |
-| Spiel-Plugin für Telemetrie | erste Fassung, meldet Gameplay-Events, siehe `crates/spedhub-plugin` |
 
-Wichtig: Dass das Spiel einen von SpedHub bearbeiteten Spielstand fehlerfrei lädt, ist noch nicht im Spiel bestätigt. Bis dahin sind alle Aussagen zum Spielstand-Format vorläufig.
+Noch nicht gebaut sind das Aufräumen des Firmenprofils beim Start (fremde Firmen-Lkw entfernen), der Lkw-Wechsel im laufenden Spiel, ein Overlay im Spiel und die Anbindung an einen Convoy-Server.
+
+Im Spiel bestätigt ist bisher: ETS2 1.62 lädt einen Spielstand, in den `spedhub-save` einen Lkw eingesetzt hat, und der nächste Autosave ist intakt. Vieles andere ist nur ohne Spiel getestet, etwa ob das Spiel einen geschriebenen Kontostand übernimmt, ob das Plugin die erwarteten Werte liefert und ob Setup und Plugin-Installation auf einem echten Windows laufen. Die Liste steht in `docs/architektur.md`, Abschnitt "Offene Tests im Spiel und auf Windows".
 
 ## Installation
 
@@ -25,10 +35,13 @@ Für Fahrer gibt es ein Setup für Windows (64 Bit):
 2. Setup starten und die Nachfrage nach Adminrechten bestätigen. Es installiert den Launcher nach `Programme\SpedHub`, legt eine Verknüpfung im Startmenü an und, wenn nicht abgewählt, auf dem Desktop.
 3. Am Ende kopiert das Setup das Plugin in den Spielordner von Euro Truck Simulator 2. Den Spielordner sucht es über Steam, in allen Bibliotheken. Findet es ihn nicht, sagt es das und lässt den Ordner wählen.
 4. Wahlweise, standardmäßig abgewählt: "Server für lokale Tests". Dann gibt es im Startmenü "SpedHub-Server (lokaler Test)", der einen Server auf http://127.0.0.1:8787 mit Datenbank in `%LOCALAPPDATA%\SpedHub\server` startet.
+5. Launcher starten, die Adresse des Firmenservers eintragen, anmelden und die Firma wählen. Eine Firma gründen oder ihr beitreten geht im Dashboard des Servers. Sobald eine Firma gewählt ist, schreibt der Launcher die Anmeldung für das Plugin. Beim nächsten Spielstart fragt ETS2 einmal, ob es Plugins laden darf, das mit OK bestätigen.
+
+Den Server für die Firma betreibt der Chef, am besten auf einem VPS. Dafür gibt es im Release `spedhub-server-linux-x86_64`, siehe `server/README.md`, Abschnitt "Auf einem VPS".
 
 Updates meldet der Launcher selbst: Gibt es ein neueres Release, zeigt er oben "Version X verfügbar". "Herunterladen und installieren" lädt das Setup, prüft die Prüfsumme und startet es. Ohne Klick passiert nichts.
 
-Deinstallieren geht über die Windows-Einstellungen (Apps) oder "SpedHub deinstallieren" im Startmenü. Das entfernt Programm und Plugin. Die Frage "Anmeldung, Einstellungen und Backups behalten?" steht auf Ja. Mit Nein wird `%LOCALAPPDATA%\SpedHub` gelöscht, mit allen Backups.
+Deinstallieren geht über die Windows-Einstellungen (Apps) oder "SpedHub deinstallieren" im Startmenü. Das entfernt Programm und Plugin. Läuft dabei das Spiel, fragt die Deinstallation, ob sie es nach dem Beenden noch einmal versuchen soll. Mit Abbrechen, und bei einer stillen Deinstallation immer, wird das Plugin umbenannt, sodass das Spiel es nicht mehr lädt, und beim nächsten Neustart von Windows gelöscht. Die Frage "Anmeldung, Einstellungen und Backups behalten?" steht auf Ja. Mit Nein wird `%LOCALAPPDATA%\SpedHub` gelöscht, mit allen Backups.
 
 Details zum Launcher in `crates/spedhub-launcher/README.md`, zum Plugin in `crates/spedhub-plugin/README.md`, zum Server für den eigenen VPS in `server/README.md`.
 
@@ -45,6 +58,8 @@ cargo run --release -p spedhub-server
 
 Danach liegt das Dashboard unter http://127.0.0.1:8787.
 
+Das Setup baut nur unter Windows `pwsh installer\build.ps1`, mit Inno Setup 6 (fehlt es, installiert das Skript es über Chocolatey). Ergebnis sind `dist\SpedHub-Setup-<Version>.exe` und `dist\SHA256SUMS.txt`. Den statischen Server für Linux baut unter Linux `cargo build --release -p spedhub-server --target x86_64-unknown-linux-musl`, vorher einmal `rustup target add x86_64-unknown-linux-musl` und `sudo apt-get install -y musl-tools`.
+
 ## Version
 
 Alle Teile haben eine gemeinsame Versionsnummer, `[workspace.package] version` in der `Cargo.toml` im Wurzelordner: Server, Save-Bibliothek, Plugin, Launcher und Setup. Der Launcher zeigt sie unten im Fenster. Server und Launcher passen zusammen, wenn Haupt- und Nebenversion gleich sind, also `0.2.0` mit `0.2.5`, aber nicht mit `0.3.0`. Beim Anmelden vergleichen beide, der Launcher zeigt sonst einen gelben Hinweis und der Server schreibt eine Warnung ins Log.
@@ -53,7 +68,7 @@ Alle Teile haben eine gemeinsame Versionsnummer, `[workspace.package] version` i
 
 Ein Release baut GitHub Actions aus einem Tag. Von Hand gebaut wird nichts.
 
-1. **Version erhöhen.** In der `Cargo.toml` im Wurzelordner `version` unter `[workspace.package]` setzen, etwa von `0.2.0` auf `0.2.1`. Eine neue Nebenversion (`0.3.0`) heißt: Launcher und Server passen nicht mehr zu älteren, alle müssen aktualisieren. Danach `cargo build` laufen lassen, damit `Cargo.lock` die neue Version kennt, und wie immer prüfen:
+1. **Version erhöhen.** In der `Cargo.toml` im Wurzelordner `version` unter `[workspace.package]` setzen, etwa von `0.2.0` auf `0.2.1`. Eine neue Nebenversion (`0.3.0`) heißt: Launcher und Server passen nicht mehr zu älteren, alle müssen aktualisieren. Danach `cargo build` laufen lassen, damit `Cargo.lock` die neue Version kennt, und `Cargo.lock` mit committen: Der Workflow baut mit `--locked` und bricht sonst ab. Wie immer prüfen:
 
    ```powershell
    cd C:\dev\SpedHub
@@ -84,8 +99,10 @@ Ein Release baut GitHub Actions aus einem Tag. Von Hand gebaut wird nichts.
 
 6. **Server auf dem VPS aktualisieren**, wenn sich am Server etwas geändert hat oder die Nebenversion neu ist:
 
+   Erst in einen eigenen Ordner laden und prüfen, nicht nach `/opt/spedhub`: Dort liegt die Datei, die der Dienst gerade ausführt, und der Ordner gehört dem Benutzer `spedhub`.
+
    ```bash
-   cd /opt/spedhub
+   mkdir -p /tmp/spedhub-update && cd /tmp/spedhub-update
    curl -fLO https://github.com/LSSippler/SpedHub/releases/download/v0.2.1/spedhub-server-linux-x86_64
    curl -fLO https://github.com/LSSippler/SpedHub/releases/download/v0.2.1/SHA256SUMS.txt
    sha256sum -c --ignore-missing SHA256SUMS.txt
@@ -93,24 +110,36 @@ Ein Release baut GitHub Actions aus einem Tag. Von Hand gebaut wird nichts.
    ./spedhub-server-linux-x86_64 --version
    ```
 
-   Dann den laufenden Server beenden, die Datei an seinen Platz legen und neu starten. Vorher die Datenbank sichern. Details in `server/README.md`, Abschnitt "Auf einem VPS".
+   Dann in dieser Reihenfolge: Dienst stoppen, Datenbank sichern, die neue Datei an ihren Platz legen, Dienst starten. `spedhub.db*` nimmt eine vorhandene `spedhub.db-wal` mit, sie gehört zur Datenbank.
+
+   ```bash
+   sudo systemctl stop spedhub
+   sudo mkdir -p /opt/spedhub/backup/vor-0.2.1
+   sudo sh -c 'cp -p /opt/spedhub/spedhub.db* /opt/spedhub/backup/vor-0.2.1/'
+   sudo install -m 755 -o spedhub spedhub-server-linux-x86_64 /opt/spedhub/
+   sudo systemctl start spedhub
+   systemctl status spedhub
+   ```
+
+   Eine vorhandene Datenbank erweitert der Server beim Start selbst. Zurück zur alten Fassung geht es genauso mit der alten Datei und der gesicherten Datenbank. Details in `server/README.md`, Abschnitt "Auf einem VPS".
 
 Ging etwas schief: Release auf GitHub löschen, den Tag löschen (`git push --delete origin v0.2.1` und `git tag -d v0.2.1`), Fehler beheben und mit derselben oder einer neuen Version wieder ab Schritt 3. Ein schon veröffentlichtes Release, das Launcher eventuell geladen haben, besser nicht ersetzen, sondern eine neue Version machen.
 
-Die normale CI baut bei jedem Pull Request ebenfalls das Setup und den Linux-Server und lädt beide als Artefakte hoch (`spedhub-setup-windows-x64`, `spedhub-server-linux-x86_64`).
+Die normale CI (`.github/workflows/ci.yml`) baut bei jedem Pull Request ebenfalls das Setup und den Linux-Server und lädt sie als Artefakte hoch, dazu Plugin und Launcher einzeln (`spedhub-setup-windows-x64`, `spedhub-server-linux-x86_64`, `spedhub-plugin-windows-x64`, `spedhub-launcher-windows-x64`).
 
 ## Aufbau
 
 | Ordner | Inhalt |
 |---|---|
-| `server/` | Backend und Dashboard, Details in `server/README.md` |
-| `crates/spedhub-save/` | Save-Bibliothek: Spielstand lesen, prüfen, schreiben, Lkw exportieren und einsetzen |
-| `crates/spedhub-plugin/` | Plugin für ETS2: meldet Aufträge, Strafen, Maut, Fähre und Zug an den Server |
-| `crates/spedhub-launcher/` | Launcher für Windows: anmelden, Fuhrpark, Lkw in den Spielstand schreiben, Spiel starten |
-| `installer/` | Setup mit Inno Setup (`spedhub.iss`) und das Bauskript `build.ps1` |
+| `server/` | Backend und Dashboard: Kasse, Lohn, Fuhrpark, Geldabgleich, Online-Status, Werkstatt, Anschaffungen. Details in `server/README.md` |
+| `crates/spedhub-save/` | Save-Bibliothek und Kommandozeile `spedhub-save`: Spielstand lesen, prüfen, schreiben, Lkw exportieren, wiedererkennen und einsetzen, Kontostand setzen |
+| `crates/spedhub-plugin/` | Plugin für ETS2: meldet Aufträge, Strafen, Maut, Fähre und Zug und schickt den Herzschlag. Details in `crates/spedhub-plugin/README.md` |
+| `crates/spedhub-launcher/` | Launcher für Windows: anmelden, Fuhrpark, Lkw in den Spielstand schreiben, Geldabgleich, Spiel starten, Plugin installieren, Updates. Details in `crates/spedhub-launcher/README.md` |
+| `installer/` | Setup mit Inno Setup (`spedhub.iss`) und das Bauskript `build.ps1`, nur unter Windows |
+| `.github/workflows/` | `ci.yml` prüft jeden Pull Request unter Linux und Windows und baut Setup und Linux-Server mit, `release.yml` baut aus einem Tag das Release |
 | `tools/` | Bedienung von `spedhub-save` und die Python-Referenz, Details in `tools/README.md` |
-| `testdata/` | Kleine Test-Spielstände mit echtem Aufbau |
-| `docs/` | Architektur und Notizen zum Spielstand-Format |
+| `testdata/` | Kleine, anonymisierte Test-Spielstände aus ETS2 1.62 |
+| `docs/` | Architektur (`architektur.md`) und Spielstand-Format (`save-format.md`) |
 
 ## Hinweis
 

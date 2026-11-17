@@ -2,11 +2,11 @@
 
 Das Backend von SpedHub: Accounts, Firmenkasse und Fuhrpark. Die Version steht in der `Cargo.toml` im Wurzelordner und gilt für alle Teile von SpedHub.
 
-Der Server ist die Wahrheit. Was im Spielstand steht, ist nur eine Kopie, die der Launcher später bei jedem Abgleich neu aufbaut. Mehr dazu in `docs/architektur.md`.
+Der Server ist die Wahrheit. Kontostand und geliehene Lkw im Spielstand sind nur Kopien, die der Launcher aus dem Serverstand neu schreibt. Mehr dazu in `docs/architektur.md`.
 
 ## Starten
 
-Voraussetzung ist ein aktuelles Rust mit dem MSVC-Toolchain (wegen SQLite braucht es den C-Compiler aus den Visual Studio Build Tools).
+Voraussetzung ist ein aktuelles Rust, unter Windows mit der MSVC-Toolchain (wegen SQLite braucht es den C-Compiler aus den Visual Studio Build Tools). Fertig gebaut gibt es den Server im Setup ("Server für lokale Tests") und als `spedhub-server-linux-x86_64` in den Releases.
 
 ```powershell
 cd C:\dev\SpedHub
@@ -108,7 +108,19 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now spedhub
 ```
 
-Davor gehört ein Reverse Proxy mit HTTPS (siehe oben). Für ein Update die Datenbank sichern (`sqlite3 spedhub.db ".backup spedhub-vorher.db"` oder bei gestopptem Dienst kopieren), die neue Datei an den Platz von `spedhub-server-linux-x86_64` legen und `sudo systemctl restart spedhub`. Eine vorhandene Datenbank erweitert der Server beim Start selbst.
+Davor gehört ein Reverse Proxy mit HTTPS (siehe oben).
+
+Für ein Update die neue Datei erst in einem eigenen Ordner laden und prüfen (wie oben, aber zum Beispiel in `/tmp/spedhub-update` statt in `/opt/spedhub`). Nicht direkt über die laufende Datei laden, das scheitert mit "Text file busy". Dann:
+
+```bash
+sudo systemctl stop spedhub
+sudo mkdir -p /opt/spedhub/backup/vor-0.2.1
+sudo sh -c 'cp -p /opt/spedhub/spedhub.db* /opt/spedhub/backup/vor-0.2.1/'
+sudo install -m 755 -o spedhub spedhub-server-linux-x86_64 /opt/spedhub/
+sudo systemctl start spedhub
+```
+
+`spedhub.db*` nimmt eine vorhandene `spedhub.db-wal` mit, sie gehört zur Datenbank. Bei laufendem Dienst geht die Sicherung auch mit `sudo -u spedhub sqlite3 /opt/spedhub/spedhub.db ".backup /opt/spedhub/backup/spedhub-vorher.db"`. Eine vorhandene Datenbank erweitert der Server beim Start selbst.
 
 Selbst bauen geht unter Linux mit `rustup target add x86_64-unknown-linux-musl`, `sudo apt-get install -y musl-tools` und `cargo build --release -p spedhub-server --target x86_64-unknown-linux-musl`.
 
@@ -365,7 +377,8 @@ Spät gemeldete Ereignisse rechnen das Fenster eines früheren Abgleichs neu (si
 
 ## Was noch fehlt
 
-- Firma gründen und beitreten im Launcher, bisher nur im Dashboard. Launcher, Save-Bibliothek und Spiel-Plugin gibt es in einer ersten Fassung
+- Firma gründen und beitreten im Launcher, bisher nur im Dashboard
+- Im Spiel ungeprüft ist, ob die Werte aus dem Herzschlag stimmen und ob das Spiel einen geschriebenen Kontostand übernimmt, auch mit Anschaffungsbudget. Die Liste steht in `docs/architektur.md`, Abschnitt "Offene Tests im Spiel und auf Windows"
 
 ## Aufbau
 

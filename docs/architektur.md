@@ -26,12 +26,12 @@ Nicht Teil des Projekts: ein eigener Multiplayer, Eingriffe in den Arbeitsspeich
 
 | Baustein | Aufgabe | Stand |
 |---|---|---|
-| Server (`server/`) | Accounts, Firma, Kasse, Fuhrpark, Leihen, tägliche Lohnabrechnung, Geldabgleich, Schaden und Werkstatt, Anschaffungen | läuft |
+| Server (`server/`) | Accounts, Firma, Kasse, Fuhrpark, Leihen, tägliche Lohnabrechnung, Geldabgleich mit spät gemeldeten Ereignissen, Herzschlag und Online-Status, Schaden und Werkstatt, Anschaffungen, Verkauf und Ausmusterung | läuft |
 | Dashboard (`server/web/`) | Weboberfläche für Chef und Fahrer | läuft |
-| Save-Bibliothek (`crates/spedhub-save`) | Spielstand lesen und schreiben, Lkw exportieren, einsetzen, entfernen, Kontostand setzen | erste Fassung, im Spiel noch nicht geprüft |
-| Launcher (`crates/spedhub-launcher`) | Anmelden, Abgleich, Spielstand vorbereiten, Spiel starten, Abgleich beim Beenden | erste Fassung: Anmelden, Fuhrpark, Ausleihen und Zurückgeben, Lkw in den Spielstand schreiben, Geldabgleich, `plugin.json`, Spiel starten. Aufräumen des Profils: offen |
+| Save-Bibliothek (`crates/spedhub-save`) | Spielstand lesen und schreiben, Lkw exportieren, wiedererkennen, einsetzen, entfernen, Kontostand setzen | erste Fassung. Einsetzen in einen Spielstand ohne eigenen Lkw im Spiel bestätigt (1.62), Kontostand, Einsetzen neben eigene Lkw und Entfernen noch nicht |
+| Launcher (`crates/spedhub-launcher`) | Anmelden, Abgleich, Spielstand vorbereiten, Spiel starten, Abgleich beim Beenden, Plugin installieren, Updates | erste Fassung: Anmelden, Passwort ändern, Fuhrpark mit Schaden und Werkstatt, Ausleihen und Zurückgeben, Lkw übernehmen und Kauf verknüpfen, Lkw in den Spielstand schreiben, Geldabgleich, `plugin.json`, Plugin installieren, Updates, Spiel starten. Aufräumen des Profils und Abgleich beim Beenden: offen |
 | Spiel-Plugin (`crates/spedhub-plugin`) | Telemetrie-Ereignisse und Herzschlag melden, Quicksave und Quickload auslösen (Telemetry SDK und Input SDK) | Gameplay-Events und Herzschlag: erste Fassung, im Spiel noch nicht geprüft. Quicksave und Quickload: offen |
-| Setup (`installer/`) | Launcher, Plugin und optional Server installieren, Plugin ins Spiel kopieren, Updates über GitHub-Releases | erste Fassung, Setup und Windows-Teile noch nicht auf echtem Windows geprüft |
+| Setup (`installer/`, `.github/workflows/release.yml`) | Launcher, Plugin und optional Server installieren, Plugin ins Spiel kopieren, Releases mit Prüfsummen | erste Fassung. Die CI baut das Setup auf dem Windows-Runner, installiert ist es auf einem echten Windows noch nicht |
 | Overlay | Kasse und Fuhrpark im Spiel | offen |
 | Convoy Dedicated Server | Die gemeinsame Session, offizieller Server von SCS | offen |
 
@@ -43,7 +43,7 @@ Spiel (ETS2)  <->  Plugin  <->  Launcher  <->  Server
 Convoy Dedicated Server (nur gemeinsames Fahren, kennt weder Geld noch Fuhrpark)
 ```
 
-In der ersten Fassung schickt das Plugin Gameplay-Events direkt an den Server, über `POST /api/companies/{id}/events`, und alle 10 Sekunden einen Herzschlag über `POST /api/companies/{id}/heartbeat`. Server, Token und Firma liest es aus `%LOCALAPPDATA%\SpedHub\plugin.json`, die später der Launcher schreibt. Ist der Server nicht erreichbar, sammelt das Plugin die Events in einem Postausgang und schickt sie nach. Details in `crates/spedhub-plugin/README.md`.
+In der ersten Fassung schickt das Plugin Gameplay-Events direkt an den Server, über `POST /api/companies/{id}/events`, und alle 10 Sekunden einen Herzschlag über `POST /api/companies/{id}/heartbeat`. Server, Token und Firma liest es aus `%LOCALAPPDATA%\SpedHub\plugin.json`, die der Launcher schreibt, sobald eine Firma gewählt ist. Ist der Server nicht erreichbar, sammelt das Plugin die Events in einem Postausgang und schickt sie nach. Details in `crates/spedhub-plugin/README.md`.
 
 ## Abläufe
 
@@ -175,8 +175,8 @@ Tag v0.2.1 --> GitHub Actions (release.yml)
 ```
 
 - **Setup** (`installer/spedhub.iss`, Inno Setup 6, deutsch): Launcher und Plugin-DLL nach `Programme\SpedHub`, Verknüpfungen im Startmenü und, abwählbar, auf dem Desktop. Optional, standardmäßig abgewählt, "Server für lokale Tests" mit einer Verknüpfung, die `spedhub-server.exe --local` startet. Am Ende ruft das Setup mit seinen Adminrechten `spedhub-launcher.exe --install-plugin` auf.
-- **Plugin installieren**: Die Suche nach ETS2 steckt im Launcher (`src/steam.rs`), damit sie in Rust getestet ist: Steam-Ordner aus der Registry, alle Bibliotheken aus `libraryfolders.vdf`, App-ID 227300, `installdir` aus dem App-Manifest. Ziel ist `bin\win_x64\plugins`. Kopiert wird über eine temporäre Datei, eine ältere DLL wird ersetzt, bei laufendem Spiel nichts. Der Launcher zeigt "Plugin installiert / veraltet / fehlt" über die SHA-256 und startet sich für "Plugin installieren" über UAC neu.
-- **Deinstallation**: entfernt Programm und Plugin (`--uninstall-plugin`). "Anmeldung, Einstellungen und Backups behalten?" steht auf Ja, mit Nein wird `%LOCALAPPDATA%\SpedHub` des deinstallierenden Benutzers gelöscht.
+- **Plugin installieren**: Die Suche nach ETS2 steckt im Launcher (`src/steam.rs`), damit sie in Rust getestet ist: Steam-Ordner aus der Registry, alle Bibliotheken aus `libraryfolders.vdf`, App-ID 227300, `installdir` aus dem App-Manifest. Ziel ist `bin\win_x64\plugins`. Kopiert wird über eine temporäre Datei, eine ältere DLL wird ersetzt, bei laufendem Spiel nichts. Der Launcher zeigt "Plugin installiert / veraltet / fehlt" über die SHA-256 und startet sich für "Plugin installieren" über UAC neu. Ist das Spiel nicht gefunden, wählt er den Ordner vorher ohne Adminrechte und übergibt ihn, denn mit Adminrechten kann er unter einem anderen Konto laufen. Aus demselben Grund meldet das Setup einen von Hand gewählten Ordner über eine Datei zurück und merkt ihn als ursprünglicher Benutzer (`--report-game-dir`, `--remember-game-dir`).
+- **Deinstallation**: entfernt Programm und Plugin (`--uninstall-plugin`, still mit `--quiet`), das Plugin zuerst, solange der Launcher noch da ist. Läuft das Spiel, fragt der Launcher mit Wiederholen und Abbrechen. Bei Abbrechen und bei einer stillen Deinstallation wird die DLL umbenannt, sodass das Spiel sie nicht mehr lädt, und zum Löschen beim nächsten Neustart von Windows vorgemerkt. Reste räumt die nächste Installation weg. "Anmeldung, Einstellungen und Backups behalten?" steht auf Ja, mit Nein wird `%LOCALAPPDATA%\SpedHub` des deinstallierenden Benutzers gelöscht.
 - **Updates**: Der Launcher fragt beim Start die öffentliche API der GitHub-Releases ab. Bei einer neueren Version zeigt er einen Hinweis. Erst auf Knopfdruck lädt er Setup und `SHA256SUMS.txt`, prüft die SHA-256 und startet das Setup nur, wenn sie passt. Kein stilles Update.
 - **Versionsprüfung**: Launcher und Plugin schicken `X-SpedHub-Version`. Beim Anmelden antwortet der Server mit `server_version` und `compatible`. Gleiche Haupt- und Nebenversion passen zusammen. Sonst warnen Launcher (gelber Hinweis) und Server (Log), gesperrt wird nichts.
 - **VPS**: Der Server kommt als statisch gelinktes Linux-Binary ins Release, siehe `server/README.md`, Abschnitt "Auf einem VPS".
@@ -195,27 +195,36 @@ So liegt ein Firmen-Lkw auf dem Server (`trucks.package` und `trucks.state`):
 
 ## Reihenfolge
 
-1. Tests von Hand im Spiel (siehe unten)
-2. Save-Bibliothek in Rust
-3. Launcher mit Leihe vor dem Start, Plugin für Telemetrie, Geldabgleich
-4. Lkw-Wechsel im laufenden Spiel, Overlay
-5. Convoy-Server, Lkw-Kauf für die Firma (Anschaffungsbudget, Kauf verknüpfen, Verkauf: erste Fassung), Wirtschafts-Mod
-6. Härten: Versionssperre, Backups, Mod-Lkw
+1. Tests von Hand im Spiel: Einsetzen bestätigt, der Rest steht unten
+2. Save-Bibliothek in Rust: erste Fassung
+3. Launcher mit Leihe vor dem Start, Plugin für Telemetrie, Geldabgleich: erste Fassung. Dazu gekommen sind spät gemeldete Ereignisse, Herzschlag und Online-Status, Werkstatt und Haftung, Setup und Updates
+4. Aufräumen des Profils beim Start, Lkw-Wechsel im laufenden Spiel, Overlay: offen
+5. Lkw-Kauf für die Firma (Anschaffungsbudget, Kauf verknüpfen, Verkauf): erste Fassung. Convoy-Server und Wirtschafts-Mod: offen
+6. Härten: Backups vor jedem Schreiben gibt es. Versionssperre und Mod-Lkw: offen
 
-## Offene Tests im Spiel
+## Offene Tests im Spiel und auf Windows
+
+Bestätigt ist mit 1.62: Ein mit `spedhub-save` eingesetzter Lkw lädt als eigener, aktiver Lkw in der Heimatgarage, mit Zubehör, Kilometern, Verschleiß und Tank, und der nächste Autosave ist intakt. Das Spiel vergibt dabei alle `_nameless`-Namen neu und kann das Kennzeichen ersetzen. Details in `docs/save-format.md`, Abschnitt "Im Spiel bestätigt". Offen ist:
 
 | Test | Frage |
 |---|---|
-| Lkw verpflanzen | Lädt 1.62 einen Spielstand mit eingesetztem fremdem Lkw fehlerfrei? Stimmen Kilometer, Schaden und Tuning? Wo steht der Lkw? |
+| Kennzeichen | Warum ersetzt das Spiel das Kennzeichen, bei jedem Laden oder nur einmal? Woher kommt `Economy reset - company mismatch`? |
+| Einsetzen neben eigene Lkw | Lädt ein Spielstand, in dem der bisherige eigene Lkw in einen freien Stellplatz gezogen ist? |
+| Neuer Speicherplatz | Erscheint ein vom Launcher angelegter Speicherplatz im Spiel? |
 | Save-Cache | Übernimmt das laufende Spiel einen geänderten Spielstand zuverlässig, auch beim zweiten Mal? Seit 1.50 gibt es einen Datei-Cache, der alte Versionen liefern kann |
-| Kontostand | Übernimmt das Spiel den beim Geldabgleich geschriebenen Kontostand? |
+| Kontostand | Übernimmt das Spiel den beim Geldabgleich geschriebenen Kontostand, auch mit dem Rest eines Anschaffungsbudgets beim Chef? |
 | Level | Passt das aus `info_players_experience` berechnete Level zu dem, das das Spiel anzeigt? |
+| Reparierter Lkw | Nimmt das Spiel einen nach der Werkstatt mit reparierbarem Verschleiß 0 eingesetzten Lkw so an? |
 | Lkw entfernen | Lädt ein Spielstand, dessen aktiver Lkw ersatzlos entfernt wurde? |
+| Plugin und Events | Lädt das Spiel die DLL, kommen die Gameplay-Events mit den erwarteten Beträgen an? |
+| Herzschlag | Liefern die Kanäle die erwarteten Einheiten (Kilometer, Verschleiß 0 bis 1, Liter, Meter je Sekunde)? Welches Format hat `license.plate` genau? Ist die Job-Konfiguration bei `job.delivered` noch gefüllt? |
+| Plugin-Installation | Findet der Launcher ETS2 auf einem echten Windows über Registry und `libraryfolders.vdf`? Klappen Neustart über UAC, Ersetzen und Entfernen bei laufendem Spiel? |
+| Setup | Installation, Deinstallation und Update über den Launcher auf einem echten Windows, auch mit einem Standardbenutzer, der im UAC-Dialog einen Admin angibt |
 | Laden im Convoy | Bleibt die Verbindung beim Laden stehen? |
 | Sicht der anderen | Sehen Mitspieler nach einem Lkw-Wechsel sofort den neuen Lkw? |
 | Session-Ende | Welcher Spielstand liegt nach "behalten" oder "zurücksetzen" auf der Platte? |
 
-Solange der erste Test offen ist, sind alle Angaben zum Einsetzen vorläufig.
+Was hier offen ist, gilt als vorläufig. Code am Spielstand bleibt so gebaut, dass sich die Feldliste in `crates/spedhub-save/src/layout.rs` leicht anpassen lässt.
 
 ## Fremde Bausteine
 

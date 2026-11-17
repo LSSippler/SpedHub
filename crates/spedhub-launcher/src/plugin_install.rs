@@ -4,6 +4,11 @@
 //! `<Spielordner>\bin\win_x64\plugins\spedhub_plugin.dll`. Kopiert wird über eine temporäre
 //! Datei und Umbenennen, damit nie eine halbe DLL im Spiel liegt.
 //!
+//! Beim Entfernen hat ein laufendes Spiel die DLL geladen, Windows lässt sie dann nicht
+//! löschen. [`set_aside`] benennt sie deshalb um, sodass sie nicht mehr auf `.dll` endet und das
+//! Spiel sie beim nächsten Start nicht mehr lädt, und merkt sie zum Löschen beim nächsten
+//! Neustart von Windows vor. Übrig gebliebene Dateien räumen [`install`] und [`uninstall`] weg.
+//!
 //! Wo das Spiel liegt, entscheidet [`locate_game`]: ein ausdrücklich übergebener Ordner, sonst
 //! der in den Einstellungen gemerkte, sonst die Suche über Steam ([`crate::steam`]).
 
@@ -22,6 +27,9 @@ use std::{
 pub const PLUGIN_DLL: &str = "spedhub_plugin.dll";
 
 const GAME_RUNNING: &str = "Euro Truck Simulator 2 läuft gerade und hat das Plugin geladen. Bitte das Spiel beenden, dann noch einmal versuchen";
+
+/// Endung einer zur Seite gelegten DLL, siehe [`set_aside`].
+const SET_ASIDE_SUFFIX: &str = ".entfernt";
 
 /// `<Spielordner>\bin\win_x64\plugins`
 pub fn plugins_dir(game_dir: &Path) -> PathBuf {
@@ -118,7 +126,7 @@ fn is_locked(e: &io::Error) -> bool {
 
 fn locked_error(path: &Path, e: &io::Error) -> Error {
     if is_locked(e) {
-        Error::Other(format!(
+        Error::PluginInUse(format!(
             "{} lässt sich nicht ersetzen ({e}). Läuft Euro Truck Simulator 2? Bitte das Spiel beenden, dann noch einmal versuchen. Fehlen Adminrechte, den Launcher über \"Plugin installieren\" starten",
             path.display()
         ))
@@ -131,7 +139,7 @@ fn refuse_if_running(game: &dyn GameCheck) -> Result<()> {
     // Lässt sich nicht prüfen, ob das Spiel läuft: trotzdem versuchen. Ist die DLL gesperrt,
     // scheitert das Umbenennen mit einer klaren Meldung.
     if game.is_running() == Ok(true) {
-        return Err(Error::Other(GAME_RUNNING.into()));
+        return Err(Error::PluginInUse(GAME_RUNNING.into()));
     }
     Ok(())
 }
@@ -161,6 +169,7 @@ pub fn install(bundled: &Path, game_dir: &Path, game: &dyn GameCheck) -> Result<
             game_dir.display()
         )));
     }
+    remove_leftovers(game_dir);
     let target = installed_dll(game_dir);
     let existed = target.is_file();
     let source_hash = sha256_file(bundled).map_err(|e| Error::io(bundled, &e))?;
@@ -198,20 +207,90 @@ pub fn install(bundled: &Path, game_dir: &Path, game: &dyn GameCheck) -> Result<
     })
 }
 
-/// Entfernt die DLL aus dem Spiel. Liegt keine da, ist das kein Fehler (`Ok(false)`).
-pub fn uninstall(game_dir: &Path, game: &dyn GameCheck) -> Result<bool> {
+/// Ergebnis von [`uninstall`] und [`set_aside`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Removal {
+    /// Im Spiel lag keine DLL
+    NotThere,
+    Deleted,
+    /// Die DLL ließ sich nicht löschen und ist umbenannt. Das Spiel lädt sie beim nächsten Start
+    /// nicht mehr.
+    SetAside {
+        /// Neuer Name der Datei
+        path: PathBuf,
+        /// Ob sie zum Löschen beim nächsten Neustart von Windows vorgemerkt ist, sonst warum nicht
+        delete_on_reboot: std::result::Result<(), String>,
+    },
+}
+
+/// Entfernt Reste: eine halb kopierte DLL und zur Seite gelegte DLLs, die das Spiel inzwischen
+/// nicht mehr festhält. Was sich nicht löschen lässt, bleibt liegen.
+pub fn remove_leftovers(game_dir: &Path) {
+    let dir = plugins_dir(game_dir);
+    let _ = fs::remove_file(dir.join(format!("{PLUGIN_DLL}.neu")));
+    let prefix = format!("{PLUGIN_DLL}.");
+    for entry in fs::read_dir(&dir).into_iter().flatten().flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with(&prefix) && name.ends_with(SET_ASIDE_SUFFIX) {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// Entfernt die DLL aus dem Spiel. Liegt keine da, ist das kein Fehler ([`Removal::NotThere`]).
+/// Läuft das Spiel oder hält es die DLL fest, gibt es [`Error::PluginInUse`]. Dann lässt sich
+/// nach dem Beenden des Spiels noch einmal versuchen oder die DLL mit [`set_aside`] unschädlich
+/// machen.
+pub fn uninstall(game_dir: &Path, game: &dyn GameCheck) -> Result<Removal> {
     let target = installed_dll(game_dir);
-    // Reste einer abgebrochenen Installation
-    let _ = fs::remove_file(plugins_dir(game_dir).join(format!("{PLUGIN_DLL}.neu")));
+    remove_leftovers(game_dir);
     if !target.exists() {
-        return Ok(false);
+        return Ok(Removal::NotThere);
     }
     refuse_if_running(game)?;
     match fs::remove_file(&target) {
-        Ok(()) => Ok(true),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+        Ok(()) => Ok(Removal::Deleted),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Removal::NotThere),
         Err(e) => Err(locked_error(&target, &e)),
     }
+}
+
+/// Für den Fall, dass das Spiel die DLL geladen hat: Umbenennen geht unter Windows auch dann,
+/// Löschen nicht. Die DLL heißt danach `spedhub_plugin.dll.<n>.entfernt`, endet also nicht mehr
+/// auf `.dll`, und das Spiel lädt sie beim nächsten Start nicht mehr. `delete_later` merkt sie
+/// zum Löschen beim nächsten Neustart von Windows vor ([`crate::system::delete_on_reboot`]).
+/// Klappt das nicht, räumt die nächste Installation oder Deinstallation sie weg.
+pub fn set_aside(
+    game_dir: &Path,
+    delete_later: &dyn Fn(&Path) -> std::result::Result<(), String>,
+) -> Result<Removal> {
+    let target = installed_dll(game_dir);
+    if !target.exists() {
+        return Ok(Removal::NotThere);
+    }
+    let dir = plugins_dir(game_dir);
+    // Eine früher zur Seite gelegte DLL kann noch festgehalten sein, also ein freier Name
+    let aside = (1..1000)
+        .map(|n| dir.join(format!("{PLUGIN_DLL}.{n}{SET_ASIDE_SUFFIX}")))
+        .find(|p| !p.exists())
+        .ok_or_else(|| {
+            Error::Other(format!(
+                "In {} liegen zu viele alte Plugin-Dateien. Bitte das Spiel beenden und sie von Hand löschen",
+                dir.display()
+            ))
+        })?;
+    fs::rename(&target, &aside).map_err(|e| {
+        Error::Other(format!(
+            "{} ließ sich weder löschen noch umbenennen ({e}). Bitte das Spiel beenden und die Datei von Hand löschen",
+            target.display()
+        ))
+    })?;
+    let delete_on_reboot = delete_later(&aside);
+    Ok(Removal::SetAside {
+        path: aside,
+        delete_on_reboot,
+    })
 }
 
 /// Wo das Spiel liegt und woher das bekannt ist.

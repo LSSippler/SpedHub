@@ -77,8 +77,9 @@ fn run_gui() -> eframe::Result {
     )
 }
 
-/// `--install-plugin`, `--uninstall-plugin` und `--version` ohne Oberfläche. Liefert den
-/// Exit-Code. Fehler stehen in einer MessageBox, mit `--quiet` nur im Exit-Code.
+/// `--install-plugin`, `--uninstall-plugin`, `--remember-game-dir` und `--version` ohne
+/// Oberfläche. Liefert den Exit-Code. Fehler stehen in einer MessageBox, mit `--quiet` nur im
+/// Exit-Code.
 fn run_cli(command: Command) -> i32 {
     let paths = AppPaths::from_env();
     let env = InstallEnv {
@@ -86,6 +87,7 @@ fn run_cli(command: Command) -> i32 {
         registry: system::steam_registry(),
         bundled: plugin_install::bundled_dll(),
         game: &ProcessCheck,
+        delete_later: &system::delete_on_reboot,
     };
     let show = |quiet: bool, text: &str, kind: MessageKind| {
         eprintln!("{text}");
@@ -103,7 +105,11 @@ fn run_cli(command: Command) -> i32 {
             );
             cli::EXIT_OK
         }
-        Command::InstallPlugin { game_dir, quiet } => {
+        Command::InstallPlugin {
+            game_dir,
+            report,
+            quiet,
+        } => {
             let mut choose = |reason: &str| -> Option<PathBuf> {
                 if quiet {
                     return None;
@@ -112,7 +118,19 @@ fn run_cli(command: Command) -> i32 {
                 system::pick_folder("Ordner von Euro Truck Simulator 2 wählen")
             };
             match cli::install_plugin(game_dir.as_deref(), &env, &mut choose) {
-                Ok(InstallOutcome::Installed { not_remembered, .. }) => {
+                Ok(InstallOutcome::Installed {
+                    not_remembered,
+                    game_dir,
+                    source,
+                    ..
+                }) => {
+                    // Für das Setup, das den Ordner als ursprünglicher Benutzer merkt
+                    if source == GameSource::Argument
+                        && let Some(file) = report
+                        && let Err(e) = cli::write_game_dir_report(&file, &game_dir)
+                    {
+                        eprintln!("{e}");
+                    }
                     if let Some(e) = not_remembered {
                         show(
                             quiet,
@@ -144,17 +162,38 @@ fn run_cli(command: Command) -> i32 {
                 }
             }
         }
-        Command::UninstallPlugin { quiet } => match cli::uninstall_plugin(&env) {
-            Ok(_) => cli::EXIT_OK,
-            Err(e) => {
-                show(
-                    quiet,
-                    &format!("Das Plugin ließ sich nicht entfernen: {e}"),
-                    MessageKind::Error,
-                );
-                cli::EXIT_ERROR
+        Command::UninstallPlugin { quiet } => {
+            let mut retry = |reason: &str| !quiet && system::ask_retry(TITLE, reason);
+            match cli::uninstall_plugin(&env, &mut retry) {
+                Ok(removed) => {
+                    if let Some(note) = cli::removal_note(&removed) {
+                        show(quiet, &note, MessageKind::Info);
+                    }
+                    cli::EXIT_OK
+                }
+                Err(e) => {
+                    show(
+                        quiet,
+                        &format!("Das Plugin ließ sich nicht entfernen: {e}"),
+                        MessageKind::Error,
+                    );
+                    cli::EXIT_ERROR
+                }
             }
-        },
+        }
+        Command::RememberGameDir { game_dir, quiet } => {
+            match cli::remember_game_dir(paths.as_ref(), &game_dir) {
+                Ok(_) => cli::EXIT_OK,
+                Err(e) => {
+                    show(
+                        quiet,
+                        &format!("Der Spielordner ließ sich nicht merken: {e}"),
+                        MessageKind::Warning,
+                    );
+                    cli::EXIT_ERROR
+                }
+            }
+        }
     }
 }
 
@@ -214,7 +253,12 @@ enum Background {
     UpdateStarted(std::result::Result<PathBuf, String>),
     /// Exit-Code des Launchers mit Adminrechten
     PluginInstalled(std::result::Result<i32, String>),
-    FolderChosen(Option<PathBuf>),
+    /// Ergebnis des Ordnerdialogs. Mit `then_install` kam er von "Plugin installieren" und die
+    /// Installation geht danach weiter.
+    FolderChosen {
+        dir: Option<PathBuf>,
+        then_install: bool,
+    },
     /// Eine Panic in einer dieser Arbeiten
     Failed(String),
 }
@@ -637,7 +681,17 @@ impl App {
     }
 
     /// Startet den Launcher über UAC mit `--install-plugin` und wartet im Hintergrund auf ihn.
+    ///
+    /// Ist das Spiel nicht gefunden, wird der Ordner zuerst hier gewählt, ohne Adminrechte, und
+    /// dann mit `--game-dir` übergeben. Der Launcher mit Adminrechten kann unter einem anderen
+    /// Konto laufen, wenn im UAC-Dialog die Anmeldung eines Admins eingegeben wird. Ein dort
+    /// gewählter Ordner landete in dessen `launcher.json` statt in unserer.
     fn install_plugin(&mut self, ctx: &egui::Context) {
+        if self.plugin.game_dir.is_none() {
+            self.info("Spiel nicht gefunden. Bitte den Ordner von Euro Truck Simulator 2 wählen");
+            self.choose_game_folder(ctx, true);
+            return;
+        }
         let exe = match std::env::current_exe() {
             Ok(e) => e,
             Err(e) => {
@@ -659,11 +713,10 @@ impl App {
         });
     }
 
-    fn choose_game_folder(&mut self, ctx: &egui::Context) {
-        self.background(ctx, || {
-            Background::FolderChosen(system::pick_folder(
-                "Ordner von Euro Truck Simulator 2 wählen",
-            ))
+    fn choose_game_folder(&mut self, ctx: &egui::Context, then_install: bool) {
+        self.background(ctx, move || Background::FolderChosen {
+            dir: system::pick_folder("Ordner von Euro Truck Simulator 2 wählen"),
+            then_install,
         });
     }
 
@@ -689,10 +742,8 @@ impl App {
             }
             Background::PluginInstalled(result) => {
                 self.plugin.installing = false;
-                // Ein dabei gewählter Spielordner steht jetzt in launcher.json
-                if let Some(paths) = &self.paths {
-                    self.settings.game_dir = Settings::load(paths).game_dir;
-                }
+                // Den Spielordner hat die Oberfläche selbst gewählt und gemerkt, der Launcher
+                // mit Adminrechten fragt nur, wenn er Steam anders als wir nicht findet
                 self.plugin = PluginView::detect(&self.settings);
                 match result {
                     Ok(cli::EXIT_OK) => self.info(format!(
@@ -717,21 +768,33 @@ impl App {
                 }
                 self.error(e);
             }
-            Background::FolderChosen(None) => {}
-            Background::FolderChosen(Some(dir)) => {
-                match spedhub_launcher::steam::validate_game_dir(&dir) {
-                    Ok(game_dir) => {
-                        self.settings.game_dir = Some(game_dir);
-                        self.save_settings();
-                        self.plugin = PluginView::detect(&self.settings);
+            Background::FolderChosen {
+                dir: None,
+                then_install,
+            } => {
+                if then_install {
+                    self.error("Das Plugin wurde nicht installiert, kein Spielordner gewählt");
+                }
+            }
+            Background::FolderChosen {
+                dir: Some(dir),
+                then_install,
+            } => match spedhub_launcher::steam::validate_game_dir(&dir) {
+                Ok(game_dir) => {
+                    self.settings.game_dir = Some(game_dir);
+                    self.save_settings();
+                    self.plugin = PluginView::detect(&self.settings);
+                    if then_install && self.plugin.status.can_install() {
+                        self.install_plugin(ctx);
+                    } else {
                         self.info(format!(
                             "Spielordner gemerkt. {}",
                             self.plugin.status.label()
                         ));
                     }
-                    Err(e) => self.error(e),
                 }
-            }
+                Err(e) => self.error(e),
+            },
         }
     }
 
@@ -1497,7 +1560,7 @@ impl App {
                     self.install_plugin(ui.ctx());
                 }
                 if status == PluginStatus::GameNotFound && ui.button("Ordner wählen").clicked() {
-                    self.choose_game_folder(ui.ctx());
+                    self.choose_game_folder(ui.ctx(), false);
                 }
                 if ui.button("Neu prüfen").clicked() {
                     self.plugin = PluginView::detect(&self.settings);

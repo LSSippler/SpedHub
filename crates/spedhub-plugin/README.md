@@ -2,7 +2,7 @@
 
 Das Plugin meldet Gameplay-Events aus Euro Truck Simulator 2 an den SpedHub-Server. Der bucht sie in die Firmenkasse und auf die Lohnkonten und zählt die gefahrenen Kilometer für den Lohn. Dazu schickt es alle 10 Sekunden einen Herzschlag, damit die Firma sieht, wer gerade mit welchem Lkw fährt. Es nutzt nur das offizielle Telemetry SDK von SCS und schreibt nichts ins Spiel.
 
-Wichtig: Ob ETS2 die DLL lädt, ob die Events im Spiel wirklich ankommen und ob die Kanäle für den Herzschlag die erwarteten Werte liefern, ist noch nicht im Spiel geprüft. Getestet ist bisher alles ohne Spiel, siehe unten.
+Wichtig: Ob ETS2 die DLL lädt, ob die Events im Spiel wirklich ankommen ob die Kanäle für den Herzschlag die erwarteten Werte und Einheiten liefern, welches Format `license.plate` genau hat und ob die Job-Konfiguration beim Abliefern noch gefüllt ist, ist noch nicht im Spiel geprüft. Getestet ist bisher alles ohne Spiel, siehe unten.
 
 ## Was gemeldet wird
 

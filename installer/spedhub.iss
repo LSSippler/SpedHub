@@ -17,6 +17,8 @@
 #endif
 #define BinDir RootDir + "\target\release"
 #define AppExe "spedhub-launcher.exe"
+; Hier meldet der Launcher mit Adminrechten einen von Hand gewählten Spielordner
+#define GameDirReport "spielordner.txt"
 
 [Setup]
 ; Feste Kennung, damit ein neues Setup die alte Installation ersetzt. Nie ändern.
@@ -88,16 +90,64 @@ Name: "{group}\SpedHub deinstallieren"; Filename: "{uninstallexe}"
 [Run]
 ; Läuft mit den Adminrechten des Setups. Findet der Launcher das Spiel nicht, sagt er das und
 ; lässt den Ordner wählen. Bei einer stillen Installation ohne Fenster.
-Filename: "{app}\{#AppExe}"; Parameters: "--install-plugin"; StatusMsg: "Plugin für Euro Truck Simulator 2 wird installiert"; Flags: waituntilterminated; Check: not WizardSilent
+;
+; Hat ein Standardbenutzer im UAC-Dialog die Anmeldung eines Admins eingegeben, läuft das Setup
+; mit dessen Konto, ein hier gewählter Spielordner landete in dessen launcher.json. Deshalb
+; schreibt der Launcher einen von Hand gewählten Ordner in {tmp}\spielordner.txt, und die
+; dritte Zeile merkt ihn als der Benutzer, der das Setup gestartet hat.
+Filename: "{app}\{#AppExe}"; Parameters: "--install-plugin --report-game-dir ""{tmp}\{#GameDirReport}"""; StatusMsg: "Plugin für Euro Truck Simulator 2 wird installiert"; Flags: waituntilterminated; Check: not WizardSilent
 Filename: "{app}\{#AppExe}"; Parameters: "--install-plugin --quiet"; StatusMsg: "Plugin für Euro Truck Simulator 2 wird installiert"; Flags: waituntilterminated; Check: WizardSilent
+Filename: "{app}\{#AppExe}"; Parameters: "--remember-game-dir {code:ChosenGameDir}"; StatusMsg: "Spielordner wird gemerkt"; Flags: waituntilterminated runasoriginaluser; Check: GameDirChosen
 Filename: "{app}\{#AppExe}"; Description: "SpedHub starten"; Flags: postinstall nowait skipifsilent runasoriginaluser
 
-[UninstallRun]
-Filename: "{app}\{#AppExe}"; Parameters: "--uninstall-plugin"; RunOnceId: "SpedHubPluginEntfernen"; Flags: waituntilterminated
+; Das Plugin entfernt [Code] (RemovePlugin), nicht [UninstallRun]: Dessen Check wird schon bei
+; der Installation ausgewertet, eine stille Deinstallation ließe sich dort nicht erkennen.
 
 [Code]
 var
   KeepUserData: Boolean;
+
+{ Der Spielordner, den der Launcher mit Adminrechten von Hand wählen ließ, leer, wenn keiner.
+  Die Datei ist UTF-8 mit BOM. }
+function ReportedGameDir: String;
+var
+  Lines: TArrayOfString;
+begin
+  Result := '';
+  if LoadStringsFromFile(ExpandConstant('{tmp}\{#GameDirReport}'), Lines) then
+    if GetArrayLength(Lines) > 0 then
+      Result := Trim(Lines[0]);
+end;
+
+function GameDirChosen: Boolean;
+begin
+  Result := ReportedGameDir <> '';
+end;
+
+{ Ohne Backslash am Ende, der würde sonst das schließende Anführungszeichen schützen }
+function ChosenGameDir(Param: String): String;
+begin
+  Result := AddQuotes(RemoveBackslashUnlessRoot(ReportedGameDir));
+end;
+
+{ Entfernt das Plugin aus dem Spiel, solange der Launcher noch da ist. Läuft das Spiel, fragt
+  der Launcher mit Wiederholen und Abbrechen. Bei Abbrechen und bei einer stillen
+  Deinstallation (--quiet, ohne Fenster) benennt er die DLL um, damit das Spiel sie nicht mehr
+  lädt, und merkt sie zum Löschen beim nächsten Neustart von Windows vor. Die Deinstallation
+  geht in jedem Fall weiter. }
+procedure RemovePlugin;
+var
+  Params: String;
+  ResultCode: Integer;
+begin
+  Params := '--uninstall-plugin';
+  if UninstallSilent then
+    Params := Params + ' --quiet';
+  if not Exec(ExpandConstant('{app}\{#AppExe}'), Params, '', SW_SHOWNORMAL, ewWaitUntilTerminated, ResultCode) then
+    Log('Plugin entfernen: Der Launcher ließ sich nicht starten, Fehler ' + IntToStr(ResultCode))
+  else if ResultCode <> 0 then
+    Log('Plugin entfernen: Der Launcher endete mit Code ' + IntToStr(ResultCode));
+end;
 
 { Anmeldung, Einstellungen, Backups, Baupläne und die Datenbank des lokalen Servers liegen in
   %LOCALAPPDATA%\SpedHub. Gemeint ist der Benutzer, der deinstalliert: Läuft die
@@ -110,6 +160,8 @@ begin
   DataDir := ExpandConstant('{localappdata}\SpedHub');
   if CurUninstallStep = usUninstall then
   begin
+    { Zuerst, er liest den gemerkten Spielordner aus %LOCALAPPDATA%\SpedHub }
+    RemovePlugin;
     KeepUserData := True;
     if (not UninstallSilent) and DirExists(DataDir) then
       KeepUserData := MsgBox('Anmeldung, Einstellungen und Backups behalten?' + #13#10#13#10 +

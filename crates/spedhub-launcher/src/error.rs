@@ -18,6 +18,9 @@ pub enum Error {
     },
     /// Das Spiel läuft, in den Spielstand wird nicht geschrieben.
     GameRunning,
+    /// Das Spiel läuft oder hält die Plugin-DLL fest, sie lässt sich gerade nicht ersetzen oder
+    /// entfernen. Nach dem Beenden des Spiels geht es wieder.
+    PluginInUse(String),
     Other(String),
 }
 
@@ -48,6 +51,7 @@ impl fmt::Display for Error {
                 f,
                 "Euro Truck Simulator 2 läuft gerade. Bitte das Spiel beenden, dann noch einmal versuchen. In den Spielstand wurde nichts geschrieben"
             ),
+            Error::PluginInUse(m) => write!(f, "{m}"),
             Error::Other(m) => write!(f, "{m}"),
         }
     }

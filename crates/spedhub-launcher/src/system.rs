@@ -78,6 +78,19 @@ pub fn message_box(title: &str, text: &str, kind: MessageKind) {
     imp::message_box(title, text, kind)
 }
 
+/// Fragt mit "Wiederholen" und "Abbrechen". `true` für Wiederholen. Außerhalb von Windows
+/// immer `false`.
+pub fn ask_retry(title: &str, text: &str) -> bool {
+    imp::ask_retry(title, text)
+}
+
+/// Merkt eine Datei zum Löschen beim nächsten Neustart von Windows vor (`MoveFileExW` mit
+/// `MOVEFILE_DELAY_UNTIL_REBOOT`, braucht Adminrechte). Außerhalb von Windows ein Fehler, dort
+/// lassen sich Dateien auch im Gebrauch löschen.
+pub fn delete_on_reboot(path: &std::path::Path) -> Result<(), String> {
+    imp::delete_on_reboot(path)
+}
+
 /// Lässt einen Ordner wählen. `None` bei Abbrechen. Außerhalb von Windows immer `None`.
 pub fn pick_folder(title: &str) -> Option<PathBuf> {
     imp::pick_folder(title)
@@ -106,6 +119,7 @@ mod imp {
     use windows_sys::Win32::Security::Cryptography::{
         CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptProtectData, CryptUnprotectData,
     };
+    use windows_sys::Win32::Storage::FileSystem::{MOVEFILE_DELAY_UNTIL_REBOOT, MoveFileExW};
     use windows_sys::Win32::System::Com::CoTaskMemFree;
     use windows_sys::Win32::System::Com::{
         COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize,
@@ -126,8 +140,8 @@ mod imp {
         SHGetKnownFolderPath, SHGetPathFromIDListW, ShellExecuteExW, ShellExecuteW,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        MB_ICONERROR, MB_ICONINFORMATION, MB_ICONWARNING, MB_OK, MB_SETFOREGROUND, MessageBoxW,
-        SW_SHOWNORMAL,
+        IDRETRY, MB_ICONERROR, MB_ICONINFORMATION, MB_ICONWARNING, MB_OK, MB_RETRYCANCEL,
+        MB_SETFOREGROUND, MessageBoxW, SW_SHOWNORMAL,
     };
 
     pub const DPAPI: &str = "dpapi";
@@ -289,6 +303,35 @@ mod imp {
                 MB_OK | icon | MB_SETFOREGROUND,
             )
         };
+    }
+
+    pub fn ask_retry(title: &str, text: &str) -> bool {
+        let (title, text) = (wide(title), wide(text));
+        // SAFETY: Beide Zeichenketten sind nullterminiert und leben bis nach dem Aufruf.
+        let answer = unsafe {
+            MessageBoxW(
+                ptr::null_mut(),
+                text.as_ptr(),
+                title.as_ptr(),
+                MB_RETRYCANCEL | MB_ICONWARNING | MB_SETFOREGROUND,
+            )
+        };
+        answer == IDRETRY
+    }
+
+    pub fn delete_on_reboot(path: &std::path::Path) -> Result<(), String> {
+        let file: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+        // SAFETY: file ist nullterminiert und lebt bis nach dem Aufruf, kein Ziel heißt löschen.
+        let ok = unsafe { MoveFileExW(file.as_ptr(), ptr::null(), MOVEFILE_DELAY_UNTIL_REBOOT) };
+        if ok == 0 {
+            // SAFETY: direkt nach dem fehlgeschlagenen Aufruf
+            let err = unsafe { GetLastError() };
+            return Err(format!(
+                "{} ließ sich nicht zum Löschen beim Neustart vormerken (Fehler {err})",
+                path.display()
+            ));
+        }
+        Ok(())
     }
 
     /// Ordnerdialog der Shell (SHBrowseForFolderW). windows-sys bringt keine
@@ -496,6 +539,18 @@ mod imp {
 
     pub fn message_box(title: &str, text: &str, _kind: super::MessageKind) {
         eprintln!("{title}: {text}");
+    }
+
+    pub fn ask_retry(title: &str, text: &str) -> bool {
+        eprintln!("{title}: {text}");
+        false
+    }
+
+    pub fn delete_on_reboot(path: &std::path::Path) -> Result<(), String> {
+        Err(format!(
+            "{}: Löschen beim Neustart gibt es nur unter Windows",
+            path.display()
+        ))
     }
 
     pub fn pick_folder(_title: &str) -> Option<PathBuf> {

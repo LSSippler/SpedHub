@@ -3,19 +3,48 @@
 mod common;
 
 use common::*;
+use spedhub_launcher::Error;
 use spedhub_launcher::cli::{
     self, Command, InstallEnv, InstallOutcome, install_parameters, parse_args, quote_arg,
 };
 use spedhub_launcher::plugin_install::{
-    GameSource, PLUGIN_DLL, PluginStatus, install, installed_dll, locate_game, plugins_dir,
-    sha256_file, status, uninstall,
+    GameSource, PLUGIN_DLL, PluginStatus, Removal, install, installed_dll, locate_game,
+    plugins_dir, set_aside, sha256_file, status, uninstall,
 };
 use spedhub_launcher::settings::{AppPaths, Settings};
 use spedhub_launcher::steam::RegistryValues;
 use std::{
+    cell::RefCell,
     fs,
     path::{Path, PathBuf},
 };
+
+/// Löschen beim Neustart, das nur mitschreibt.
+#[derive(Default)]
+struct Reboot {
+    marked: RefCell<Vec<PathBuf>>,
+}
+
+impl Reboot {
+    fn mark(&self, path: &Path) -> Result<(), String> {
+        self.marked.borrow_mut().push(path.to_path_buf());
+        Ok(())
+    }
+}
+
+fn no_reboot(_: &Path) -> Result<(), String> {
+    panic!("nichts zum Löschen beim Neustart vormerken")
+}
+
+/// Dateinamen im Ordner plugins, sortiert.
+fn plugin_files(game: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(plugins_dir(game))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
 
 /// Eine DLL neben dem Launcher mit bestimmtem Inhalt.
 fn bundled(dir: &Path, content: &[u8]) -> PathBuf {
@@ -93,10 +122,10 @@ fn installieren_ersetzen_und_entfernen() {
     );
 
     // Entfernen, zweimal
-    assert_eq!(uninstall(&game, &FakeGame::closed()), Ok(true));
+    assert_eq!(uninstall(&game, &FakeGame::closed()), Ok(Removal::Deleted));
     assert!(!installed_dll(&game).exists());
     assert_eq!(status(Some(&game), Some(&dll)), PluginStatus::Missing);
-    assert_eq!(uninstall(&game, &FakeGame::closed()), Ok(false));
+    assert_eq!(uninstall(&game, &FakeGame::closed()), Ok(Removal::NotThere));
 }
 
 #[test]
@@ -112,6 +141,7 @@ fn laufendes_spiel_und_falsche_ordner() {
     assert!(e.to_string().contains("Spiel beenden"), "{e}");
     assert_eq!(fs::read(installed_dll(&game)).unwrap(), b"alt");
     let e = uninstall(&game, &FakeGame::running()).unwrap_err();
+    assert!(matches!(e, Error::PluginInUse(_)), "{e:?}");
     assert!(e.to_string().contains("Spiel beenden"), "{e}");
     assert!(installed_dll(&game).exists());
 
@@ -164,6 +194,7 @@ fn kommandozeile_lesen() {
         parse_args(["--install-plugin"]),
         Ok(Command::InstallPlugin {
             game_dir: None,
+            report: None,
             quiet: false
         })
     );
@@ -176,6 +207,26 @@ fn kommandozeile_lesen() {
         ]),
         Ok(Command::InstallPlugin {
             game_dir: Some(PathBuf::from("D:\\Spiele\\ETS2")),
+            report: None,
+            quiet: true
+        })
+    );
+    assert_eq!(
+        parse_args([
+            "--install-plugin",
+            "--report-game-dir",
+            "C:\\Temp\\is-1\\spielordner.txt",
+        ]),
+        Ok(Command::InstallPlugin {
+            game_dir: None,
+            report: Some(PathBuf::from("C:\\Temp\\is-1\\spielordner.txt")),
+            quiet: false
+        })
+    );
+    assert_eq!(
+        parse_args(["--remember-game-dir", "D:\\Spiele\\ETS2", "--quiet"]),
+        Ok(Command::RememberGameDir {
+            game_dir: PathBuf::from("D:\\Spiele\\ETS2"),
             quiet: true
         })
     );
@@ -188,6 +239,12 @@ fn kommandozeile_lesen() {
         vec!["--install-plugin", "--uninstall-plugin"],
         vec!["--install-plugin", "--game-dir"],
         vec!["--game-dir", "C:\\x"],
+        vec!["--report-game-dir", "C:\\x.txt"],
+        vec!["--uninstall-plugin", "--report-game-dir", "C:\\x.txt"],
+        vec!["--install-plugin", "--report-game-dir"],
+        vec!["--remember-game-dir"],
+        vec!["--remember-game-dir", "C:\\x", "--install-plugin"],
+        vec!["--remember-game-dir", "C:\\x", "--uninstall-plugin"],
         vec!["--irgendwas"],
     ] {
         assert!(parse_args(bad.clone()).is_err(), "{bad:?}");
@@ -224,6 +281,7 @@ fn install_plugin_ueber_steam() {
         registry,
         bundled: Some(dll.clone()),
         game: &FakeGame::closed(),
+        delete_later: &no_reboot,
     };
     let mut asked = 0;
     let out = cli::install_plugin(None, &env, &mut |_| {
@@ -278,6 +336,7 @@ fn install_plugin_ohne_steam_ordner_waehlen_und_merken() {
         registry: RegistryValues::default(),
         bundled: Some(dll.clone()),
         game: &FakeGame::closed(),
+        delete_later: &no_reboot,
     };
 
     // Erst ein falscher Ordner, dann der richtige (bin\win_x64 darin gewählt)
@@ -328,10 +387,11 @@ fn install_plugin_ohne_steam_ordner_waehlen_und_merken() {
     assert_eq!(Settings::load(&paths).game_dir, Some(other.clone()));
 
     // Entfernen aus dem gemerkten Ordner
-    let removed = cli::uninstall_plugin(&env).unwrap();
-    assert_eq!(removed, vec![other.clone()]);
+    let removed = cli::uninstall_plugin(&env, &mut |_| panic!("nicht fragen")).unwrap();
+    assert_eq!(removed, vec![(other.clone(), Removal::Deleted)]);
+    assert_eq!(cli::removal_note(&removed), None);
     assert!(!installed_dll(&other).exists());
-    assert_eq!(cli::uninstall_plugin(&env), Ok(vec![]));
+    assert_eq!(cli::uninstall_plugin(&env, &mut |_| false), Ok(vec![]));
 }
 
 #[test]
@@ -343,6 +403,7 @@ fn install_plugin_abgebrochen() {
         registry: RegistryValues::default(),
         bundled: Some(bundled(&root, b"plugin")),
         game: &FakeGame::closed(),
+        delete_later: &no_reboot,
     };
     match cli::install_plugin(None, &env, &mut |_| None).unwrap() {
         InstallOutcome::Cancelled { reason } => {
@@ -353,30 +414,178 @@ fn install_plugin_abgebrochen() {
     assert_eq!(Settings::load(&paths).game_dir, None);
 
     // Spiel nicht gefunden beim Entfernen: nichts zu tun
-    assert_eq!(cli::uninstall_plugin(&env), Ok(vec![]));
+    assert_eq!(cli::uninstall_plugin(&env, &mut |_| false), Ok(vec![]));
 }
 
 #[test]
-fn uninstall_plugin_ueber_steam_und_laufendes_spiel() {
+fn uninstall_plugin_laufendes_spiel_wiederholen() {
     let root = temp_dir("cli-entfernen");
     let (registry, game) = steam_with_game(&root);
     let dll = bundled(&root, b"plugin");
     install(&dll, &game, &FakeGame::closed()).unwrap();
-    let running = FakeGame::running();
+    // Erst läuft das Spiel, nach dem Wiederholen ist es beendet
+    let game_check = FakeGame::sequence(vec![Ok(true), Ok(false)]);
     let env = InstallEnv {
         paths: None,
         registry,
         bundled: Some(dll),
-        game: &running,
+        game: &game_check,
+        delete_later: &no_reboot,
     };
-    let e = cli::uninstall_plugin(&env).unwrap_err();
-    assert!(e.to_string().contains("Spiel beenden"), "{e}");
-    assert!(installed_dll(&game).exists());
-    let closed = FakeGame::closed();
-    let env = InstallEnv {
-        game: &closed,
-        ..env
-    };
-    assert_eq!(cli::uninstall_plugin(&env), Ok(vec![game.clone()]));
+    let mut prompts = Vec::new();
+    let removed = cli::uninstall_plugin(&env, &mut |reason| {
+        prompts.push(reason.to_string());
+        true
+    })
+    .unwrap();
+    assert_eq!(removed, vec![(game.clone(), Removal::Deleted)]);
+    assert_eq!(prompts.len(), 1);
+    assert!(prompts[0].contains("Spiel beenden"), "{}", prompts[0]);
+    assert!(prompts[0].contains("Wiederholen"), "{}", prompts[0]);
+    assert!(prompts[0].contains("Abbrechen"), "{}", prompts[0]);
     assert!(!installed_dll(&game).exists());
+    assert_eq!(plugin_files(&game), Vec::<String>::new());
+}
+
+/// Die Deinstallation läuft bei laufendem Spiel weiter und löscht danach den Launcher. Es
+/// darf keine DLL zurückbleiben, die das Spiel beim nächsten Start lädt, auch nicht still.
+#[test]
+fn uninstall_plugin_laufendes_spiel_zur_seite_legen() {
+    let root = temp_dir("cli-entfernen-still");
+    let (registry, game) = steam_with_game(&root);
+    let dll = bundled(&root, b"plugin");
+    install(&dll, &game, &FakeGame::closed()).unwrap();
+    let running = FakeGame::running();
+    let reboot = Reboot::default();
+    let mark = |p: &Path| reboot.mark(p);
+    let env = InstallEnv {
+        paths: None,
+        registry,
+        bundled: Some(dll.clone()),
+        game: &running,
+        delete_later: &mark,
+    };
+
+    // Still: nicht fragen (retry liefert false), sondern zur Seite legen
+    let mut asked = 0;
+    let removed = cli::uninstall_plugin(&env, &mut |_| {
+        asked += 1;
+        false
+    })
+    .unwrap();
+    assert_eq!(asked, 1);
+    let aside = plugins_dir(&game).join(format!("{PLUGIN_DLL}.1.entfernt"));
+    assert_eq!(
+        removed,
+        vec![(
+            game.clone(),
+            Removal::SetAside {
+                path: aside.clone(),
+                delete_on_reboot: Ok(())
+            }
+        )]
+    );
+    assert!(
+        !installed_dll(&game).exists(),
+        "das Spiel findet keine DLL mehr"
+    );
+    assert_eq!(fs::read(&aside).unwrap(), b"plugin");
+    assert_eq!(*reboot.marked.borrow(), vec![aside.clone()]);
+    assert!(
+        plugin_files(&game).iter().all(|n| !n.ends_with(".dll")),
+        "{:?}",
+        plugin_files(&game)
+    );
+    assert_eq!(status(Some(&game), Some(&dll)), PluginStatus::Missing);
+    let note = cli::removal_note(&removed).unwrap();
+    assert!(note.contains("Neustart von Windows"), "{note}");
+
+    // Eine neue Installation räumt die zur Seite gelegte weg
+    install(&dll, &game, &FakeGame::closed()).unwrap();
+    assert!(!aside.exists());
+    // Hält das Spiel eine alte noch fest, bleibt sie liegen, die nächste bekommt einen freien
+    // Namen
+    fs::write(&aside, b"noch geladen").unwrap();
+    let r = set_aside(&game, &|_| Err("keine Adminrechte".into())).unwrap();
+    let second = plugins_dir(&game).join(format!("{PLUGIN_DLL}.2.entfernt"));
+    assert_eq!(
+        r,
+        Removal::SetAside {
+            path: second.clone(),
+            delete_on_reboot: Err("keine Adminrechte".into())
+        }
+    );
+    let note = cli::removal_note(&[(game.clone(), r)]).unwrap();
+    assert!(note.contains("von Hand löschen"), "{note}");
+    assert!(note.contains("keine Adminrechte"), "{note}");
+
+    // Die nächste Deinstallation bei beendetem Spiel räumt die Reste weg
+    assert_eq!(uninstall(&game, &FakeGame::closed()), Ok(Removal::NotThere));
+    assert_eq!(plugin_files(&game), Vec::<String>::new());
+
+    // Auch eine Installation räumt sie weg
+    fs::write(&second, b"alt").unwrap();
+    install(&dll, &game, &FakeGame::closed()).unwrap();
+    assert_eq!(plugin_files(&game), vec![PLUGIN_DLL.to_string()]);
+
+    // Nichts zum Zur-Seite-Legen
+    uninstall(&game, &FakeGame::closed()).unwrap();
+    assert_eq!(set_aside(&game, &no_reboot), Ok(Removal::NotThere));
+}
+
+/// Die Oberfläche wählt den Ordner selbst und gibt ihn mit --game-dir weiter. Der Launcher
+/// mit Adminrechten fragt dann nicht noch einmal, auch wenn der Ordner nicht passt.
+#[test]
+fn install_plugin_uebergebener_ordner_ohne_nachfrage() {
+    let root = temp_dir("cli-uebergeben");
+    let paths = AppPaths::new(root.join("appdata"));
+    let env = InstallEnv {
+        paths: Some(&paths),
+        registry: RegistryValues::default(),
+        bundled: Some(bundled(&root, b"plugin")),
+        game: &FakeGame::closed(),
+        delete_later: &no_reboot,
+    };
+    let e = cli::install_plugin(Some(&root.join("kein Spiel")), &env, &mut |_| {
+        panic!("nicht fragen")
+    })
+    .unwrap_err();
+    assert!(e.to_string().contains("kein Spiel"), "{e}");
+    assert_eq!(Settings::load(&paths).game_dir, None);
+}
+
+/// Das Setup läuft mit Adminrechten, unter Umständen mit einem anderen Konto. Ein dort von Hand
+/// gewählter Ordner geht über eine Datei zurück und wird als ursprünglicher Benutzer gemerkt.
+#[test]
+fn spielordner_fuer_das_setup_melden_und_merken() {
+    let root = temp_dir("cli-melden");
+    let game = game_folder(&root.join("Spiele").join("Euro Truck Simulator 2"));
+    let report = root.join("spielordner.txt");
+    cli::write_game_dir_report(&report, &game).unwrap();
+    let bytes = fs::read(&report).unwrap();
+    assert!(bytes.starts_with(&[0xef, 0xbb, 0xbf]), "UTF-8 mit BOM");
+    let text = String::from_utf8(bytes).unwrap();
+    assert_eq!(text, format!("\u{feff}{}\r\n", game.display()));
+
+    // Der Benutzer, der das Setup gestartet hat, merkt ihn, vorhandene Einstellungen bleiben
+    let user = AppPaths::new(root.join("benutzer"));
+    let mut s = Settings::default();
+    s.user_name = "Alex".into();
+    s.save(&user).unwrap();
+    // Inno liest die Zeile mit BOM, falls es das nicht entfernt
+    let line = text.trim_end().to_string();
+    let dir = cli::remember_game_dir(Some(&user), Path::new(&line)).unwrap();
+    assert_eq!(dir, game);
+    let loaded = Settings::load(&user);
+    assert_eq!(loaded.game_dir, Some(game.clone()));
+    assert_eq!(loaded.user_name, "Alex");
+    // Ein Unterordner des Spiels zählt als Spielordner
+    let dir = cli::remember_game_dir(Some(&user), &game.join("bin").join("win_x64")).unwrap();
+    assert_eq!(dir, game);
+
+    // Falscher Ordner oder keine Einstellungen: Fehler, nichts gemerkt
+    let other = AppPaths::new(root.join("anderer"));
+    assert!(cli::remember_game_dir(Some(&other), &root).is_err());
+    assert_eq!(Settings::load(&other).game_dir, None);
+    assert!(cli::remember_game_dir(None, &game).is_err());
 }
