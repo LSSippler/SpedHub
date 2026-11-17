@@ -47,6 +47,14 @@ CREATE TABLE IF NOT EXISTS trucks (
     created_at   INTEGER NOT NULL,
     UNIQUE (company_id, plate)
 );
+-- Frühere Kennzeichen eines Lkw. Das Spiel kann das Kennzeichen ersetzen, der Launcher meldet
+-- das neue bei der Rückgabe. Über die alten lässt sich Telemetrie noch zuordnen.
+CREATE TABLE IF NOT EXISTS truck_plates (
+    truck_id     INTEGER NOT NULL REFERENCES trucks(id),
+    plate        TEXT NOT NULL,
+    replaced_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS truck_plates_truck ON truck_plates(truck_id);
 CREATE TABLE IF NOT EXISTS leases (
     id           INTEGER PRIMARY KEY,
     truck_id     INTEGER NOT NULL REFERENCES trucks(id),

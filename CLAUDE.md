@@ -52,4 +52,6 @@ Das Repo ist ein Cargo-Workspace. Neue Crates kommen als Mitglied in die `Cargo.
 
 ## Was noch nicht bestätigt ist
 
-Der Test, ob ETS2 1.62 einen mit `tools/transplant.py` gebauten Spielstand fehlerfrei lädt, steht aus. Die Feldliste in `docs/save-format.md` ist aus echten Spielständen abgelesen, aber noch nicht im Spiel bestätigt. Code am Spielstand deshalb so bauen, dass sich die Feldliste leicht anpassen lässt.
+Im Spiel bestätigt (ETS2 1.62, Abschnitt "Im Spiel bestätigt" in `docs/save-format.md`): Ein mit `spedhub-save` eingesetzter Lkw lädt mit Zubehör, Kilometern, Verschleiß und Tank, und der nächste Autosave des Spiels ist intakt. Das Spiel vergibt dabei alle `_nameless`-Namen neu und kann das Kennzeichen ersetzen. Weder Unit-Name noch Kennzeichen sind also eine dauerhafte Kennung, Lkw werden über Modell und Teile wiedererkannt (`find_package_truck`).
+
+Offen ist weiter: warum das Spiel Kennzeichen ersetzt, woher `Economy reset - company mismatch` kommt, ob neue Speicherplätze des Launchers im Spiel erscheinen, das Einsetzen neben eigene Lkw und das Entfernen. Code am Spielstand deshalb weiter so bauen, dass sich die Feldliste in `crates/spedhub-save/src/layout.rs` leicht anpassen lässt.

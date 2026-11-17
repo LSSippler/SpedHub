@@ -144,12 +144,12 @@ fn uebernehmen_ausleihen_einsetzen_zurueckgeben() {
     write_save(&game_path, &save).unwrap();
 
     // 5. Zurückgeben mit den Werten aus dem Spielstand
-    let back = read_for_return(&docs.nordfracht, "SPED 001")
+    let back = read_for_return(&docs.nordfracht, "SPED 001", None)
         .unwrap()
         .unwrap();
     assert_eq!(back.odometer_km, 4200);
     let r = fahrer
-        .checkin(truck_id, back.odometer_km, Some(&back.state))
+        .checkin(truck_id, back.odometer_km, Some(&back.state), None)
         .unwrap();
     assert_eq!((r.driven_km, r.rev), (335, 2));
 
@@ -164,11 +164,101 @@ fn uebernehmen_ausleihen_einsetzen_zurueckgeben() {
     assert_eq!(p.state.engine_wear, 0.05);
 
     // Von Hand mit kleinerem Kilometerstand: der Server lehnt ab
-    let e = chef.checkin(truck_id, 100, None).unwrap_err();
+    let e = chef.checkin(truck_id, 100, None, None).unwrap_err();
     assert_eq!(
         e.to_string(),
         "Server: Der Kilometerstand kann nicht kleiner werden"
     );
-    chef.checkin(truck_id, 4300, None).unwrap();
+    chef.checkin(truck_id, 4300, None, None).unwrap();
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn rueckgabe_mit_neuem_kennzeichen_vom_spiel() {
+    let dir = temp_dir("kennzeichen");
+    let server = TestServer::start(&dir.join("server.db"));
+    let url = server.url();
+    let docs = documents("kennzeichen-docs");
+    let app = spedhub_launcher::settings::AppPaths::new(dir.join("SpedHub"));
+
+    let mut chef = Client::new(&url);
+    let login = chef.register("Chefin", "geheim1234").unwrap();
+    let firma = post_raw(
+        &format!("{url}/api/companies"),
+        &login.token,
+        json!({ "name": "Nordfracht" }),
+    );
+    let company = firma["id"].as_i64().unwrap();
+    let quelle = docs.nordfracht.join("save").join("1").join("game.sii");
+    let truck_id = chef
+        .add_truck(company, &new_truck_from_save(&quelle, "SPED 001").unwrap())
+        .unwrap();
+
+    // Ausleihen und einsetzen, so wie die Oberfläche es tut: Paket ablegen, dann schreiben
+    let checkout = chef.checkout(truck_id).unwrap();
+    let package = package_from_checkout(&checkout.truck).unwrap();
+    app.store_lease(truck_id, &package).unwrap();
+    let deployed = deploy_truck(
+        &docs.nordfracht,
+        &package,
+        &app.backups(),
+        &FakeGame::closed(),
+        SystemTime::now(),
+    )
+    .unwrap();
+
+    // Das Spiel speichert: neue Namen, neues Kennzeichen, 425 km gefahren
+    fs::copy(testdata(NACH_SPIEL), deployed.slot_dir.join("game.sii")).unwrap();
+
+    // Rückgabe: über das Kennzeichen nichts, über die Teile der Lkw mit neuem Kennzeichen
+    let lease = app.load_lease(truck_id).unwrap();
+    let back = read_for_return(&docs.nordfracht, &checkout.truck.plate, Some(&lease))
+        .unwrap()
+        .unwrap();
+    assert_eq!(back.new_plate.as_deref(), Some("EF XU 577"));
+    let r = chef
+        .checkin(
+            truck_id,
+            back.odometer_km,
+            Some(&back.state),
+            back.new_plate.as_deref(),
+        )
+        .unwrap();
+    assert_eq!((r.plate.as_str(), r.driven_km), ("EF XU 577", 425));
+    app.remove_lease(truck_id);
+
+    // Der Server kennt jetzt das neue Kennzeichen und hat das alte behalten
+    let t = chef.trucks(company).unwrap().remove(0);
+    assert_eq!(t.plate, "EF XU 577");
+    assert_eq!(t.old_plates, vec!["SPED 001".to_string()]);
+    assert_eq!(t.odometer_km, 4290);
+    assert!(t.leased_by.is_none());
+
+    // Nächste Leihe: Der Lkw steht noch im Spielstand, ein zweites Einsetzen wird verhindert
+    let again = chef.checkout(truck_id).unwrap();
+    assert_eq!(again.truck.plate, "EF XU 577");
+    let p = package_from_checkout(&again.truck).unwrap();
+    let e = deploy_truck(
+        &docs.nordfracht,
+        &p,
+        &app.backups(),
+        &FakeGame::closed(),
+        SystemTime::now(),
+    )
+    .unwrap_err();
+    assert!(
+        e.to_string().contains("steht schon im neuesten Spielstand"),
+        "{e}"
+    );
+
+    // Diesmal findet die Rückgabe ihn direkt über das Kennzeichen
+    let back = read_for_return(&docs.nordfracht, &again.truck.plate, Some(&p))
+        .unwrap()
+        .unwrap();
+    assert_eq!(back.new_plate, None);
+    let r = chef
+        .checkin(truck_id, back.odometer_km, Some(&back.state), None)
+        .unwrap();
+    assert_eq!(r.plate, "EF XU 577");
     let _ = fs::remove_dir_all(dir);
 }

@@ -24,7 +24,7 @@ Wichtig: Dass ETS2 einen so bearbeiteten Spielstand lädt, ist noch nicht im Spi
 3. **Firmenprofil wählen:** das ETS2-Profil, in dem du für die Firma fährst. Der Launcher sucht unter `Dokumente\Euro Truck Simulator 2\profiles` und `steam_profiles`. Liegt das Profil unter `steam_profiles`, erscheint eine Warnung: Steam Cloud kann einen bearbeiteten Spielstand mit einer älteren Fassung überschreiben. Am besten nimmst du ein eigenes Profil ohne Steam Cloud.
 4. **Ausleihen:** Der Server vergibt den Lkw. Der Launcher setzt ihn sofort in den neuesten Spielstand des Profils ein und legt das Ergebnis als neuen Speicherplatz `SpedHub: <Kennzeichen>` an. Im Spiel diesen Speicherplatz laden.
 5. **In Spielstand schreiben:** dasselbe noch einmal, zum Beispiel wenn beim Ausleihen das Spiel lief.
-6. **Zurückgeben:** Der Launcher liest Kilometerstand und Zustand des Lkw aus dem neuesten Spielstand und meldet sie dem Server. Findet er den Lkw dort nicht, gibst du den Kilometerstand von Hand ein.
+6. **Zurückgeben:** Der Launcher liest Kilometerstand und Zustand des Lkw aus dem neuesten Spielstand und meldet sie dem Server. Er sucht den Lkw zuerst über das Kennzeichen. Das Spiel kann das Kennzeichen aber ersetzen. Findet er es nicht, erkennt er den Lkw über Modell, Teile und Kilometerstand wieder und meldet das neue Kennzeichen mit. Dafür braucht er den Bauplan aus `leases\`, also den Rechner, auf dem ausgeliehen wurde. Passen zwei Lkw gleich gut, sagt er das und rät nicht. Erst wenn beides nichts findet, gibst du den Kilometerstand von Hand ein.
 7. **Lkw in den Fuhrpark übernehmen** (nur Chef): Spielstand wählen, Lkw wählen, übernehmen. Der Lkw kommt mit Bauplan, Kilometerstand und Zustand auf den Server.
 8. **Spiel starten:** öffnet `steam://rungameid/227300`.
 
@@ -34,11 +34,12 @@ Läuft das Spiel, schreibt der Launcher nichts in den Spielstand und sagt das au
 
 1. Prüfen, ob `eurotrucks2.exe` läuft. Wenn ja, oder wenn sich das nicht prüfen lässt: abbrechen.
 2. Den neuesten Speicherplatz des Profils lesen, gemessen an der Änderungszeit von `game.sii`.
-3. Den Lkw mit `spedhub-save` einsetzen. Kilometerstand und Zustand kommen vom Server.
-4. In `info.sii` den Namen `SpedHub: <Kennzeichen>` und die aktuelle Zeit setzen. Zeilenende und Aufbau bleiben, wie das Spiel sie geschrieben hat.
-5. Den Ausgangs-Speicherplatz nach `%LOCALAPPDATA%\SpedHub\backups\<Profil>\<Zeit>-<Speicherplatz>\` kopieren.
-6. Kurz vor dem Schreiben noch einmal prüfen, ob das Spiel läuft.
-7. Einen neuen Speicherplatz anlegen, die nächste freie Nummer unter `save\` (`1`, `2`, …), und `game.sii` und `info.sii` hineinschreiben. Vorhandenes wird nie überschrieben. Scheitert das Schreiben, wird der neue Ordner wieder entfernt.
+3. Prüfen, ob der Lkw schon im Spielstand steht, auch unter einem Kennzeichen, das das Spiel vergeben hat (über Modell und Teile). Wenn ja: abbrechen, sonst stünde er doppelt da.
+4. Den Lkw mit `spedhub-save` einsetzen. Kilometerstand und Zustand kommen vom Server.
+5. In `info.sii` den Namen `SpedHub: <Kennzeichen>` und die aktuelle Zeit setzen. Zeilenende und Aufbau bleiben, wie das Spiel sie geschrieben hat.
+6. Den Ausgangs-Speicherplatz nach `%LOCALAPPDATA%\SpedHub\backups\<Profil>\<Zeit>-<Speicherplatz>\` kopieren.
+7. Kurz vor dem Schreiben noch einmal prüfen, ob das Spiel läuft.
+8. Einen neuen Speicherplatz anlegen, die nächste freie Nummer unter `save\` (`1`, `2`, …), und `game.sii` und `info.sii` hineinschreiben. Vorhandenes wird nie überschrieben. Scheitert das Schreiben, wird der neue Ordner wieder entfernt.
 
 ## Dateien
 

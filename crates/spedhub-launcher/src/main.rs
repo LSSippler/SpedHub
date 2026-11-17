@@ -7,7 +7,7 @@ use eframe::egui;
 use spedhub_launcher::client::{Client, Company, Me, Truck};
 use spedhub_launcher::profiles::{Profile, SaveSlot, find_profiles, list_slots};
 use spedhub_launcher::savegame::{
-    ReturnData, SaveTruck, deploy_truck, new_truck_from_save, package_from_checkout,
+    FoundBy, ReturnData, SaveTruck, deploy_truck, new_truck_from_save, package_from_checkout,
     read_for_return, trucks_in_save,
 };
 use spedhub_launcher::settings::{
@@ -22,7 +22,8 @@ use std::{
     time::SystemTime,
 };
 
-const UNCONFIRMED: &str = "Hinweis: Das Schreiben in den Spielstand ist noch nicht im Spiel bestätigt. \
+const UNCONFIRMED: &str = "Hinweis: Ein eingesetzter Lkw lädt im Spiel, das ist bestätigt. \
+Noch nicht bestätigt ist, ob das Spiel den neuen Speicherplatz des Launchers anzeigt. \
 Der Launcher legt immer einen neuen Speicherplatz an und sichert den alten vorher. \
 Trotzdem gilt: vorher selbst ein Backup des Profils anlegen.";
 
@@ -62,6 +63,8 @@ enum Done {
         truck_id: i64,
         plate: String,
         data: Option<ReturnData>,
+        /// Warum der Spielstand nichts hergab, zum Beispiel zwei gleich passende Lkw
+        problem: Option<String>,
     },
     SaveTrucks(Vec<SaveTruck>),
     LoggedOut,
@@ -72,6 +75,7 @@ struct ReturnDialog {
     truck_id: i64,
     plate: String,
     data: Option<ReturnData>,
+    problem: Option<String>,
     manual_km: String,
 }
 
@@ -282,12 +286,14 @@ impl App {
                 truck_id,
                 plate,
                 data,
+                problem,
             } => {
                 self.returning = Some(ReturnDialog {
                     truck_id,
                     plate,
                     manual_km: String::new(),
                     data,
+                    problem,
                 });
             }
             Done::SaveTrucks(trucks) => {
@@ -388,9 +394,17 @@ impl App {
             };
             match deploy(&profile, &package, paths.as_ref()) {
                 Ok(text) => Ok(Done::Info(format!("{plate} ist ausgeliehen. {text}"))),
-                Err(e) => Ok(Done::Info(format!(
-                    "{plate} ist ausgeliehen, aber nicht im Spielstand: {e}. Später mit \"In Spielstand schreiben\" erneut versuchen"
-                ))),
+                Err(e) => {
+                    // Nur wenn das Spiel lief, hilft ein zweiter Versuch später
+                    let later = if e == Error::GameRunning {
+                        ". Später mit \"In Spielstand schreiben\" erneut versuchen"
+                    } else {
+                        ""
+                    };
+                    Ok(Done::Info(format!(
+                        "{plate} ist ausgeliehen, aber nicht im Spielstand: {e}{later}"
+                    )))
+                }
             }
         });
     }
@@ -420,17 +434,24 @@ impl App {
                 truck_id,
                 plate,
                 data: None,
+                problem: Some("Kein Firmenprofil gewählt".into()),
                 manual_km: String::new(),
             });
             return;
         };
+        // Das Paket vom Ausleihen hilft, den Lkw ohne Kennzeichen wiederzuerkennen.
+        let package = self.paths.as_ref().and_then(|p| p.load_lease(truck_id));
         self.run(ctx, "Spielstand wird gelesen", move || {
             // Lässt sich der Spielstand nicht lesen, bleibt die Eingabe von Hand.
-            let data = read_for_return(&profile, &plate).unwrap_or(None);
+            let (data, problem) = match read_for_return(&profile, &plate, package.as_ref()) {
+                Ok(d) => (d, None),
+                Err(e) => (None, Some(e.to_string())),
+            };
             Ok(Done::ReturnRead {
                 truck_id,
                 plate,
                 data,
+                problem,
             })
         });
     }
@@ -439,10 +460,10 @@ impl App {
         let Some(dialog) = &self.returning else {
             return;
         };
-        let (km, state) = match &dialog.data {
-            Some(d) => (d.odometer_km, Some(d.state.clone())),
+        let (km, state, new_plate) = match &dialog.data {
+            Some(d) => (d.odometer_km, Some(d.state.clone()), d.new_plate.clone()),
             None => match dialog.manual_km.trim().parse::<i64>() {
-                Ok(km) if km >= 0 => (km, None),
+                Ok(km) if km >= 0 => (km, None, None),
                 _ => {
                     self.error("Bitte den Kilometerstand als ganze Zahl eingeben");
                     return;
@@ -454,12 +475,16 @@ impl App {
         let client = self.client();
         let paths = self.paths.clone();
         self.run(ctx, "Lkw wird zurückgegeben", move || {
-            let r = client.checkin(truck_id, km, state.as_ref())?;
+            let r = client.checkin(truck_id, km, state.as_ref(), new_plate.as_deref())?;
             if let Some(p) = &paths {
                 p.remove_lease(truck_id);
             }
+            let renamed = match &new_plate {
+                Some(p) => format!(". Neues Kennzeichen {p}, das alte merkt sich der Server"),
+                None => String::new(),
+            };
             Ok(Done::Info(format!(
-                "{plate} ist zurückgegeben, {} km gefahren",
+                "{plate} ist zurückgegeben, {} km gefahren{renamed}",
                 r.driven_km
             )))
         });
@@ -712,13 +737,28 @@ impl App {
             ui.strong(format!("{} zurückgeben", dialog.plate));
             match &dialog.data {
                 Some(d) => {
+                    let how = match d.found_by {
+                        FoundBy::Plate => "Gefunden über das Kennzeichen".to_string(),
+                        FoundBy::Parts { share } => format!(
+                            "Gefunden über Modell und Teile ({} Prozent Übereinstimmung)",
+                            (share * 100.0).floor()
+                        ),
+                    };
                     ui.label(format!(
-                        "Im neuesten Spielstand (Speicherplatz {}) steht der Lkw mit {} km. Zustand und Verschleiß gehen mit an den Server",
+                        "{how}. Im neuesten Spielstand (Speicherplatz {}) steht der Lkw mit {} km. Zustand und Verschleiß gehen mit an den Server",
                         d.slot, d.odometer_km
                     ));
+                    if let Some(p) = &d.new_plate {
+                        ui.label(format!(
+                            "Das Spiel hat das Kennzeichen ersetzt. Neu ist {p}, das meldet der Launcher mit"
+                        ));
+                    }
                 }
                 None => {
-                    ui.label("Im neuesten Spielstand ist der Lkw nicht zu finden. Bitte den Kilometerstand von Hand eingeben");
+                    if let Some(problem) = &dialog.problem {
+                        ui.colored_label(egui::Color32::from_rgb(200, 40, 40), problem);
+                    }
+                    ui.label("Im neuesten Spielstand ist der Lkw nicht sicher zu finden. Bitte den Kilometerstand von Hand eingeben");
                     ui.horizontal(|ui| {
                         ui.label("Kilometerstand");
                         ui.text_edit_singleline(&mut dialog.manual_km);

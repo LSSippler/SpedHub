@@ -445,3 +445,156 @@ async fn dashboard_wird_ausgeliefert() {
     let body = res.into_body().collect().await.unwrap().to_bytes();
     assert!(std::str::from_utf8(&body).unwrap().contains("Kassenbuch"));
 }
+
+#[tokio::test]
+async fn kennzeichen_wechselt_bei_der_rueckgabe() {
+    let app = app();
+    let chef = register(&app, "Chef").await;
+    let fahrer = register(&app, "Fahrer").await;
+    let (_, firma) = call(
+        &app,
+        "POST",
+        "/api/companies",
+        Some(&chef),
+        Some(json!({ "name": "Nordfracht" })),
+    )
+    .await;
+    let id = firma["id"].as_i64().unwrap();
+    call(
+        &app,
+        "POST",
+        "/api/companies/join",
+        Some(&fahrer),
+        Some(json!({ "invite_code": firma["invite_code"] })),
+    )
+    .await;
+    let mut ids = Vec::new();
+    for plate in ["SPED 001", "SPED 002"] {
+        let (s, t) = call(
+            &app,
+            "POST",
+            &format!("/api/companies/{id}/trucks"),
+            Some(&chef),
+            Some(json!({ "plate": plate, "model": "scania.s_2016", "odometer_km": 1000 })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK, "{t}");
+        ids.push(t["id"].as_i64().unwrap());
+    }
+    let truck = ids[0];
+    let checkout = |token: String| {
+        let app = app.clone();
+        async move {
+            call(
+                &app,
+                "POST",
+                &format!("/api/trucks/{truck}/checkout"),
+                Some(&token),
+                None,
+            )
+            .await
+        }
+    };
+    let checkin = |token: String, body: Value| {
+        let app = app.clone();
+        async move {
+            call(
+                &app,
+                "POST",
+                &format!("/api/trucks/{truck}/checkin"),
+                Some(&token),
+                Some(body),
+            )
+            .await
+        }
+    };
+    let list = |token: String| {
+        let app = app.clone();
+        async move {
+            let (_, l) = call(
+                &app,
+                "GET",
+                &format!("/api/companies/{id}/trucks"),
+                Some(&token),
+                None,
+            )
+            .await;
+            l["trucks"].as_array().unwrap().clone()
+        }
+    };
+
+    assert_eq!(checkout(fahrer.clone()).await.0, StatusCode::OK);
+
+    // Kennzeichen, das ein anderer Lkw der Firma hat: abgelehnt, und die ganze Rückgabe mit
+    let (s, v) = checkin(
+        fahrer.clone(),
+        json!({ "odometer_km": 1200, "plate": "SPED 002" }),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CONFLICT);
+    assert_eq!(
+        v["error"],
+        "Das Kennzeichen SPED 002 hat in der Firma schon ein anderer Lkw"
+    );
+    let (s, _) = checkin(
+        fahrer.clone(),
+        json!({ "odometer_km": 1200, "plate": "  " }),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    let l = list(chef.clone()).await;
+    assert_eq!(l[0]["leased_by"]["name"], "Fahrer", "noch verliehen");
+    assert_eq!(l[0]["odometer_km"], 1000);
+
+    // Neues Kennzeichen vom Spiel: übernommen, das alte bleibt in der Liste
+    let (s, r) = checkin(
+        fahrer.clone(),
+        json!({ "odometer_km": 1200, "plate": " EF XU 577 " }),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!(r["plate"], "EF XU 577");
+    let l = list(fahrer.clone()).await;
+    let t = l.iter().find(|t| t["id"] == truck).unwrap();
+    assert_eq!(t["plate"], "EF XU 577");
+    assert_eq!(t["old_plates"], json!(["SPED 001"]));
+    assert_eq!(t["odometer_km"], 1200);
+    let other = l.iter().find(|t| t["id"] == ids[1]).unwrap();
+    assert_eq!(other["old_plates"], json!([]));
+
+    // Eindeutig ist nur das aktuelle Kennzeichen: SPED 001 ist wieder frei
+    let (s, _) = call(
+        &app,
+        "POST",
+        &format!("/api/companies/{id}/trucks"),
+        Some(&chef),
+        Some(json!({ "plate": "SPED 001", "model": "volvo.fh_2024" })),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+
+    // Gleiches Kennzeichen oder keins: nichts ändert sich an der Liste
+    checkout(fahrer.clone()).await;
+    let (_, r) = checkin(
+        fahrer.clone(),
+        json!({ "odometer_km": 1300, "plate": "EF XU 577" }),
+    )
+    .await;
+    assert_eq!(r["plate"], "EF XU 577");
+    checkout(fahrer.clone()).await;
+    checkin(fahrer.clone(), json!({ "odometer_km": 1400 })).await;
+    // Zweiter Wechsel: beide alten Kennzeichen, ältestes zuerst
+    checkout(fahrer.clone()).await;
+    checkin(
+        fahrer.clone(),
+        json!({ "odometer_km": 1500, "plate": "EF AB 123" }),
+    )
+    .await;
+    let l = list(chef.clone()).await;
+    let t = l.iter().find(|t| t["id"] == truck).unwrap();
+    assert_eq!(t["plate"], "EF AB 123");
+    assert_eq!(t["old_plates"], json!(["SPED 001", "EF XU 577"]));
+    // Das neue Kennzeichen kommt auch beim Ausleihen mit
+    let (_, out) = checkout(chef.clone()).await;
+    assert_eq!(out["truck"]["plate"], "EF AB 123");
+}

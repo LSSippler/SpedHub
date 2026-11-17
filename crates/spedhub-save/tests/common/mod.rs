@@ -13,6 +13,9 @@ pub const QUELLE: &str = "quelle_mit_lkw.sii";
 pub const ZIEL: &str = "ziel_schnellauftrag.sii";
 pub const ERWARTET: &str = "erwartet_nach_einsetzen.sii";
 pub const INFO: &str = "ziel_info.sii";
+/// `erwartet_nach_einsetzen.sii`, nachdem das Spiel gespeichert hat: neue Unit-Namen, neues
+/// Kennzeichen mit Markup, 425 km mehr.
+pub const NACH_SPIEL: &str = "nach_spiel_neues_kennzeichen.sii";
 
 pub fn testdata(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

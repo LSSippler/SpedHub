@@ -10,8 +10,9 @@ use crate::profiles::{SaveSlot, newest_slot, next_free_slot_id};
 use crate::system::GameCheck;
 use serde_json::Value;
 use spedhub_save::{
-    InsertOptions, Save, TruckPackage, TruckState, export_truck, insert_truck, plate_text,
-    set_info_file_time, set_info_name, truck_state, write_saves,
+    DEFAULT_MIN_MATCH, InsertOptions, Save, TruckPackage, TruckState, export_truck,
+    find_package_truck, insert_truck, plate_text, set_info_file_time, set_info_name, truck_state,
+    write_saves,
 };
 use std::{
     fs,
@@ -110,6 +111,16 @@ pub fn deploy_truck(
     let (mut save, _) = Save::read(source.game())?;
     let (mut info, _) = Save::read(source.info())?;
 
+    // Steht der Lkw schon im Spielstand, etwa von einer früheren Leihe, dann womöglich unter
+    // einem Kennzeichen, das das Spiel vergeben hat. Die Prüfung auf gleiches Kennzeichen beim
+    // Einsetzen greift dann nicht, deshalb hier zusätzlich über die Teile.
+    if let Some(m) = find_package_truck(&save, package, DEFAULT_MIN_MATCH)? {
+        return Err(Error::Other(format!(
+            "Der Lkw steht schon im neuesten Spielstand ({}), unter dem Kennzeichen {}. Er wird nicht ein zweites Mal eingesetzt",
+            source.label(),
+            plate_text(&m.plate)
+        )));
+    }
     insert_truck(&mut save, package, &InsertOptions::default())?;
     let name = format!("{SLOT_NAME_PREFIX}{}", plate_text(&package.license_plate));
     set_info_name(&mut info, &name)?;
@@ -137,6 +148,16 @@ pub fn deploy_truck(
     })
 }
 
+/// Wie der Lkw im Spielstand gefunden wurde.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FoundBy {
+    Plate,
+    /// Über Modell, Teile und Kilometerstand. `share` ist die Übereinstimmung der Teile, 0 bis 1.
+    Parts {
+        share: f64,
+    },
+}
+
 /// Was der Spielstand für die Rückgabe hergibt.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReturnData {
@@ -145,22 +166,51 @@ pub struct ReturnData {
     pub state: Value,
     /// Aus welchem Speicherplatz
     pub slot: String,
+    pub found_by: FoundBy,
+    /// Das Kennzeichen im Spielstand, wenn es nicht mehr das vom Server ist. Das Spiel ersetzt
+    /// Kennzeichen manchmal, der Server soll das neue erfahren.
+    pub new_plate: Option<String>,
 }
 
-/// Liest Kilometerstand und Zustand des Lkw mit diesem Kennzeichen aus dem neuesten Spielstand.
-/// `None`, wenn der Lkw dort nicht vorkommt. Dann gibt der Fahrer den Kilometerstand von Hand ein.
-pub fn read_for_return(profile_dir: &Path, plate: &str) -> Result<Option<ReturnData>> {
+/// Liest Kilometerstand und Zustand eines geliehenen Lkw aus dem neuesten Spielstand.
+///
+/// Zuerst über das Kennzeichen. Findet sich keins und liegt das Paket vor, über Modell, Teile
+/// und Kilometerstand ([`spedhub_save::find_package_truck`]). Passen mehrere Lkw gleich gut,
+/// ist das ein Fehler. `None`, wenn beides nichts findet. Dann gibt der Fahrer den
+/// Kilometerstand von Hand ein.
+pub fn read_for_return(
+    profile_dir: &Path,
+    plate: &str,
+    package: Option<&TruckPackage>,
+) -> Result<Option<ReturnData>> {
     let slot = newest_slot(profile_dir)?;
     let (save, _) = Save::read(slot.game())?;
-    match truck_state(&save, Some(plate)) {
-        Ok(state) => Ok(Some(ReturnData {
-            odometer_km: i64::from(state.odometer),
-            state: serde_json::to_value(&state).map_err(|e| Error::Other(e.to_string()))?,
-            slot: slot.id,
-        })),
-        Err(spedhub_save::Error::TruckNotFound(_)) => Ok(None),
-        Err(e) => Err(e.into()),
-    }
+    let (state, found_by, new_plate) = match truck_state(&save, Some(plate)) {
+        Ok(state) => (state, FoundBy::Plate, None),
+        Err(spedhub_save::Error::TruckNotFound(_)) => {
+            let Some(package) = package else {
+                return Ok(None);
+            };
+            let Some(m) = find_package_truck(&save, package, DEFAULT_MIN_MATCH)? else {
+                return Ok(None);
+            };
+            let now = plate_text(&m.plate);
+            let changed = !now.eq_ignore_ascii_case(&plate_text(plate));
+            (
+                m.state,
+                FoundBy::Parts { share: m.share },
+                changed.then_some(now),
+            )
+        }
+        Err(e) => return Err(e.into()),
+    };
+    Ok(Some(ReturnData {
+        odometer_km: i64::from(state.odometer),
+        state: serde_json::to_value(&state).map_err(|e| Error::Other(e.to_string()))?,
+        slot: slot.id,
+        found_by,
+        new_plate,
+    }))
 }
 
 fn ensure_game_closed(game: &dyn GameCheck) -> Result<()> {

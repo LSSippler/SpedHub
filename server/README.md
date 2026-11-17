@@ -95,13 +95,17 @@ Alle Anfragen und Antworten sind JSON. Außer bei `register`, `login` und `healt
 | `POST /api/companies/join` | angemeldet | Beitreten mit `invite_code`, Rolle Fahrer |
 | `GET /api/companies/{id}` | Mitglied | Kassenstand, Mitglieder mit Lohnkonto. Den Einladungscode sieht nur der Chef |
 | `PATCH /api/companies/{id}` | Chef | Lohnanteil ändern: `wage_percent` |
-| `GET /api/companies/{id}/trucks` | Mitglied | Fuhrpark mit Info, wer was gerade fährt |
+| `GET /api/companies/{id}/trucks` | Mitglied | Fuhrpark mit Info, wer was gerade fährt, und `old_plates` (frühere Kennzeichen, älteste zuerst) |
 | `POST /api/companies/{id}/trucks` | Chef | Lkw anlegen: `plate`, `model`, optional `package`, `odometer_km`, `state` |
 | `POST /api/trucks/{id}/checkout` | Mitglied | Ausleihen. Liefert Bauplan und Zustand. 409, wenn schon verliehen |
-| `POST /api/trucks/{id}/checkin` | Ausleiher oder Chef | Zurückgeben: `odometer_km`, optional `state` |
+| `POST /api/trucks/{id}/checkin` | Ausleiher oder Chef | Zurückgeben: `odometer_km`, optional `state` und `plate`. Mit `plate` bekommt der Lkw ein neues Kennzeichen, das alte kommt in `old_plates`. 409, wenn ein anderer Lkw der Firma das Kennzeichen gerade hat |
 | `POST /api/companies/{id}/events` | Mitglied | Ereignis aus dem Spiel buchen: `event_id`, `type`, `amount`, optional `note` |
 | `GET /api/companies/{id}/ledger` | Mitglied | Die letzten Buchungen, `?limit=50` |
 | `POST /api/companies/{id}/transfer` | Chef | Geld verschieben: `user_id`, `amount`, optional `note`. Positiv geht aus der Kasse an den Fahrer, negativ zurück |
+
+## Kennzeichen
+
+Das Spiel kann das Kennzeichen eines Lkw ersetzen (siehe `docs/save-format.md`, "Im Spiel bestätigt"). Der Launcher meldet das neue deshalb bei der Rückgabe mit. Der Server speichert es als aktuelles Kennzeichen und hängt das alte an `old_plates` an, damit sich spätere Telemetrie mit dem alten Kennzeichen noch zuordnen lässt. Eindeutig je Firma ist nur das aktuelle Kennzeichen. Ein altes darf ein anderer Lkw wieder bekommen.
 
 ## Buchungsregeln
 

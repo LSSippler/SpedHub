@@ -14,6 +14,23 @@ Ein Spielstand liegt unter `Dokumente\Euro Truck Simulator 2\profiles\<Profil>\s
 
 Slots heißen `autosave`, `autosave_job`, `autosave_drive_1` bis `_9`, `quicksave`, `multiplayer_backup` und für eigene Spielstände `1`, `2`, `3`. Der angezeigte Name steht nur in `info.sii`.
 
+## Im Spiel bestätigt
+
+Test mit ETS2 1.62, Spielstand mit `spedhub-save` gebaut (Lkw eingesetzt):
+
+- **Der Spielstand lädt.** Der Lkw ist eigener und aktiver Lkw in der Heimatgarage. Alle 75 Zubehör-Units, Kilometerstand, Verschleiß und Tank sind erhalten. Damit lädt das Spiel auch einen `game.sii` im Klartext, denn `spedhub-save` schreibt nur Klartext.
+- **Der nächste Autosave des Spiels ist sauber.** Er besteht die Integritätsprüfung von `spedhub-save`.
+- **Das Spiel vergibt beim Speichern alle `_nameless`-Namen neu.** Von den Namen, die `spedhub-save` vergeben hat, ist danach keiner mehr da. Unit-Namen taugen also nicht, um einen Lkw über mehrere Speichervorgänge wiederzuerkennen.
+- **Das Spiel hat das Kennzeichen ersetzt.** Aus dem selbst vergebenen `"BZ PM 1411|_germany"` wurde ein vom Spiel erzeugtes Kennzeichen der Heimatstadt mit Markup (`"EF<offset ...>XU 577|germany"`). Das Kennzeichen taugt also nicht als dauerhafte Kennung eines Firmen-Lkw. SpedHub erkennt Lkw deshalb über Modell und Teile wieder, siehe [Lkw wiedererkennen](#lkw-wiedererkennen).
+
+Noch offen dazu:
+
+- Warum das Spiel das Kennzeichen ersetzt und ob es das bei jedem Laden tut oder nur einmal.
+- Beim Laden stand im Log `Economy reset - company mismatch`. Dieselbe Meldung kam auch beim Laden eines unveränderten alten Spielstands mit laufendem Auftrag. Ob das Einsetzen sie auslöst, ist offen.
+- Ob ein vom Launcher angelegter neuer Speicherplatz im Spiel erscheint, siehe [Neuer Speicherplatz](#neuer-speicherplatz).
+
+`testdata/nach_spiel_neues_kennzeichen.sii` bildet das nach: `erwartet_nach_einsetzen.sii` mit neuen Unit-Namen, einem Kennzeichen mit Markup und 425 km mehr.
+
 ## Formate
 
 | Kennung | Bedeutung |
@@ -75,6 +92,8 @@ Schreibt `spedhub-save` eine Kommazahl neu, nimmt es dezimal für ganze Werte un
 ## Unit-Namen
 
 In echten Spielständen aus 1.62 haben alle rund 15.000 `_nameless`-Namen die Form `_nameless.XXX.XXXX.XXXX`: drei Hex-Gruppen mit 3, 4 und 4 Stellen, die hinteren mit führenden Nullen, Kleinbuchstaben. Alle enden auf `8`. Das sieht nach ausgerichteten Speicheradressen aus. In den Testdaten ist es genauso.
+
+Das Spiel vergibt beim Speichern alle `_nameless`-Namen neu (im Spiel bestätigt). Eigene Namen müssen also nur innerhalb einer Datei eindeutig sein und die richtige Form haben.
 
 Neue Units bekommen von `spedhub-save` Namen derselben Form: ab `_nameless.2ff.7a11.0008` in Schritten von 0x10, also `.0008`, `.0018`, `.0028` und so weiter, immer auf `8` endend. Vergebene Namen werden übersprungen, nach `.fff8` geht es mit `_nameless.2ff.7a12.0008` weiter. `tools/transplant.py` nimmt für sein neues `profit_log` denselben ersten Namen, damit beide Ergebnisse byte-genau vergleichbar bleiben. Das Schema steht in `crates/spedhub-save/src/layout.rs`.
 
@@ -150,7 +169,20 @@ Zwei Formen kommen vor:
 
 Hinter dem `|` steht das Land. Bei selbst vergebenen Kennzeichen hat es einen Unterstrich davor.
 
+Das Spiel kann ein selbst vergebenes Kennzeichen durch eins mit Markup ersetzen (im Spiel bestätigt, Grund offen). Ein Lkw ist über sein Kennzeichen also nicht dauerhaft zu finden.
+
 Zum Suchen und Vergleichen nimmt `spedhub-save` den Text vor dem `|`, ersetzt jedes Markup-Tag durch ein Leerzeichen und vergleicht ohne Rücksicht auf Groß- und Kleinschreibung. Aus dem ersten Beispiel wird so `DD RI 772`. Neu gesetzte Kennzeichen sind immer selbst vergebene, mit Großbuchstaben, Ziffern, Leerzeichen, Punkt und Bindestrich, höchstens 16 Zeichen.
+
+## Lkw wiedererkennen
+
+Weil das Spiel Unit-Namen und Kennzeichen ersetzt, findet `spedhub_save::find_package_truck` den Lkw zu einem Paket ohne beides:
+
+- Er gehört dem Spieler oder der Spieler fährt ihn gerade.
+- Das Modell ist gleich.
+- Sein Kilometerstand ist nicht kleiner als im Paket.
+- Die `data_path`-Listen stimmen zu mindestens 80 Prozent überein (`DEFAULT_MIN_MATCH`). Gemessen wird der Anteil der gemeinsamen Einträge an allen Einträgen beider Listen, jeder Eintrag einmal. Getauschte, fehlende und zusätzliche Teile zählen so gleich. Der Test-Scania hat 74 verschiedene Teile. Mit drei getauschten sind es 92 Prozent, bei 80 Prozent verträgt er bis zu acht.
+
+Passen mehrere, gewinnt die größte Übereinstimmung. Liegen die besten gleichauf, etwa bei zwei baugleichen Lkw, ist das ein Fehler (`AmbiguousTruck`) und kein Raten.
 
 ## Lkw einsetzen
 
@@ -209,12 +241,12 @@ Noch nicht im Spiel geprüft. Der Launcher schreibt einen geliehenen Lkw nicht i
 Offen ist, ob das Spiel den Speicherplatz in der Liste zeigt, ob es nach `file_time` sortiert und ob es einen Klartext-`game.sii` in einem sonst verschlüsselt gespeicherten Profil lädt.
 ## Offen
 
-- Ob das Spiel das Ergebnis des Einsetzens lädt, ist noch nicht bestätigt.
+- Warum das Spiel Kennzeichen ersetzt und ob es das bei jedem Laden tut, siehe [Im Spiel bestätigt](#im-spiel-bestätigt).
+- Woher `Economy reset - company mismatch` beim Laden kommt.
 - Was mit `truck_profit_logs` passiert, wenn das Log leer ist: Der Lkw-Manager rechnet laut Community-Quellen Kilometer aus dem Log und nicht aus dem Tacho.
 - Wie ein Spielstand aussieht, in dem der Spieler gar keinen Lkw hat und auch keinen Auftrag fährt.
 - Einsetzen in ein Profil, das schon eigene Lkw hat, und Entfernen des aktiven Lkw mit Ersatz: so gebaut wie oben beschrieben, im Spiel nicht geprüft.
 - Wie das Spiel ein `game.sii` als Klartext schreibt (`g_save_format 2`): Zeilenende, Einrückung, Dateiende.
-- Ob das Spiel die von `spedhub-save` vergebenen Unit-Namen annimmt. Sie haben jetzt die Form der echten Namen, geprüft ist es noch nicht.
 - Ob `owned_trucks[]` beim Entfernen eines Lkw angepasst werden muss.
 - Ob ein vom Launcher angelegter Speicherplatz im Spiel erscheint und lädt, siehe oben.
 - Lkw mit Mod-Teilen.

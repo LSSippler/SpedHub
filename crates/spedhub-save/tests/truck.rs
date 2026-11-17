@@ -5,9 +5,9 @@ use common::*;
 use std::collections::HashSet;
 
 use spedhub_save::{
-    Error, InsertOptions, Save, TruckPackage, check, custom_plate, export_truck, insert_truck,
-    license_plate, list_trucks, plate_country, plate_text, remove_truck, set_license_plate,
-    set_truck_state, truck_state, write_save,
+    DEFAULT_MIN_MATCH, Error, InsertOptions, Save, TruckPackage, check, custom_plate, export_truck,
+    find_package_truck, insert_truck, license_plate, list_trucks, plate_country, plate_text,
+    remove_truck, set_license_plate, set_truck_state, truck_state, write_save,
 };
 
 const PLAYER: &str = "_nameless.206.3353.6c38";
@@ -611,4 +611,137 @@ fn kennzeichen_beide_formen() {
         Err(Error::InvalidInput(_))
     ));
     assert_eq!(save, before);
+}
+
+// ------------------------------------------------------------------- Wiedererkennen
+
+/// Tauscht `count` Zubehörteile des Lkw `unit` gegen ausgedachte Teile.
+fn swap_parts(save: &mut Save, unit: &str, count: usize) {
+    let accessories: Vec<String> = save
+        .closure(unit, true)
+        .into_iter()
+        .filter(|n| save.unit(n).and_then(|u| u.get("data_path")).is_some())
+        .collect();
+    let mut swapped = 0;
+    for (i, a) in accessories.iter().enumerate() {
+        if swapped == count {
+            break;
+        }
+        if save.get(a, "data_path").unwrap().contains("/accessory/") {
+            let path = format!("\"/def/vehicle/truck/scania.s_2016/accessory/neu/teil{i}.sii\"");
+            save.set(a, "data_path", &path).unwrap();
+            swapped += 1;
+        }
+    }
+    assert_eq!(swapped, count);
+}
+
+#[test]
+fn lkw_wird_nach_neuem_kennzeichen_wiedererkannt() {
+    let p = package();
+    let save = load(NACH_SPIEL);
+
+    // Über das alte Kennzeichen ist er nicht mehr zu finden
+    assert!(matches!(
+        truck_state(&save, Some("SPED 001")),
+        Err(Error::TruckNotFound(_))
+    ));
+
+    let m = find_package_truck(&save, &p, DEFAULT_MIN_MATCH)
+        .unwrap()
+        .expect("über Modell und Teile gefunden");
+    assert_eq!(plate_text(&m.plate), "EF XU 577");
+    assert_eq!(m.share, 1.0);
+    assert_eq!(m.state.odometer, 4290);
+    assert!(m.unit.starts_with("_nameless.3a1."), "neuer Name vom Spiel");
+    assert_eq!(truck_state(&save, Some("EF XU 577")).unwrap(), m.state);
+}
+
+#[test]
+fn lkw_wird_nach_getauschten_teilen_wiedererkannt() {
+    let p = package();
+    let mut save = load(NACH_SPIEL);
+    let unit = find_package_truck(&save, &p, DEFAULT_MIN_MATCH)
+        .unwrap()
+        .unwrap()
+        .unit;
+
+    // Drei Teile getauscht: weniger als 100, mehr als 80 Prozent
+    swap_parts(&mut save, &unit, 3);
+    let m = find_package_truck(&save, &p, DEFAULT_MIN_MATCH)
+        .unwrap()
+        .expect("trotz getauschter Teile gefunden");
+    assert_eq!(m.unit, unit);
+    assert!(m.share > 0.85 && m.share < 1.0, "{}", m.share);
+
+    // Mit strengerer Grenze nicht mehr
+    assert_eq!(find_package_truck(&save, &p, 0.95).unwrap(), None);
+
+    // Zu viele Teile getauscht: das ist ein anderer Lkw
+    swap_parts(&mut save, &unit, 15);
+    assert_eq!(
+        find_package_truck(&save, &p, DEFAULT_MIN_MATCH).unwrap(),
+        None
+    );
+}
+
+#[test]
+fn wiedererkennen_braucht_modell_und_kilometerstand() {
+    let save = load(NACH_SPIEL);
+
+    // Paket mit mehr Kilometern als der Lkw: kann nicht derselbe sein
+    let mut p = package();
+    p.state.odometer = 5000;
+    assert_eq!(
+        find_package_truck(&save, &p, DEFAULT_MIN_MATCH).unwrap(),
+        None
+    );
+
+    // Anderes Modell
+    let mut p = package();
+    p.model = "volvo.fh16".into();
+    assert_eq!(
+        find_package_truck(&save, &p, DEFAULT_MIN_MATCH).unwrap(),
+        None
+    );
+
+    // Ziel ohne eigenen Lkw: nur der Firmen-Lkw des Schnellauftrags, ein MAN
+    assert_eq!(
+        find_package_truck(&load(ZIEL), &package(), DEFAULT_MIN_MATCH).unwrap(),
+        None
+    );
+
+    for bad in [-0.1, 1.5, f64::NAN] {
+        assert!(matches!(
+            find_package_truck(&save, &package(), bad),
+            Err(Error::InvalidInput(_))
+        ));
+    }
+}
+
+#[test]
+fn zwei_gleiche_lkw_sind_ein_fehler_und_kein_raten() {
+    // Derselbe Scania steht zweimal im Spielstand, unter SPED 001 und SPED 002
+    let mut p2 = package();
+    p2.license_plate = custom_plate("SPED 002", "germany").unwrap();
+    let mut save = quelle_mit_freiem_platz();
+    insert_truck(&mut save, &p2, &InsertOptions::default()).unwrap();
+
+    match find_package_truck(&save, &package(), DEFAULT_MIN_MATCH) {
+        Err(Error::AmbiguousTruck(mut plates)) => {
+            plates.sort();
+            assert_eq!(plates, vec!["SPED 001", "SPED 002"]);
+        }
+        other => panic!("erwartet AmbiguousTruck, bekommen {other:?}"),
+    }
+    let e = find_package_truck(&save, &package(), DEFAULT_MIN_MATCH).unwrap_err();
+    assert!(e.to_string().contains("gleich gut"));
+
+    // Hat einer getauschte Teile, gewinnt der andere eindeutig
+    swap_parts(&mut save, SPED_001, 2);
+    let m = find_package_truck(&save, &package(), DEFAULT_MIN_MATCH)
+        .unwrap()
+        .unwrap();
+    assert_eq!(plate_text(&m.plate), "SPED 002");
+    assert_eq!(m.share, 1.0);
 }

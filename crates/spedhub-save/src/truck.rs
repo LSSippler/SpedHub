@@ -709,6 +709,126 @@ pub fn list_trucks(save: &Save) -> Result<Vec<TruckInfo>> {
         .collect()
 }
 
+// ------------------------------------------------------------------- Wiedererkennen
+
+/// Vorgabe für die Mindestübereinstimmung der `data_path`-Listen in [`find_package_truck`].
+pub const DEFAULT_MIN_MATCH: f64 = 0.8;
+
+/// Ein Lkw im Spielstand, der zu einem Paket passt.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PackageMatch {
+    /// Name der `vehicle`-Unit
+    pub unit: String,
+    /// Aktuelles Kennzeichen im Spielstand, Inhalt der Zeichenkette
+    pub plate: String,
+    /// Übereinstimmung der `data_path`-Listen von 0 bis 1
+    pub share: f64,
+    pub state: TruckState,
+}
+
+/// Findet zu einem Lkw-Paket den passenden Lkw im Spielstand, ohne das Kennzeichen zu
+/// benutzen. Das Spiel vergibt beim Speichern neue Unit-Namen und hat im Test auch das
+/// Kennzeichen ersetzt, beides taugt also nicht zum Wiedererkennen.
+///
+/// Ein Lkw passt, wenn
+/// - er dem Spieler gehört oder der Spieler ihn gerade fährt,
+/// - das Modell gleich ist,
+/// - sein Kilometerstand nicht kleiner ist als im Paket,
+/// - die `data_path`-Listen zu mindestens `min_share` übereinstimmen. Gemessen wird der Anteil
+///   der gemeinsamen Einträge an allen Einträgen beider Listen (Schnittmenge durch
+///   Vereinigung, jeder Eintrag einmal). So zählen getauschte, fehlende und zusätzliche Teile
+///   gleich. Der Test-Scania hat 74 verschiedene Teile: Mit drei getauschten sind es noch
+///   92 Prozent, bei 80 Prozent Grenze verträgt er bis zu acht getauschte Teile.
+///
+/// Gibt es mehrere, gewinnt die größte Übereinstimmung. Liegen die besten gleichauf, ist das
+/// [`Error::AmbiguousTruck`]: lieber kein Treffer als ein falscher. Passt keiner, `Ok(None)`.
+pub fn find_package_truck(
+    save: &Save,
+    package: &TruckPackage,
+    min_share: f64,
+) -> Result<Option<PackageMatch>> {
+    if !(0.0..=1.0).contains(&min_share) {
+        return Err(Error::InvalidInput(format!(
+            "Die Mindestübereinstimmung muss zwischen 0 und 1 liegen, ist aber {min_share}"
+        )));
+    }
+    let wanted: BTreeSet<&str> = package.data_paths.iter().map(String::as_str).collect();
+    let p = Player::find(save)?;
+    let mut names = save.array(&p.unit, pl::TRUCKS)?;
+    let active = save.get(&p.assigned, pv::VEHICLE)?.to_string();
+    if active != NULL && !names.contains(&active) {
+        names.push(active);
+    }
+
+    // (Treffer, gemeinsame Einträge, alle Einträge)
+    let mut hits: Vec<(PackageMatch, usize, usize)> = Vec::new();
+    for name in names {
+        let Some(unit) = save.unit(&name).filter(|u| u.kind == v::KIND) else {
+            continue;
+        };
+        let paths = vehicle_data_paths(save, &name);
+        let model = paths.iter().filter_map(|dp| model_from_path(dp)).next();
+        if model != Some(package.model.as_str()) {
+            continue;
+        }
+        let Ok(state) = TruckState::read(unit) else {
+            continue;
+        };
+        if state.odometer < package.state.odometer {
+            continue;
+        }
+        let have: BTreeSet<&str> = paths.iter().map(String::as_str).collect();
+        let common = wanted.intersection(&have).count();
+        let all = wanted.union(&have).count();
+        if all == 0 {
+            continue;
+        }
+        let share = common as f64 / all as f64;
+        if share < min_share {
+            continue;
+        }
+        let Ok(plate) = vehicle_plate(unit) else {
+            continue;
+        };
+        hits.push((
+            PackageMatch {
+                unit: name,
+                plate,
+                share,
+                state,
+            },
+            common,
+            all,
+        ));
+    }
+    // Größte Übereinstimmung zuerst, exakt verglichen über Kreuzprodukt
+    hits.sort_by(|a, b| (b.1 * a.2).cmp(&(a.1 * b.2)));
+    let mut it = hits.into_iter();
+    let Some(best) = it.next() else {
+        return Ok(None);
+    };
+    let tied: Vec<String> = it
+        .filter(|h| h.1 * best.2 == best.1 * h.2)
+        .map(|h| plate_text(&h.0.plate))
+        .collect();
+    if !tied.is_empty() {
+        let mut plates = vec![plate_text(&best.0.plate)];
+        plates.extend(tied);
+        return Err(Error::AmbiguousTruck(plates));
+    }
+    Ok(Some(best.0))
+}
+
+/// Alle `data_path`-Einträge eines Lkw mit Zubehör, ohne Anführungszeichen.
+fn vehicle_data_paths(save: &Save, vehicle: &str) -> Vec<String> {
+    save.closure(vehicle, true)
+        .iter()
+        .filter_map(|a| save.unit(a)?.get(v::DATA_PATH))
+        .filter_map(unquote)
+        .map(str::to_string)
+        .collect()
+}
+
 // ------------------------------------------------------------------- Hilfen
 
 /// Die Units rund um den Spieler, die fast jede Operation braucht.

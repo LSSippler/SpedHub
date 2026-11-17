@@ -94,7 +94,7 @@ So liegt ein Firmen-Lkw auf dem Server (`trucks.package` und `trucks.state`):
 
 - **Bauplan:** die `vehicle`-Unit und alle Zubehör-Units als Text. Beim Einsetzen bekommen sie neue, eindeutige Unit-Namen.
 - **Zustand:** Kilometerstand, Wartungs-Kilometer, Verschleiß je Bauteil, Tank.
-- **Kennzeichen:** eindeutig je Lkw. Darüber erkennt die Telemetrie den Lkw, weil das SDK keine eindeutige Lkw-ID liefert.
+- **Kennzeichen:** eindeutig je Lkw und Firma, aber nicht dauerhaft: Das Spiel kann es ersetzen (im Spiel bestätigt). Der Launcher meldet das neue Kennzeichen bei der Rückgabe, der Server behält die alten in `old_plates`. So lässt sich auch Telemetrie mit einem alten Kennzeichen noch zuordnen. Im Spielstand erkennt SpedHub den Lkw über Modell und Teile wieder, nicht über das Kennzeichen.
 - **Abhängigkeiten:** alle `data_path`-Einträge. Daraus ergibt sich, welche DLCs und Mods ein Fahrer braucht.
 - **Revision:** steigt bei jeder Rückgabe.
 

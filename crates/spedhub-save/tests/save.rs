@@ -56,7 +56,7 @@ fn alle_testdaten_bleiben_byte_genau() {
         );
         count += 1;
     }
-    assert_eq!(count, 4, "alle vier Testdateien gefunden");
+    assert_eq!(count, 5, "alle fünf Testdateien gefunden");
 }
 
 #[test]

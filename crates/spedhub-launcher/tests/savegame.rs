@@ -7,7 +7,8 @@ use spedhub_launcher::Error;
 use spedhub_launcher::client::LeasedTruck;
 use spedhub_launcher::profiles::list_slots;
 use spedhub_launcher::savegame::{
-    deploy_truck, new_truck_from_save, package_from_checkout, read_for_return, trucks_in_save,
+    FoundBy, deploy_truck, new_truck_from_save, package_from_checkout, read_for_return,
+    trucks_in_save,
 };
 use spedhub_save::{Save, TruckPackage, check, export_truck, list_trucks, plate_text};
 use std::{
@@ -193,10 +194,28 @@ fn einsetzen_scheitert_ohne_spuren() {
     )
     .unwrap_err();
     assert!(
-        matches!(e, Error::Save(spedhub_save::Error::PlateExists(_))),
-        "{e:?}"
+        e.to_string().contains("steht schon im neuesten Spielstand")
+            && e.to_string().contains("SPED 001"),
+        "{e}"
     );
-    assert!(e.to_string().contains("SPED 001"));
+    assert_eq!(snapshot(&docs.ets2), before);
+
+    // Dasselbe, nachdem das Spiel Namen und Kennzeichen ersetzt hat: über die Teile erkannt,
+    // obwohl die Prüfung auf gleiches Kennzeichen nicht mehr greifen würde
+    add_slot(&docs.nordfracht, "autosave", NACH_SPIEL, Some(INFO), 0);
+    let before = snapshot(&docs.ets2);
+    let e = deploy_truck(
+        &docs.nordfracht,
+        &package(),
+        &backups,
+        &FakeGame::closed(),
+        now(),
+    )
+    .unwrap_err();
+    assert!(
+        e.to_string().contains("unter dem Kennzeichen EF XU 577"),
+        "{e}"
+    );
     assert_eq!(snapshot(&docs.ets2), before);
 
     // Profil ohne Spielstand
@@ -215,15 +234,76 @@ fn einsetzen_scheitert_ohne_spuren() {
 fn rueckgabe_liest_den_neuesten_spielstand() {
     let docs = documents("rueckgabe");
     // Neuester Spielstand ohne den Lkw: von Hand eingeben
-    assert_eq!(read_for_return(&docs.nordfracht, "SPED 001").unwrap(), None);
+    assert_eq!(
+        read_for_return(&docs.nordfracht, "SPED 001", None).unwrap(),
+        None
+    );
 
     // Nach dem Einsetzen ist er da
     add_slot(&docs.nordfracht, "2", ERWARTET, Some(INFO), 0);
-    let r = read_for_return(&docs.nordfracht, "sped 001")
+    let r = read_for_return(&docs.nordfracht, "sped 001", None)
         .unwrap()
         .unwrap();
     assert_eq!(r.odometer_km, 3865);
     assert_eq!(r.slot, "2");
     assert_eq!(r.state["odometer"], 3865);
     assert!(r.state["wheels_wear"].is_array());
+}
+
+#[test]
+fn rueckgabe_findet_den_lkw_nach_neuem_kennzeichen() {
+    let docs = documents("neues-kennzeichen");
+    // Das Spiel hat gespeichert: neue Namen, neues Kennzeichen, 425 km mehr
+    add_slot(&docs.nordfracht, "autosave", NACH_SPIEL, Some(INFO), 0);
+    let p = package();
+
+    // Ohne Paket nur über das Kennzeichen: nicht zu finden
+    assert_eq!(
+        read_for_return(&docs.nordfracht, "SPED 001", None).unwrap(),
+        None
+    );
+
+    // Mit Paket über Modell und Teile, das neue Kennzeichen kommt mit
+    let r = read_for_return(&docs.nordfracht, "SPED 001", Some(&p))
+        .unwrap()
+        .unwrap();
+    assert_eq!(r.odometer_km, 4290);
+    assert_eq!(r.found_by, FoundBy::Parts { share: 1.0 });
+    assert_eq!(r.new_plate.as_deref(), Some("EF XU 577"));
+    assert_eq!(r.state["fuel_relative"], 0.5);
+
+    // Meldet der Server schon das neue Kennzeichen, reicht das Kennzeichen
+    let r = read_for_return(&docs.nordfracht, "EF XU 577", Some(&p))
+        .unwrap()
+        .unwrap();
+    assert_eq!(r.found_by, FoundBy::Plate);
+    assert_eq!(r.new_plate, None);
+}
+
+#[test]
+fn rueckgabe_raet_nicht_bei_zwei_gleichen_lkw() {
+    let docs = documents("zwei-gleiche");
+    // Ein Spielstand, in dem derselbe Scania zweimal steht, keiner mehr als SPED 001
+    let (mut save, _) = Save::read(testdata(NACH_SPIEL)).unwrap();
+    let mut second = package();
+    second.license_plate = spedhub_save::custom_plate("EF ZZ 999", "germany").unwrap();
+    let garage = "garage.erfurt";
+    let player = save.names_of_kind("player").remove(0);
+    let driver = save.array(&player, "drivers").unwrap().remove(0);
+    let first = save.get(garage, "vehicles[0]").unwrap().to_string();
+    save.set_array(garage, "vehicles", &[first, "null".into()])
+        .unwrap();
+    save.set_array(garage, "drivers", &[driver, "null".into()])
+        .unwrap();
+    spedhub_save::insert_truck(&mut save, &second, &spedhub_save::InsertOptions::default())
+        .unwrap();
+    let dir = add_slot(&docs.nordfracht, "autosave", NACH_SPIEL, Some(INFO), 0);
+    spedhub_save::write_save(dir.join("game.sii"), &save).unwrap();
+
+    let e = read_for_return(&docs.nordfracht, "SPED 001", Some(&package())).unwrap_err();
+    assert!(
+        matches!(e, Error::Save(spedhub_save::Error::AmbiguousTruck(_))),
+        "{e:?}"
+    );
+    assert!(e.to_string().contains("gleich gut"));
 }

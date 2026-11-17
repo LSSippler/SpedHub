@@ -455,11 +455,25 @@ async fn list_trucks(
          LEFT JOIN users u ON u.id = l.user_id
          WHERE t.company_id = ?1 ORDER BY t.plate",
     )?;
+    // Frühere Kennzeichen je Lkw, älteste zuerst
+    let mut old: std::collections::HashMap<i64, Vec<String>> = std::collections::HashMap::new();
+    let mut plates = conn.prepare(
+        "SELECT p.truck_id, p.plate FROM truck_plates p JOIN trucks t ON t.id = p.truck_id
+         WHERE t.company_id = ?1 ORDER BY p.replaced_at, p.rowid",
+    )?;
+    for row in plates.query_map([company_id], |r| {
+        Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+    })? {
+        let (id, plate) = row?;
+        old.entry(id).or_default().push(plate);
+    }
     let trucks = stmt
         .query_map([company_id], |r| {
             let holder: Option<i64> = r.get(5)?;
+            let id: i64 = r.get(0)?;
             Ok(json!({
-                "id": r.get::<_, i64>(0)?, "plate": r.get::<_, String>(1)?, "model": r.get::<_, String>(2)?,
+                "id": id, "plate": r.get::<_, String>(1)?, "model": r.get::<_, String>(2)?,
+                "old_plates": old.get(&id).cloned().unwrap_or_default(),
                 "odometer_km": r.get::<_, i64>(3)?, "rev": r.get::<_, i64>(4)?,
                 "leased_by": holder.map(|id| json!({
                     "user_id": id,
@@ -522,9 +536,13 @@ async fn checkout(
 struct CheckinReq {
     odometer_km: i64,
     state: Option<Value>,
+    /// Aktuelles Kennzeichen im Spielstand, falls das Spiel es ersetzt hat
+    #[serde(default)]
+    plate: Option<String>,
 }
 
 /// Lkw zurückgeben. Der Zustand aus dem Spielstand wird übernommen, die Revision steigt.
+/// Mit `plate` bekommt der Lkw ein neues Kennzeichen, das alte kommt in `truck_plates`.
 async fn checkin(
     State(db): State<Db>,
     user: AuthUser,
@@ -533,11 +551,11 @@ async fn checkin(
 ) -> ApiResult<Json<Value>> {
     let mut conn = db.lock().unwrap();
     let tx = conn.transaction()?;
-    let (company_id, odometer): (i64, i64) = tx
+    let (company_id, odometer, current_plate): (i64, i64, String) = tx
         .query_row(
-            "SELECT company_id, odometer_km FROM trucks WHERE id = ?1",
+            "SELECT company_id, odometer_km, plate FROM trucks WHERE id = ?1",
             [truck_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .optional()?
         .ok_or_else(|| ApiError::not_found("Diesen Lkw gibt es nicht"))?;
@@ -561,6 +579,35 @@ async fn checkin(
             "Der Kilometerstand kann nicht kleiner werden",
         ));
     }
+    let new_plate = match b.plate.as_deref().map(str::trim) {
+        None => None,
+        Some("") => return Err(ApiError::bad("Das Kennzeichen darf nicht leer sein")),
+        Some(p) if p.chars().count() > 32 => {
+            return Err(ApiError::bad(
+                "Das Kennzeichen darf höchstens 32 Zeichen haben",
+            ));
+        }
+        Some(p) if p == current_plate => None,
+        Some(p) => Some(p.to_string()),
+    };
+    if let Some(p) = &new_plate {
+        match tx.execute(
+            "UPDATE trucks SET plate = ?1 WHERE id = ?2",
+            params![p, truck_id],
+        ) {
+            Ok(_) => {}
+            Err(e) if is_unique_violation(&e) => {
+                return Err(ApiError::conflict(&format!(
+                    "Das Kennzeichen {p} hat in der Firma schon ein anderer Lkw"
+                )));
+            }
+            Err(e) => return Err(e.into()),
+        }
+        tx.execute(
+            "INSERT INTO truck_plates (truck_id, plate, replaced_at) VALUES (?1, ?2, ?3)",
+            params![truck_id, current_plate, now()],
+        )?;
+    }
     match &b.state {
         Some(s) => tx.execute(
             "UPDATE trucks SET odometer_km = ?1, state = ?2, rev = rev + 1 WHERE id = ?3",
@@ -579,9 +626,11 @@ async fn checkin(
         r.get(0)
     })?;
     tx.commit()?;
-    Ok(Json(
-        json!({ "id": truck_id, "odometer_km": b.odometer_km, "rev": rev, "driven_km": b.odometer_km - odometer }),
-    ))
+    let plate = new_plate.unwrap_or(current_plate);
+    Ok(Json(json!({
+        "id": truck_id, "plate": plate, "odometer_km": b.odometer_km, "rev": rev,
+        "driven_km": b.odometer_km - odometer
+    })))
 }
 
 // ---------------------------------------------------------------- Kasse

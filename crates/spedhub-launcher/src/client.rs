@@ -59,6 +59,9 @@ pub struct Truck {
     pub odometer_km: i64,
     pub rev: i64,
     pub leased_by: Option<Lease>,
+    /// Frühere Kennzeichen, älteste zuerst
+    #[serde(default)]
+    pub old_plates: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -104,6 +107,9 @@ pub struct NewTruck {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Checkin {
     pub id: i64,
+    /// Kennzeichen nach der Rückgabe
+    #[serde(default)]
+    pub plate: String,
     pub odometer_km: i64,
     pub rev: i64,
     pub driven_km: i64,
@@ -208,15 +214,21 @@ impl Client {
         self.post(&format!("/api/trucks/{truck_id}/checkout"), &json!({}))
     }
 
+    /// Lkw zurückgeben. Mit `plate` meldet der Launcher ein neues Kennzeichen, falls das Spiel
+    /// es ersetzt hat. Der Server behält das alte in der Liste `old_plates`.
     pub fn checkin(
         &self,
         truck_id: i64,
         odometer_km: i64,
         state: Option<&Value>,
+        plate: Option<&str>,
     ) -> Result<Checkin> {
         let mut body = json!({ "odometer_km": odometer_km });
         if let Some(s) = state {
             body["state"] = s.clone();
+        }
+        if let Some(p) = plate {
+            body["plate"] = json!(p);
         }
         self.post(&format!("/api/trucks/{truck_id}/checkin"), &body)
     }

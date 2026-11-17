@@ -30,6 +30,8 @@ pub enum Error {
     Integrity(Vec<Problem>),
     TruckNotFound(String),
     AmbiguousPlate(String),
+    /// Mehrere Lkw passen gleich gut zu einem Paket. Enthält ihre Kennzeichen.
+    AmbiguousTruck(Vec<String>),
     PlateExists(String),
     /// In der Heimatgarage ist kein Stellplatz für den bisherigen Lkw frei. Enthält die Stadt.
     NoFreeSlot(String),
@@ -98,6 +100,11 @@ impl fmt::Display for Error {
             }
             Error::TruckNotFound(p) => write!(f, "Kein Lkw mit dem Kennzeichen {p} gefunden"),
             Error::AmbiguousPlate(p) => write!(f, "Mehrere Lkw haben das Kennzeichen {p}"),
+            Error::AmbiguousTruck(plates) => write!(
+                f,
+                "Mehrere Lkw im Spielstand passen gleich gut: {}. Welcher es ist, lässt sich nicht sicher sagen",
+                plates.join(", ")
+            ),
             Error::PlateExists(p) => {
                 write!(
                     f,
