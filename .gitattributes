@@ -1,0 +1,3 @@
+# Spielstände byte-genau auschecken, auch unter Windows. Der Parser erwartet LF,
+# und die Tests vergleichen Dateien Byte für Byte.
+*.sii -text

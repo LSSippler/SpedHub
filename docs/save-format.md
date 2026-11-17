@@ -22,7 +22,9 @@ Slots heißen `autosave`, `autosave_job`, `autosave_drive_1` bis `_9`, `quicksav
 | `ScsC` | verschlüsselt und komprimiert, darin steckt binär oder Text |
 | `BSII` | binär |
 
-Das Spiel schreibt im Standard `ScsC`. Mit `uset g_save_format "2"` in der `config.cfg` schreibt es Klartext. Zum Lesen ist das nicht nötig: `decrypt_truck` 1.3.6 wandelt alle Formate in Text um (siehe `tools/siidec`). Laut Community-Quellen lädt das Spiel Klartext unabhängig von der Einstellung. Selbst geprüft ist das noch nicht.
+Das Spiel schreibt im Standard `ScsC`. Mit `uset g_save_format "2"` in der `config.cfg` schreibt es Klartext. Zum Lesen ist das nicht nötig: `decrypt_truck` 1.3.6 wandelt alle Formate in Text um (siehe `spedhub-save decode`). Laut Community-Quellen lädt das Spiel Klartext unabhängig von der Einstellung. Selbst geprüft ist das noch nicht.
+
+Den Text aus `BSII` setzt `decrypt_truck` genauso zusammen wie das Spiel seinen Klartext (Einrückung ein Leerzeichen, Leerzeile nach jeder Unit, `}` ohne Zeilenumbruch am Ende). Bei kaputten `BSII`-Daten gerät `decrypt_truck` manchmal in Panik statt einen Fehler zu melden. `spedhub-save` fängt das ab und meldet einen Lesefehler.
 
 ## Aufbau des Textformats
 
@@ -49,8 +51,20 @@ bank : _nameless.20e.3442.4168 {
 - Listen stehen als Zählzeile `feld: N` und danach `feld[0]` bis `feld[N-1]`.
 - Unit-Namen sind entweder `_nameless.` plus Hex-Gruppen oder sprechend wie `garage.erfurt`, `driver.0`, `company.volatile.x.y`.
 - Ein Feld ist ein Verweis, wenn sein ganzer Wert dem Namen einer Unit in der Datei entspricht. Ein eigenes Kennzeichen für Verweise gibt es nicht.
-- Kommazahlen stehen oft als Hex mit `&` davor, zum Beispiel `&3dd0332a`. Das sind die Bits eines 32-Bit-Floats.
+- Kommazahlen stehen oft als Hex mit `&` davor, zum Beispiel `&3dd0332a`. Das sind die Bits eines 32-Bit-Floats. Ganze Werte stehen dezimal da (`0`, `1`), alle anderen als Hex, auch genau darstellbare wie `rheostat_factor: &3f400000` (0,75).
+- Feldzeilen sind immer ` name: wert`, mit genau einem Leerzeichen davor und einem nach dem Doppelpunkt. Ein Feldname enthält nie `: `, ein Wert kann `:` enthalten (`text: "D:UDO"`).
+- Nach jeder Unit kommt genau eine Leerzeile, vor der ersten keine.
+- In allen Testdateien steht die Zählzeile einer Liste direkt vor den Einträgen, und die Einträge laufen lückenlos von 0 bis N-1.
 
+`spedhub-save` liest den Text streng nach diesen Regeln. Was es annimmt, gibt es byte-genau so wieder aus. Weicht eine Datei ab, gibt es einen Fehler mit Zeilennummer statt einer stillen Korrektur.
+
+Schreibt `spedhub-save` eine Kommazahl neu, nimmt es dezimal für ganze Werte und sonst Hex. Ein Wert, der sich nicht ändert, bleibt Zeichen für Zeichen stehen.
+
+## Unit-Namen
+
+Alle `_nameless`-Namen in den Testdaten haben drei Hex-Gruppen mit 3, 4 und 4 Stellen, zum Beispiel `_nameless.20e.298c.1238`, und alle 383 enden auf `8`. Das sieht nach ausgerichteten Speicheradressen aus.
+
+Neue Units bekommen von `spedhub-save` Namen der Form `_nameless.2ff.7a11.0001`, `.0002` und so weiter, freie Namen zuerst. Das ist dasselbe Schema wie in `tools/transplant.py`, damit beide Ergebnisse vergleichbar bleiben. Diese Namen enden nicht auf `8`. Ob das Spiel das stört, ist offen. Das Schema steht in `crates/spedhub-save/src/layout.rs` und ist dort schnell geändert.
 ## Was immer gelten muss
 
 In allen untersuchten Originalen gilt:
@@ -61,7 +75,12 @@ In allen untersuchten Originalen gilt:
 
 Laut Community-Quellen bricht das Spiel das Laden ab, wenn es mehrere unverbundene Unit-Bäume findet, und fällt auf ein Backup zurück. Wer eine Unit entfernt, muss also alles mit entfernen, was nur an ihr hängt. Wer eine hinzufügt, muss sie irgendwo verweisen.
 
-`tools/transplant.py` prüft diese drei Punkte vor dem Schreiben (`Save.check`).
+`spedhub-save` prüft das vor jedem Schreiben, dazu noch zwei eigene Punkte:
+
+4. Jede Liste ist vollständig: Zählzeile direkt vor den Einträgen, Einträge lückenlos von 0 bis N-1.
+5. Der erzeugte Text lässt sich wieder einlesen und ergibt denselben Spielstand.
+
+Verwaiste Units werden gar nicht toleriert. `tools/transplant.py` hat nur geprüft, dass es nicht mehr werden als vorher.
 
 ## Wo der Lkw steht
 
@@ -80,6 +99,12 @@ Schema seit 1.60, in 1.62 so abgelesen:
 | `game_progress.owned_trucks[]` | Modellnamen als Text, zum Beispiel `"vehicle.scania.s_2016"`. Keine Verweise |
 
 Eine `player_vehicles`-Unit hat `vehicle`, `stored_vehicle_placement`, `stored_vehicle_city`, `trailer`, `stored_trailer_placements[]` und `stored_trailer_attached`.
+
+`stored_vehicle_city` von `my_vehicles[0]` ist nicht unbedingt die Heimatstadt. In der Testquelle steht dort `city.a_coruna`, die Heimatgarage ist München. Was das Feld genau bedeutet, ist offen.
+
+Garagen haben in den Testdaten 1 bis 5 Stellplätze. Ein freier Stellplatz hat `vehicles[k]: null` und `drivers[k]: null` (`garage.dresden` in der Testquelle). Angestellte Fahrer (`driver_ai`) stehen mit ihrem Lkw im selben Slot. Ihre Felder `assigned_truck` und `adopted_truck` sind trotzdem `null`, die Zuordnung ergibt sich also aus der Garage.
+
+Jeder eigene Lkw hat ein `profit_log` in `player.truck_profit_logs[]`. Daran hängen über `stats_data[]` die `profit_log_entry`-Units, eine pro Zeitraum.
 
 Die alten Felder `assigned_truck`, `my_truck`, `my_truck_placement` und `assigned_trailer` gibt es noch, sie sind in 1.62 aber leer.
 
@@ -112,9 +137,11 @@ Zwei Formen kommen vor:
 
 Hinter dem `|` steht das Land. Bei selbst vergebenen Kennzeichen hat es einen Unterstrich davor.
 
+Zum Suchen und Vergleichen nimmt `spedhub-save` den Text vor dem `|`, ersetzt jedes Markup-Tag durch ein Leerzeichen und vergleicht ohne Rücksicht auf Groß- und Kleinschreibung. Aus dem ersten Beispiel wird so `DD RI 772`. Neu gesetzte Kennzeichen sind immer selbst vergebene, mit Großbuchstaben, Ziffern, Leerzeichen, Punkt und Bindestrich, höchstens 16 Zeichen.
+
 ## Lkw einsetzen
 
-So macht es `tools/transplant.py` für ein Ziel ohne eigenen Lkw:
+So macht es `tools/transplant.py` für ein Ziel ohne eigenen Lkw, und `spedhub-save` genauso:
 
 1. `vehicle`-Unit und alles Zubehör aus der Quelle übernehmen. Die Unit-Namen dürfen im Ziel noch nicht vorkommen.
 2. Einen neuen, leeren `profit_log` anlegen (`stats_data: 0`, `acc_distance_free: 0`, `acc_distance_on_job: 0`, `history_age: nil`).
@@ -124,16 +151,44 @@ So macht es `tools/transplant.py` für ein Ziel ohne eigenen Lkw:
 6. In `garage.<hq_city>` den Lkw in den Slot des Spielers eintragen.
 7. `game_progress.owned_trucks[]` um den Modellnamen erweitern.
 
-War das Ziel in einem Schnellauftrag, kommt vorher weg: `player.current_job` auf `null`, die `player_job`-Unit, der Firmen-Lkw mit Zubehör, der Anhänger mit Zubehör. In `assigned_vehicles` dann `trailer: null`, `stored_trailer_placements: 0`, `stored_trailer_attached: false`.
+War das Ziel in einem Schnellauftrag, kommt vorher weg: `player.current_job` auf `null`, die `player_job`-Unit, der Firmen-Lkw mit Zubehör, der Anhänger mit Zubehör. In `assigned_vehicles` dann `trailer: null`, `stored_trailer_placements: 0`, `stored_trailer_attached: false`. Einen Schnellauftrag erkennt man an `player_job.company_truck`, das bei einem Auftrag mit eigenem Lkw `null` ist.
 
+Die Units des Lkw werden direkt hinter der `player`-Unit eingefügt, zuerst die `vehicle`-Unit, dann das Zubehör in der Reihenfolge einer Tiefensuche (das ist umgekehrt zu `accessories[]`), zuletzt das neue `profit_log`. Das ist die Reihenfolge von `transplant.py`.
+
+### Ziel mit eigenen Lkw
+
+Noch nicht im Spiel geprüft. `spedhub-save` geht so vor:
+
+- Der neue Lkw kommt in den Stellplatz des Spieler-Fahrers in der Heimatgarage.
+- Stand dort schon ein Lkw, zieht er in einen freien Stellplatz derselben Garage, also ohne Lkw und ohne Fahrer. Gibt es keinen, bricht das Einsetzen ab.
+- `assigned_vehicles` und `my_vehicles[0]` zeigen auf den neuen Lkw, Placement wie oben.
+- Ein Anhänger in `assigned_vehicles` bleibt, wie er war.
+- `owned_trucks[]` bekommt das Modell nur, wenn es noch nicht drinsteht.
+
+Ein laufender Auftrag mit eigenem Lkw und ein Spieler ohne Lkw und ohne Auftrag werden abgelehnt.
+
+## Lkw entfernen
+
+Noch nicht im Spiel geprüft. `spedhub-save` entfernt einen eigenen Lkw so:
+
+1. Weg kommen die `vehicle`-Unit mit Zubehör und das zugehörige `profit_log` mit allen `profit_log_entry`-Units.
+2. Der Eintrag in `player.trucks[]` und `player.truck_profit_logs[]` fällt raus. Ist die Liste danach leer, wird `my_vehicles_mode` zu `none`.
+3. In Garagen wird der Stellplatz `null`. `driver_ai.assigned_truck` und `adopted_truck` werden `null`, falls sie auf den Lkw zeigen.
+4. Ist es der aktive Lkw (`assigned_vehicles` oder `my_vehicles[0]`), muss ein anderer eigener Lkw als Ersatz angegeben sein. Der Ersatz übernimmt den Stellplatz des entfernten Lkw, sein alter Stellplatz wird frei. Fuhr ihn ein angestellter Fahrer, steht der danach ohne Lkw da.
+5. Verweist sonst noch etwas auf eine der Units, bricht das Entfernen ab.
+
+`owned_trucks[]` bleibt unverändert, weil unklar ist, ob die Liste den aktuellen Besitz oder die Historie meint.
 ## Geld
 
-Der Kontostand steht in `bank.money_account`, immer in Euro. Laut Community-Quellen steht derselbe Betrag zusätzlich in `info.sii` für den Ladebildschirm.
+Der Kontostand steht in `bank.money_account`, immer in Euro, als ganze Zahl. Derselbe Betrag steht in `info.sii` in `save_container.info_money_account` für den Ladebildschirm (siehe `testdata/ziel_info.sii`). `spedhub-save money --set` schreibt beide Dateien gemeinsam oder keine.
 
+`info.sii` hat nur die eine Unit `save_container`. Sie enthält außerdem Name, Spielzeit, Save-Version (`version: 105`) und die DLC-Liste (`dependencies[]`).
 ## Offen
 
 - Ob das Spiel das Ergebnis des Einsetzens lädt, ist noch nicht bestätigt.
 - Was mit `truck_profit_logs` passiert, wenn das Log leer ist: Der Lkw-Manager rechnet laut Community-Quellen Kilometer aus dem Log und nicht aus dem Tacho.
 - Wie ein Spielstand aussieht, in dem der Spieler gar keinen Lkw hat und auch keinen Auftrag fährt.
-- Einsetzen in ein Profil, das schon eigene Lkw hat (freier Garagen-Slot, Wechsel des aktiven Lkw).
+- Einsetzen in ein Profil, das schon eigene Lkw hat, und Entfernen des aktiven Lkw mit Ersatz: so gebaut wie oben beschrieben, im Spiel nicht geprüft.
+- Ob das Spiel Unit-Namen annimmt, die nicht auf `8` enden.
+- Ob `owned_trucks[]` beim Entfernen eines Lkw angepasst werden muss.
 - Lkw mit Mod-Teilen.

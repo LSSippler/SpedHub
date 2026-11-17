@@ -10,8 +10,7 @@ Das Projekt steht am Anfang. Was schon läuft und was noch fehlt:
 |---|---|
 | Server mit Accounts, Kasse und Fuhrpark | läuft, siehe `server/` |
 | Web-Dashboard | läuft, wird vom Server ausgeliefert |
-| Werkzeuge für den Spielstand | erste Fassung, siehe `tools/` |
-| Save-Bibliothek in Rust | geplant |
+| Save-Bibliothek mit Kommandozeile | erste Fassung, siehe `crates/spedhub-save` und `tools/README.md` |
 | Launcher | geplant |
 | Spiel-Plugin für Telemetrie | geplant |
 
@@ -35,7 +34,8 @@ Danach liegt das Dashboard unter http://127.0.0.1:8787.
 | Ordner | Inhalt |
 |---|---|
 | `server/` | Backend und Dashboard, Details in `server/README.md` |
-| `tools/` | Hilfsprogramme für den Spielstand, Details in `tools/README.md` |
+| `crates/spedhub-save/` | Save-Bibliothek: Spielstand lesen, prüfen, schreiben, Lkw exportieren und einsetzen |
+| `tools/` | Bedienung von `spedhub-save` und die Python-Referenz, Details in `tools/README.md` |
 | `testdata/` | Kleine Test-Spielstände mit echtem Aufbau |
 | `docs/` | Architektur und Notizen zum Spielstand-Format |
 

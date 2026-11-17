@@ -27,7 +27,7 @@ Nicht Teil des Projekts: ein eigener Multiplayer, Eingriffe in den Arbeitsspeich
 |---|---|---|
 | Server (`server/`) | Accounts, Firma, Kasse, Fuhrpark, Leihen | läuft |
 | Dashboard (`server/web/`) | Weboberfläche für Chef und Fahrer | läuft |
-| Save-Bibliothek | Spielstand lesen und schreiben, Lkw exportieren, einsetzen, entfernen, Kontostand setzen | als Python-Referenz in `tools/` |
+| Save-Bibliothek (`crates/spedhub-save`) | Spielstand lesen und schreiben, Lkw exportieren, einsetzen, entfernen, Kontostand setzen | erste Fassung, im Spiel noch nicht geprüft |
 | Launcher | Anmelden, Abgleich, Spielstand vorbereiten, Spiel starten, Abgleich beim Beenden | offen |
 | Spiel-Plugin | Telemetrie-Ereignisse melden, Quicksave und Quickload auslösen (Telemetry SDK und Input SDK) | offen |
 | Overlay | Kasse und Fuhrpark im Spiel | offen |

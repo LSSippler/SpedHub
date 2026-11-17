@@ -9,6 +9,7 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
 cargo run -p spedhub-server
+cargo run -p spedhub-save -- check testdata/quelle_mit_lkw.sii
 python3 tools/transplant.py testdata/quelle_mit_lkw.sii testdata/ziel_schnellauftrag.sii /tmp/ergebnis.sii
 ```
 
@@ -17,8 +18,8 @@ Vor jedem Commit müssen Tests und Clippy sauber durchlaufen.
 ## Aufbau
 
 - `server/`: Backend (axum, rusqlite) und Dashboard (`server/web/index.html`, wird per `include_str!` eingebaut)
-- `tools/siidec/`: wandelt Spielstände jedes Formats in Text um
-- `tools/transplant.py`: Referenz für das Einsetzen eines Lkw, soll nach Rust wandern
+- `crates/spedhub-save/`: Save-Bibliothek und Kommandozeile `spedhub-save`. Alle Feldnamen stehen in `src/layout.rs`
+- `tools/transplant.py`: Python-Referenz für das Einsetzen eines Lkw
 - `testdata/`: verkleinerte, anonymisierte Spielstände aus ETS2 1.62
 - `docs/`: Architektur und Save-Format
 

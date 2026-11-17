@@ -1,26 +1,54 @@
 # Werkzeuge für den Spielstand
 
-Zwei Hilfsprogramme aus dem ersten Lkw-Test. Sie sind der Keim für die spätere Save-Bibliothek, noch kein fertiges Werkzeug.
+Die Arbeit am Spielstand macht die Save-Bibliothek in `crates/spedhub-save`. Dazu gehört das Kommandozeilenprogramm `spedhub-save`. Hier im Ordner liegt nur noch `transplant.py` als Referenz.
 
-## siidec: Spielstand in Text umwandeln
-
-Liest `game.sii` oder `info.sii` in jedem Format (verschlüsselt, binär, Text) und schreibt Klartext. Nutzt die Bibliothek `decrypt_truck` (MIT).
+## spedhub-save
 
 ```powershell
 cd C:\dev\SpedHub
-cargo build --release -p siidec
-.\target\release\siidec.exe "C:\Pfad\zu\game.sii" quelle.sii
+cargo build --release -p spedhub-save
+.\target\release\spedhub-save.exe
 ```
 
-## transplant.py: Lkw von einem Spielstand in einen anderen setzen
+Ohne Argumente zeigt das Programm die Hilfe. Gelesen wird jedes Format (`ScsC`, `BSII`, `SiiN`), geschrieben wird immer Klartext. Vor jedem Schreiben läuft die Integritätsprüfung aus `docs/save-format.md`. Schlägt sie fehl, wird nichts geschrieben. Eine vorhandene Datei wird vorher als `<name>.spedhub-<zeit>.bak` daneben gesichert. Das gilt auch, wenn Ein- und Ausgabe dieselbe Datei sind.
 
-Nimmt den aktiven Lkw aus dem Quell-Spielstand und setzt ihn als eigenen, aktiven Lkw ins Ziel. Ein laufender Schnellauftrag im Ziel wird dabei entfernt. Beide Eingaben müssen Klartext sein (siehe siidec).
+| Befehl | Was passiert |
+|---|---|
+| `decode <eingabe> <ausgabe>` | Spielstand in Klartext umwandeln |
+| `check <datei>` | Integrität prüfen, Probleme auflisten. Rückgabewert 1 bei Problemen |
+| `export-truck <spielstand> <paket.json> [--plate <kennzeichen>]` | Lkw als Paket speichern. Ohne `--plate` der Lkw, den der Spieler gerade fährt |
+| `insert-truck <spielstand> <paket.json> <ausgabe> [--keep-names]` | Lkw aus einem Paket einsetzen und zum aktiven Lkw machen |
+| `remove-truck <spielstand> <kennzeichen> <ausgabe> [--replacement <kennzeichen>]` | Eigenen Lkw mit Zubehör und Statistik entfernen. Beim aktiven Lkw ist ein Ersatz Pflicht |
+| `money <game.sii> [--info <info.sii>] [--set <betrag>]` | Kontostand anzeigen oder in beiden Dateien setzen |
+
+Kennzeichen werden ohne Markup und ohne Land angegeben, Groß- und Kleinschreibung ist egal: `SPED 001`, `dd ri 772`.
+
+Beispiel, ein Lkw von einem Profil ins andere:
 
 ```powershell
-cd C:\dev\SpedHub
+spedhub-save export-truck quelle\game.sii lkw.json
+spedhub-save insert-truck ziel\game.sii lkw.json ziel\game.sii
+```
+
+### Das Lkw-Paket
+
+JSON mit Modell, Kennzeichen, Zustand, allen `data_path`-Einträgen und dem Bauplan. Der Bauplan sind die `vehicle`-Unit und ihr Zubehör, statt Unit-Namen stehen Platzhalter `@0`, `@1` und so weiter. Beim Einsetzen bekommen die Units neue, eindeutige Namen. Kennzeichen und Zustand im Paket gelten vor den Werten im Bauplan, der Server kann sie also pflegen, ohne den Bauplan anzufassen.
+
+`--keep-names` übernimmt stattdessen die Namen aus der Quelle (`source_name` im Paket). Das ist für den Vergleich mit `transplant.py` gedacht.
+
+### Was beim Einsetzen geht
+
+- Ziel ohne eigenen Lkw im Schnellauftrag: Auftrag, Firmen-Lkw und Anhänger kommen weg, der neue Lkw wird der eigene.
+- Ziel mit eigenem Lkw ohne Auftrag: Der bisherige Lkw zieht in einen freien Stellplatz der Heimatgarage, der neue übernimmt den Platz des Spielers. Ohne freien Stellplatz bricht das Einsetzen mit einer Meldung ab.
+
+Alles andere, zum Beispiel ein laufender Auftrag mit eigenem Lkw, wird abgelehnt.
+
+## transplant.py
+
+Die erste Fassung des Einsetzens, in Python. Die Rust-Bibliothek macht dasselbe und mehr. Das Skript bleibt als Referenz: Die CI vergleicht sein Ergebnis mit `testdata/erwartet_nach_einsetzen.sii`, und `spedhub-save insert-truck --keep-names` muss genau dieselbe Datei erzeugen.
+
+```powershell
 python tools\transplant.py quelle.sii ziel.sii ergebnis.sii
 ```
 
-Das Skript prüft vor dem Schreiben, dass alle Verweise auflösen und keine Unit verwaist ist. Getestet ist es mit Spielständen aus ETS2 1.62 ohne Mods, mit einem frischen Zielprofil ohne eigenen Lkw. Ob das Spiel das Ergebnis lädt, ist noch nicht bestätigt.
-
-Das Ergebnis kommt als `game.sii` in einen neuen Ordner unter `profiles\<Profil>\save\`, zusammen mit einer `info.sii` aus dem Zielprofil.
+Ob das Spiel das Ergebnis lädt, ist noch nicht bestätigt.
