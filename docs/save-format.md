@@ -227,7 +227,29 @@ Noch nicht im Spiel geprüft. `spedhub-save` entfernt einen eigenen Lkw so:
 
 Der Kontostand steht in `bank.money_account`, immer in Euro, als ganze Zahl. Derselbe Betrag steht in `info.sii` in `save_container.info_money_account` für den Ladebildschirm (siehe `testdata/ziel_info.sii`). `spedhub-save money --set` schreibt beide Dateien gemeinsam oder keine.
 
-`info.sii` hat nur die eine Unit `save_container`. Sie enthält außerdem Name, Spielzeit, Save-Version (`version: 105`) und die DLC-Liste (`dependencies[]`).
+`info.sii` hat nur die eine Unit `save_container`. Sie enthält außerdem Name, Spielzeit, Save-Version (`version: 105`), Erfahrungspunkte und die DLC-Liste (`dependencies[]`).
+
+Beim Geldabgleich setzt der Launcher beide Felder auf den Betrag, den der Server nennt (Lohnkonto plus Betriebsvorschuss), und schreibt das als neuen Speicherplatz. Noch nicht im Spiel geprüft ist, ob das Spiel den geänderten Kontostand übernimmt.
+
+## Erfahrung und Level
+
+Die Erfahrungspunkte stehen zweimal im Spielstand: in `info.sii` als `save_container.info_players_experience` und in `game.sii` als `economy.experience_points` (in den Testdaten beide 0). Der Launcher liest sie aus `info.sii` (`spedhub_save::info_experience`, Feldname in `layout.rs`, Modul `info`).
+
+Das Level steht nirgends im Spielstand, das Spiel rechnet es aus den Punkten. Für ETS2 braucht jedes Level so viele Punkte mehr:
+
+| Level | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Punkte für dieses Level | 200 | 500 | 700 | 900 | 1000 | 1100 | 1300 | 1600 | 1700 | 2100 |
+| Punkte insgesamt | 200 | 700 | 1400 | 2300 | 3300 | 4400 | 5700 | 7300 | 9000 | 11100 |
+
+Weiter geht es mit 2300, 2600, 2700, 2900, 3000, 3100, 3400, 3700, 4000, 4300 (Level 11 bis 20) und 4600, 4700, 4900, 5200, 5700, 5900, 6000, 6200, 6600, 6800 (Level 21 bis 30, insgesamt 99700). Ab Level 31 kostet jedes Level 6800 Punkte. Ein neues Profil hat Level 0.
+
+Quellen:
+
+- TS SE Tool (Apache-2.0), `FormMethods.cs`, Tabelle `PlayerLevelUps` für ETS2, und `Economy.getPlayerLvl()` für die Rechnung ab Level 31. Der Server rechnet nach dieser Tabelle (`server/src/levels.rs`), Code ist nicht übernommen.
+- Unabhängig davon nennt die Spielanleitung von gamepressure.com ("ETS2: Experience") dieselben Summen für Level 1 bis 9 (200, 700, 1400, 2300, 3300, 4400, 5700, 7300, 9000).
+
+Eigentlich stehen die Werte in `def/economy_data.sii` im Archiv des Spiels. Die Datei ist hier nicht nachgelesen. Wirtschafts-Mods können die Tabelle ändern. Der Server speichert deshalb immer die Erfahrungspunkte selbst und rechnet das Level erst bei Bedarf, eine andere Tabelle lässt sich also nachträglich einsetzen. Ob das berechnete Level zu dem passt, das das Spiel anzeigt, ist im Spiel noch nicht geprüft.
 
 ## Neuer Speicherplatz
 
@@ -235,7 +257,8 @@ Noch nicht im Spiel geprüft. Der Launcher schreibt einen geliehenen Lkw nicht i
 
 - Ordner ist die nächste freie Nummer unter `save\` (`1`, `2`, …), so wie das Spiel eigene Spielstände nummeriert.
 - `game.sii` ist der neueste Spielstand mit eingesetztem Lkw, als Klartext.
-- `info.sii` ist die des Ausgangs-Speicherplatzes mit zwei Änderungen: `name` wird `"SpedHub: <Kennzeichen>"`, `file_time` die aktuelle Zeit in Sekunden seit 1970. Zeilenende und Dateiende bleiben, wie das Spiel sie geschrieben hat. Beide Felder stehen in `crates/spedhub-save/src/layout.rs` (`info`).
+- `info.sii` ist die des Ausgangs-Speicherplatzes mit drei Änderungen: `name` wird `"SpedHub: <Kennzeichen>"`, `file_time` die aktuelle Zeit in Sekunden seit 1970 und `info_money_account` der Kontostand aus dem Geldabgleich. Zeilenende und Dateiende bleiben, wie das Spiel sie geschrieben hat. Die Felder stehen in `crates/spedhub-save/src/layout.rs` (`info` und `money`).
+- Beim Einsetzen setzt der Launcher auch den Kontostand in `game.sii`, Einsetzen und Geldabgleich ergeben zusammen einen Speicherplatz. Ein Abgleich ohne Lkw heißt `"SpedHub: Geldabgleich"`.
 - `preview.tga` fehlt, wie bei Autosaves.
 
 Offen ist, ob das Spiel den Speicherplatz in der Liste zeigt, ob es nach `file_time` sortiert und ob es einen Klartext-`game.sii` in einem sonst verschlüsselt gespeicherten Profil lädt.
@@ -249,4 +272,6 @@ Offen ist, ob das Spiel den Speicherplatz in der Liste zeigt, ob es nach `file_t
 - Wie das Spiel ein `game.sii` als Klartext schreibt (`g_save_format 2`): Zeilenende, Einrückung, Dateiende.
 - Ob `owned_trucks[]` beim Entfernen eines Lkw angepasst werden muss.
 - Ob ein vom Launcher angelegter Speicherplatz im Spiel erscheint und lädt, siehe oben.
+- Ob das Spiel einen geänderten Kontostand übernimmt und ob `info_players_experience` immer gleich `economy.experience_points` ist.
+- Ob das aus den Erfahrungspunkten berechnete Level zu dem passt, das das Spiel anzeigt.
 - Lkw mit Mod-Teilen.

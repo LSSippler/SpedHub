@@ -17,7 +17,7 @@ Vor jedem Commit müssen Tests und Clippy sauber durchlaufen.
 
 ## Aufbau
 
-- `server/`: Backend (axum, rusqlite) und Dashboard (`server/web/index.html`, wird per `include_str!` eingebaut)
+- `server/`: Backend (axum, rusqlite) und Dashboard (`server/web/index.html`, wird per `include_str!` eingebaut). Die Uhr ist über `api::router_with` stellbar, Tests warten nie auf echte Zeit
 - `crates/spedhub-save/`: Save-Bibliothek und Kommandozeile `spedhub-save`. Alle Feldnamen stehen in `src/layout.rs`
 - `crates/spedhub-plugin/`: Telemetrie-Plugin (DLL) für ETS2, meldet Gameplay-Events an den Server. Logik ohne Spiel testbar, `src/ffi.rs` ist die einzige Stelle mit SDK-Bezug
 - `crates/spedhub-launcher/`: Launcher für Windows (egui/eframe). Logik in testbaren Modulen, nur `src/main.rs` ist Oberfläche. Am Spielstand arbeitet er nur über `spedhub-save`
@@ -54,4 +54,4 @@ Das Repo ist ein Cargo-Workspace. Neue Crates kommen als Mitglied in die `Cargo.
 
 Im Spiel bestätigt (ETS2 1.62, Abschnitt "Im Spiel bestätigt" in `docs/save-format.md`): Ein mit `spedhub-save` eingesetzter Lkw lädt mit Zubehör, Kilometern, Verschleiß und Tank, und der nächste Autosave des Spiels ist intakt. Das Spiel vergibt dabei alle `_nameless`-Namen neu und kann das Kennzeichen ersetzen. Weder Unit-Name noch Kennzeichen sind also eine dauerhafte Kennung, Lkw werden über Modell und Teile wiedererkannt (`find_package_truck`).
 
-Offen ist weiter: warum das Spiel Kennzeichen ersetzt, woher `Economy reset - company mismatch` kommt, ob neue Speicherplätze des Launchers im Spiel erscheinen, das Einsetzen neben eigene Lkw und das Entfernen. Code am Spielstand deshalb weiter so bauen, dass sich die Feldliste in `crates/spedhub-save/src/layout.rs` leicht anpassen lässt.
+Offen ist weiter: warum das Spiel Kennzeichen ersetzt, woher `Economy reset - company mismatch` kommt, ob neue Speicherplätze des Launchers im Spiel erscheinen, ob das Spiel einen beim Geldabgleich geschriebenen Kontostand übernimmt, ob das aus `info_players_experience` berechnete Level zum Level im Spiel passt, das Einsetzen neben eigene Lkw und das Entfernen. Code am Spielstand deshalb weiter so bauen, dass sich die Feldliste in `crates/spedhub-save/src/layout.rs` leicht anpassen lässt.

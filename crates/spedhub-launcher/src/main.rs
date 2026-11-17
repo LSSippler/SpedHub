@@ -24,7 +24,7 @@ use std::{
 };
 
 const UNCONFIRMED: &str = "Hinweis: Ein eingesetzter Lkw lädt im Spiel, das ist bestätigt. \
-Noch nicht bestätigt ist, ob das Spiel den neuen Speicherplatz des Launchers anzeigt. \
+Noch nicht bestätigt ist, ob das Spiel den neuen Speicherplatz des Launchers anzeigt und den Kontostand aus dem Geldabgleich übernimmt. \
 Der Launcher legt immer einen neuen Speicherplatz an und sichert den alten vorher. \
 Trotzdem gilt: vorher selbst ein Backup des Profils anlegen.";
 

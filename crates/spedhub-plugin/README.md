@@ -1,6 +1,6 @@
 # SpedHub-Plugin für ETS2
 
-Das Plugin meldet Gameplay-Events aus Euro Truck Simulator 2 an den SpedHub-Server. Der bucht sie in die Firmenkasse und auf die Lohnkonten. Es nutzt nur das offizielle Telemetry SDK von SCS und schreibt nichts ins Spiel.
+Das Plugin meldet Gameplay-Events aus Euro Truck Simulator 2 an den SpedHub-Server. Der bucht sie in die Firmenkasse und auf die Lohnkonten und zählt die gefahrenen Kilometer für den Lohn. Es nutzt nur das offizielle Telemetry SDK von SCS und schreibt nichts ins Spiel.
 
 Wichtig: Ob ETS2 die DLL lädt und ob die Events im Spiel wirklich ankommen, ist noch nicht im Spiel geprüft. Getestet ist bisher alles ohne Spiel, siehe unten.
 
@@ -8,7 +8,7 @@ Wichtig: Ob ETS2 die DLL lädt und ob die Events im Spiel wirklich ankommen, ist
 
 | Im Spiel | Event im SDK | Buchung | Betrag |
 |---|---|---|---|
-| Auftrag abgeliefert | `job.delivered` | `job_delivered` | Erlös (`revenue`). Strecke und Frachtschaden stehen in der Notiz |
+| Auftrag abgeliefert | `job.delivered` | `job_delivered` | Erlös (`revenue`). Die Strecke (`distance.km`) geht gerundet als eigenes Feld `distance_km` mit, der Server schreibt sie dem Fahrer als Firmenkilometer gut. Strecke und Frachtschaden stehen außerdem in der Notiz |
 | Auftrag abgebrochen | `job.cancelled` | `job_cancelled` | Vertragsstrafe (`cancel.penalty`) |
 | Strafe | `player.fined` | `fined` | `fine.amount`, der Grund steht in der Notiz |
 | Maut | `player.tollgate.paid` | `tollgate` | `pay.amount` |
