@@ -31,6 +31,7 @@ Nicht Teil des Projekts: ein eigener Multiplayer, Eingriffe in den Arbeitsspeich
 | Save-Bibliothek (`crates/spedhub-save`) | Spielstand lesen und schreiben, Lkw exportieren, einsetzen, entfernen, Kontostand setzen | erste Fassung, im Spiel noch nicht geprüft |
 | Launcher (`crates/spedhub-launcher`) | Anmelden, Abgleich, Spielstand vorbereiten, Spiel starten, Abgleich beim Beenden | erste Fassung: Anmelden, Fuhrpark, Ausleihen und Zurückgeben, Lkw in den Spielstand schreiben, Geldabgleich, `plugin.json`, Spiel starten. Aufräumen des Profils: offen |
 | Spiel-Plugin (`crates/spedhub-plugin`) | Telemetrie-Ereignisse und Herzschlag melden, Quicksave und Quickload auslösen (Telemetry SDK und Input SDK) | Gameplay-Events und Herzschlag: erste Fassung, im Spiel noch nicht geprüft. Quicksave und Quickload: offen |
+| Setup (`installer/`) | Launcher, Plugin und optional Server installieren, Plugin ins Spiel kopieren, Updates über GitHub-Releases | erste Fassung, Setup und Windows-Teile noch nicht auf echtem Windows geprüft |
 | Overlay | Kasse und Fuhrpark im Spiel | offen |
 | Convoy Dedicated Server | Die gemeinsame Session, offizieller Server von SCS | offen |
 
@@ -161,6 +162,26 @@ Kauft der Chef im Spiel einen Lkw, bezahlt er ihn mit Geld aus dem Spiel, und de
 - **Verkaufen und ausmustern:** Der Chef nimmt einen Lkw, der nicht verliehen ist, aus dem Fuhrpark. Beim Verkauf geht der Erlös als `lkw_verkauf` in die Kasse. Solche Lkw lassen sich nicht mehr ausleihen, bleiben aber mit Buchungen und alten Kennzeichen in der Liste und zählen beim Herzschlag nicht mehr als Firmen-Lkw. Ihr Kennzeichen darf ein neuer Lkw bekommen, beim alten wandert es zu den früheren Kennzeichen.
 
 Rechenweg, Schnittstelle und Beispiel in `server/README.md`, Abschnitt "Anschaffungen".
+
+## Installation und Updates
+
+Eine Versionsnummer für alles: `[workspace.package] version` in der `Cargo.toml` im Wurzelordner gilt für Server, Save-Bibliothek, Plugin, Launcher und Setup.
+
+```
+Tag v0.2.1 --> GitHub Actions (release.yml)
+                 Windows: Tests, Release-Build, installer/build.ps1 + Inno Setup --> SpedHub-Setup-0.2.1.exe
+                 Linux:   spedhub-server, musl, statisch                      --> spedhub-server-linux-x86_64
+                 Release: SHA256SUMS.txt, Notes aus git log                    --> GitHub-Release
+```
+
+- **Setup** (`installer/spedhub.iss`, Inno Setup 6, deutsch): Launcher und Plugin-DLL nach `Programme\SpedHub`, Verknüpfungen im Startmenü und, abwählbar, auf dem Desktop. Optional, standardmäßig abgewählt, "Server für lokale Tests" mit einer Verknüpfung, die `spedhub-server.exe --local` startet. Am Ende ruft das Setup mit seinen Adminrechten `spedhub-launcher.exe --install-plugin` auf.
+- **Plugin installieren**: Die Suche nach ETS2 steckt im Launcher (`src/steam.rs`), damit sie in Rust getestet ist: Steam-Ordner aus der Registry, alle Bibliotheken aus `libraryfolders.vdf`, App-ID 227300, `installdir` aus dem App-Manifest. Ziel ist `bin\win_x64\plugins`. Kopiert wird über eine temporäre Datei, eine ältere DLL wird ersetzt, bei laufendem Spiel nichts. Der Launcher zeigt "Plugin installiert / veraltet / fehlt" über die SHA-256 und startet sich für "Plugin installieren" über UAC neu.
+- **Deinstallation**: entfernt Programm und Plugin (`--uninstall-plugin`). "Anmeldung, Einstellungen und Backups behalten?" steht auf Ja, mit Nein wird `%LOCALAPPDATA%\SpedHub` des deinstallierenden Benutzers gelöscht.
+- **Updates**: Der Launcher fragt beim Start die öffentliche API der GitHub-Releases ab. Bei einer neueren Version zeigt er einen Hinweis. Erst auf Knopfdruck lädt er Setup und `SHA256SUMS.txt`, prüft die SHA-256 und startet das Setup nur, wenn sie passt. Kein stilles Update.
+- **Versionsprüfung**: Launcher und Plugin schicken `X-SpedHub-Version`. Beim Anmelden antwortet der Server mit `server_version` und `compatible`. Gleiche Haupt- und Nebenversion passen zusammen. Sonst warnen Launcher (gelber Hinweis) und Server (Log), gesperrt wird nichts.
+- **VPS**: Der Server kommt als statisch gelinktes Linux-Binary ins Release, siehe `server/README.md`, Abschnitt "Auf einem VPS".
+
+Wie man ein Release macht, steht in `README.md`, Abschnitt "So veröffentlichst du eine Version".
 
 ## Das Lkw-Paket
 

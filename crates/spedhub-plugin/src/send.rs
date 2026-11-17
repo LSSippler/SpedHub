@@ -5,6 +5,10 @@ use crate::event::Booking;
 use crate::telemetry::Heartbeat;
 use std::time::Duration;
 
+/// Header mit der Version des Plugins, wie beim Launcher. Der Server kann daran erkennen, ob
+/// Plugin und Server zusammenpassen.
+pub const VERSION_HEADER: &str = "X-SpedHub-Version";
+
 /// Was mit einem Event passiert ist.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
@@ -43,6 +47,7 @@ impl Sender {
             .agent
             .post(&url)
             .header("Authorization", &format!("Bearer {}", config.token))
+            .header(VERSION_HEADER, env!("CARGO_PKG_VERSION"))
             .send_json(booking);
         let mut response = match response {
             Ok(r) => r,
@@ -82,6 +87,7 @@ impl Sender {
             .agent
             .post(&url)
             .header("Authorization", &format!("Bearer {}", config.token))
+            .header(VERSION_HEADER, env!("CARGO_PKG_VERSION"))
             .send_json(heartbeat)
             .map_err(|e| format!("Server nicht erreichbar: {e}"))?;
         let status = response.status().as_u16();

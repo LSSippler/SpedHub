@@ -438,6 +438,76 @@ async fn anmeldung() {
     assert_eq!(s, StatusCode::UNAUTHORIZED);
 }
 
+/// Anmelden mit Header `X-SpedHub-Version`, wie der Launcher es tut.
+async fn login_with_version(
+    app: &Router,
+    path: &str,
+    name: &str,
+    version: Option<&str>,
+) -> (StatusCode, Value) {
+    let mut req = Request::builder()
+        .method("POST")
+        .uri(path)
+        .header("content-type", "application/json");
+    if let Some(v) = version {
+        req = req.header("x-spedhub-version", v);
+    }
+    let body = json!({ "name": name, "password": "geheim1234" }).to_string();
+    let res = app
+        .clone()
+        .oneshot(req.body(Body::from(body)).unwrap())
+        .await
+        .unwrap();
+    let status = res.status();
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+#[tokio::test]
+async fn versionen_beim_anmelden_vergleichen() {
+    let app = app();
+    let own = env!("CARGO_PKG_VERSION");
+    let mut parts = own.split('.');
+    let (major, minor): (u64, u64) = (
+        parts.next().unwrap().parse().unwrap(),
+        parts.next().unwrap().parse().unwrap(),
+    );
+    let same_minor = format!("{major}.{minor}.99");
+    let next_minor = format!("{major}.{}.0", minor + 1);
+
+    // Health nennt die Version
+    let (s, v) = call(&app, "GET", "/api/health", None, None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["version"], own);
+
+    // Konto anlegen mit passender Version, auch mit v davor
+    let (s, v) = login_with_version(&app, "/api/register", "Alex", Some(&format!("v{own}"))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["server_version"], own);
+    assert_eq!(v["compatible"], true);
+    assert!(v["token"].is_string());
+
+    // Gleiche Haupt- und Nebenversion passt, eine andere Nebenversion nicht
+    let (s, v) = login_with_version(&app, "/api/login", "Alex", Some(&same_minor)).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["compatible"], true);
+    let (s, v) = login_with_version(&app, "/api/login", "Alex", Some(&next_minor)).await;
+    assert_eq!(s, StatusCode::OK, "Anmelden geht trotzdem: {v}");
+    assert_eq!(v["compatible"], false);
+    assert_eq!(v["server_version"], own);
+    let (_, v) = login_with_version(&app, "/api/login", "Alex", Some("0.1.0")).await;
+    assert_eq!(v["compatible"], own.starts_with("0.1."));
+    let (_, v) = login_with_version(&app, "/api/login", "Alex", Some("Unsinn")).await;
+    assert_eq!(v["compatible"], false);
+
+    // Ohne Header (Dashboard, älterer Launcher) gibt es nichts zu vergleichen
+    let (_, v) = login_with_version(&app, "/api/login", "Alex", None).await;
+    assert_eq!(v["compatible"], true);
+    assert_eq!(v["server_version"], own);
+    let (_, v) = login_with_version(&app, "/api/register", "Berta", Some(&next_minor)).await;
+    assert_eq!(v["compatible"], false);
+}
+
 #[tokio::test]
 async fn dashboard_wird_ausgeliefert() {
     let app = app();

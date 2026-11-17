@@ -22,6 +22,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+          targets: x86_64-unknown-linux-musl
 
       - name: Cargo-Cache
         uses: Swatinem/rust-cache@v2
@@ -39,6 +40,31 @@ jobs:
         run: |
           python3 tools/transplant.py testdata/quelle_mit_lkw.sii testdata/ziel_schnellauftrag.sii "$RUNNER_TEMP/ergebnis.sii"
           cmp "$RUNNER_TEMP/ergebnis.sii" testdata/erwartet_nach_einsetzen.sii
+
+      # Derselbe Build wie im Release: Server für den VPS, statisch mit musl gelinkt
+      - name: musl-Werkzeuge installieren
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Server für Linux bauen (musl, statisch)
+        run: |
+          cargo build --release --locked -p spedhub-server --target x86_64-unknown-linux-musl
+          BIN=target/x86_64-unknown-linux-musl/release/spedhub-server
+          file "$BIN"
+          file "$BIN" | grep -Eq 'statically linked|static-pie linked'
+          ldd "$BIN" > ldd.txt 2>&1 || true
+          cat ldd.txt
+          if grep -q '=>' ldd.txt; then echo "::error::spedhub-server ist dynamisch gelinkt"; exit 1; fi
+          "$BIN" --version
+          mkdir -p dist-linux
+          cp "$BIN" dist-linux/spedhub-server-linux-x86_64
+          (cd dist-linux && sha256sum spedhub-server-linux-x86_64 > spedhub-server-linux-x86_64.sha256)
+
+      - name: Server für Linux hochladen
+        uses: actions/upload-artifact@v6
+        with:
+          name: spedhub-server-linux-x86_64
+          path: dist-linux/
+          if-no-files-found: error
 
   windows:
     name: Windows
@@ -86,4 +112,15 @@ jobs:
         with:
           name: spedhub-launcher-windows-x64
           path: dist-launcher/
+          if-no-files-found: error
+
+      - name: Setup bauen
+        shell: pwsh
+        run: ./installer/build.ps1 -OutDir dist-setup
+
+      - name: Setup hochladen
+        uses: actions/upload-artifact@v6
+        with:
+          name: spedhub-setup-windows-x64
+          path: dist-setup/
           if-no-files-found: error

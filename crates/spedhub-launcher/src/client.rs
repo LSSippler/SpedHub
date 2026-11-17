@@ -10,6 +10,33 @@ pub struct Login {
     pub user_id: i64,
     pub name: String,
     pub token: String,
+    /// Version des Servers. Server vor 0.2 liefern sie nicht.
+    #[serde(default)]
+    pub server_version: Option<String>,
+    /// Passt die Version dieses Launchers laut Server? Server vor 0.2 liefern das nicht.
+    #[serde(default)]
+    pub compatible: Option<bool>,
+}
+
+impl Login {
+    /// Warnung für die Oberfläche, wenn Launcher und Server nicht zusammenpassen. Der Launcher
+    /// prüft selbst, nicht nur mit `compatible` vom Server.
+    pub fn version_warning(&self) -> Option<String> {
+        version_warning(self.server_version.as_deref())
+    }
+}
+
+/// Warnung, wenn ein Server mit dieser Version nicht zu diesem Launcher passt.
+pub fn version_warning(server_version: Option<&str>) -> Option<String> {
+    crate::version::mismatch_warning(crate::version::VERSION, server_version)
+}
+
+/// Antwort von `GET /api/health`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Health {
+    pub ok: bool,
+    #[serde(default)]
+    pub version: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -401,6 +428,11 @@ impl Client {
         Ok(())
     }
 
+    /// Lebenszeichen und Version des Servers, ohne Anmeldung.
+    pub fn health(&self) -> Result<Health> {
+        self.get("/api/health")
+    }
+
     pub fn me(&self) -> Result<Me> {
         self.get("/api/me")
     }
@@ -515,7 +547,10 @@ impl Client {
 
     fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
         self.check_url()?;
-        let mut req = self.agent.get(&format!("{}{path}", self.base));
+        let mut req = self
+            .agent
+            .get(&format!("{}{path}", self.base))
+            .header(crate::version::HEADER, crate::version::VERSION);
         if let Some(t) = &self.token {
             req = req.header("Authorization", &format!("Bearer {t}"));
         }
@@ -524,7 +559,10 @@ impl Client {
 
     fn post<T: DeserializeOwned>(&self, path: &str, body: &impl Serialize) -> Result<T> {
         self.check_url()?;
-        let mut req = self.agent.post(&format!("{}{path}", self.base));
+        let mut req = self
+            .agent
+            .post(&format!("{}{path}", self.base))
+            .header(crate::version::HEADER, crate::version::VERSION);
         if let Some(t) = &self.token {
             req = req.header("Authorization", &format!("Bearer {t}"));
         }

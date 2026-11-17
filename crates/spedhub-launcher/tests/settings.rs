@@ -22,6 +22,7 @@ fn einstellungen_mit_token_speichern_und_laden() {
     s.company_id = Some(3);
     s.profile_dir =
         Some("C:\\Users\\Alex\\Documents\\Euro Truck Simulator 2\\profiles\\416C6578".into());
+    s.game_dir = Some("D:\\SteamLibrary\\steamapps\\common\\Euro Truck Simulator 2".into());
     let token = "0123456789abcdef0123456789abcdef";
     s.set_token(token).unwrap();
     s.save(&paths).unwrap();
@@ -97,4 +98,24 @@ fn paket_eines_geliehenen_lkw_ablegen() {
     // Kaputte Datei zählt als nicht vorhanden
     fs::write(paths.leases().join("7.json"), "{ kaputt").unwrap();
     assert!(paths.load_lease(7).is_none());
+}
+
+#[test]
+fn spielordner_fehlt_in_alten_einstellungen() {
+    let paths = AppPaths::new(temp_dir("einstellungen-alt"));
+    fs::write(
+        paths.settings(),
+        r#"{ "server_url": "http://spedhub.example", "user_name": "Alex", "company_id": 2 }"#,
+    )
+    .unwrap();
+    let s = Settings::load(&paths);
+    assert_eq!(s.game_dir, None);
+    assert_eq!(s.user_name, "Alex");
+    // Ohne Spielordner steht er auch nicht in der Datei
+    s.save(&paths).unwrap();
+    assert!(
+        !fs::read_to_string(paths.settings())
+            .unwrap()
+            .contains("game_dir")
+    );
 }

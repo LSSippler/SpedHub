@@ -247,3 +247,62 @@ pub fn get_raw(url: &str, token: &str) -> serde_json::Value {
     assert!(res.status().is_success(), "{url}: {}", res.status());
     res.body_mut().read_json().unwrap()
 }
+
+// ------------------------------------------------------------------- Steam nachbauen
+
+/// Pfad als Text für eine VDF-Datei: Backslashes verdoppelt, wie Steam sie schreibt.
+pub fn vdf_path(p: &Path) -> String {
+    p.to_string_lossy().replace('\\', "\\\\")
+}
+
+/// Legt einen Spielordner mit `bin\win_x64` an.
+pub fn game_folder(dir: &Path) -> PathBuf {
+    fs::create_dir_all(dir.join("bin").join("win_x64")).unwrap();
+    fs::write(
+        dir.join("bin").join("win_x64").join("eurotrucks2.exe"),
+        b"kein echtes Spiel",
+    )
+    .unwrap();
+    dir.to_path_buf()
+}
+
+/// Legt das App-Manifest von ETS2 in einer Bibliothek an, optional mit `installdir`.
+pub fn app_manifest(library: &Path, install_dir: Option<&str>) {
+    let apps = library.join("steamapps");
+    fs::create_dir_all(&apps).unwrap();
+    let dir_line = install_dir
+        .map(|d| format!("\t\"installdir\"\t\t\"{d}\"\n"))
+        .unwrap_or_default();
+    fs::write(
+        apps.join("appmanifest_227300.acf"),
+        format!("\"AppState\"\n{{\n\t\"appid\"\t\t\"227300\"\n\t\"name\"\t\t\"Euro Truck Simulator 2\"\n{dir_line}}}\n"),
+    )
+    .unwrap();
+}
+
+/// `libraryfolders.vdf` im neuen Format: je Bibliothek der Pfad und die App-IDs.
+pub fn library_folders(steam: &Path, libraries: &[(&Path, &[&str])]) {
+    let mut text = String::from("\"libraryfolders\"\n{\n\t\"contentstatsid\"\t\t\"-123\"\n");
+    for (i, (path, apps)) in libraries.iter().enumerate() {
+        text.push_str(&format!(
+            "\t\"{i}\"\n\t{{\n\t\t\"path\"\t\t\"{}\"\n\t\t\"label\"\t\t\"\"\n\t\t\"apps\"\n\t\t{{\n",
+            vdf_path(path)
+        ));
+        for app in *apps {
+            text.push_str(&format!("\t\t\t\"{app}\"\t\t\"123456\"\n"));
+        }
+        text.push_str("\t\t}\n\t}\n");
+    }
+    text.push_str("}\n");
+    let apps = steam.join("steamapps");
+    fs::create_dir_all(&apps).unwrap();
+    fs::write(apps.join("libraryfolders.vdf"), text).unwrap();
+}
+
+/// Registry mit nur dem Wert aus HKCU.
+pub fn registry_hkcu(steam: &Path) -> spedhub_launcher::steam::RegistryValues {
+    spedhub_launcher::steam::RegistryValues {
+        current_user_steam_path: Some(steam.to_string_lossy().into_owned()),
+        ..Default::default()
+    }
+}

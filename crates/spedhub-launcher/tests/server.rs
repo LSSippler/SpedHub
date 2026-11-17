@@ -1001,3 +1001,85 @@ fn kauf_und_abgang_als_text() {
     .unwrap();
     assert_eq!(t.retired.unwrap().text(), "verkauft für 100 Euro");
 }
+
+#[test]
+fn version_beim_anmelden_pruefen() {
+    let dir = temp_dir("version");
+    let server = TestServer::start(&dir.join("server.db"));
+    let url = server.url();
+    let own = spedhub_launcher::version::VERSION;
+
+    let mut c = Client::new(&url);
+    let login = c.register("Alex", "geheim1234").unwrap();
+    assert_eq!(login.server_version.as_deref(), Some(own));
+    assert_eq!(login.compatible, Some(true));
+    assert_eq!(login.version_warning(), None);
+    let login = Client::new(&url).login("Alex", "geheim1234").unwrap();
+    assert_eq!(login.compatible, Some(true));
+
+    let health = Client::new(&url).health().unwrap();
+    assert!(health.ok);
+    assert_eq!(health.version.as_deref(), Some(own));
+    assert_eq!(
+        spedhub_launcher::client::version_warning(health.version.as_deref()),
+        None
+    );
+
+    // Ein Server, der nicht passt, oder einer ohne Version (vor 0.2)
+    let w = spedhub_launcher::client::version_warning(Some("9.9.0")).unwrap();
+    assert!(w.contains("9.9.0") && w.contains(own), "{w}");
+    let old: spedhub_launcher::client::Login =
+        serde_json::from_value(json!({ "user_id": 1, "name": "Alex", "token": "t" })).unwrap();
+    assert_eq!(old.server_version, None);
+    assert!(
+        old.version_warning()
+            .unwrap()
+            .contains("meldet keine Version")
+    );
+}
+
+#[test]
+fn version_geht_bei_jeder_anfrage_mit() {
+    use std::io::{Read, Write};
+    // Ein Server, der nur den Kopf festhält und mit einer Anmeldung antwortet
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for _ in 0..2 {
+            let (mut s, _) = listener.accept().unwrap();
+            let mut head = Vec::new();
+            let mut byte = [0u8; 1];
+            while !head.ends_with(b"\r\n\r\n") && s.read(&mut byte).unwrap_or(0) == 1 {
+                head.push(byte[0]);
+            }
+            let text = String::from_utf8_lossy(&head).to_lowercase();
+            let len: usize = text
+                .lines()
+                .find_map(|l| l.strip_prefix("content-length:"))
+                .and_then(|v| v.trim().parse().ok())
+                .unwrap_or(0);
+            let mut body = vec![0u8; len];
+            let _ = s.read_exact(&mut body);
+            let answer = r#"{"user_id":1,"name":"Alex","token":"t","server_version":"0.1.0","compatible":false,"ok":true,"version":"0.1.0"}"#;
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\ncontent-length: {}\r\n\r\n{answer}",
+                answer.len()
+            );
+            let _ = s.write_all(reply.as_bytes());
+            tx.send(text).unwrap();
+        }
+    });
+    let expected = format!("x-spedhub-version: {}", spedhub_launcher::version::VERSION);
+    let login = Client::new(&url).login("Alex", "geheim1234").unwrap();
+    let head = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(head.contains(&expected), "{head}");
+    assert_eq!(login.compatible, Some(false));
+    if !spedhub_launcher::version::VERSION.starts_with("0.1.") {
+        assert!(login.version_warning().unwrap().contains("Version 0.1.0"));
+    }
+    Client::new(&url).health().unwrap();
+    let head = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(head.starts_with("get /api/health"), "{head}");
+    assert!(head.contains(&expected), "{head}");
+}

@@ -6,16 +6,70 @@ Im Spiel bestätigt ist, dass ETS2 einen eingesetzten Lkw lädt (siehe `docs/sav
 
 ## Installation
 
-1. Die .exe holen: entweder als Artefakt `spedhub-launcher-windows-x64` aus dem letzten Lauf der CI auf GitHub (Actions, Lauf öffnen, unten bei Artifacts), oder selbst bauen:
+Am einfachsten über das Setup, siehe `README.md` im Wurzelordner, Abschnitt Installation: `SpedHub-Setup-<Version>.exe` aus den Releases auf GitHub. Es installiert den Launcher nach `Programme\SpedHub`, legt die Plugin-DLL daneben und kopiert sie ins Spiel (siehe Plugin). Zwischen zwei Releases gibt es das Setup auch als Artefakt `spedhub-setup-windows-x64` aus dem letzten Lauf der CI (Actions, Lauf öffnen, unten bei Artifacts).
 
-   ```powershell
-   cd C:\dev\SpedHub
-   cargo build --release -p spedhub-launcher
-   ```
+Selbst bauen geht auch:
 
-   Die Datei liegt dann unter `target\release\spedhub-launcher.exe`. Sie braucht keine Installation und kann an einem beliebigen Ort liegen.
+```powershell
+cd C:\dev\SpedHub
+cargo build --release -p spedhub-launcher -p spedhub-plugin
+```
 
-2. Für die Buchungen aus dem Spiel zusätzlich das Plugin installieren, siehe `crates/spedhub-plugin/README.md`. Die Konfiguration für das Plugin schreibt der Launcher selbst.
+Dann liegen `spedhub-launcher.exe` und `spedhub_plugin.dll` unter `target\release`. Der Launcher braucht keine Installation, für "Plugin installieren" muss die DLL aber neben ihm liegen. Das Setup selbst baut `installer\build.ps1`, siehe `README.md`.
+
+Unten im Fenster steht die Version des Launchers, etwa `SpedHub 0.2.0`.
+
+## Plugin
+
+Über dem Fuhrpark, und vor der Anmeldung unter dem Anmelden, zeigt der Launcher den Stand des Plugins:
+
+| Anzeige | Bedeutung |
+|---|---|
+| Plugin installiert | Im Spiel liegt dieselbe DLL wie neben dem Launcher (gleiche SHA-256) |
+| Plugin veraltet | Im Spiel liegt eine andere DLL, meist eine ältere |
+| Plugin fehlt | Im Spielordner unter `bin\win_x64\plugins` liegt keine `spedhub_plugin.dll` |
+| Spiel nicht gefunden | Weder über Steam noch in den Einstellungen ist ein Spielordner bekannt. Darunter steht, warum |
+| Keine Plugin-DLL neben dem Launcher | Selbst gebauter Launcher ohne DLL daneben, es lässt sich nichts vergleichen |
+
+"Plugin installieren" startet den Launcher über die Nachfrage nach Adminrechten (UAC) mit `--install-plugin` neu. Das Fenster bleibt offen und zeigt danach den neuen Stand. Läuft das Spiel, wird nichts ersetzt: Die DLL ist dann geladen, die Meldung sagt "Spiel beenden". "Ordner wählen" erscheint, wenn das Spiel nicht gefunden wurde. Der gewählte Ordner muss `bin\win_x64` enthalten und wird in `launcher.json` gemerkt.
+
+So sucht der Launcher das Spiel (`src/steam.rs`):
+
+1. Steam-Ordner aus der Registry: `HKCU\Software\Valve\Steam` (`SteamPath`), `HKLM\SOFTWARE\WOW6432Node\Valve\Steam` und `HKLM\SOFTWARE\Valve\Steam` (`InstallPath`).
+2. Alle Bibliotheken aus `steamapps\libraryfolders.vdf`, im neuen und im alten Format. Eine kaputte Datei bricht nichts ab, der Steam-Ordner selbst wird trotzdem durchsucht.
+3. ETS2 (App-ID 227300) liegt in der Bibliothek, deren `apps` die ID nennt, sonst in der ersten mit `steamapps\appmanifest_227300.acf`.
+4. Spielordner ist `steamapps\common\<installdir>` aus dem App-Manifest, sonst `Euro Truck Simulator 2`. Darin muss `bin\win_x64` liegen.
+
+Ein von Hand gewählter Ordner aus den Einstellungen geht der Suche vor, solange er noch passt.
+
+## Updates
+
+Beim Start fragt der Launcher im Hintergrund die GitHub-Releases von `LSSippler/SpedHub` ab (`GET https://api.github.com/repos/LSSippler/SpedHub/releases/latest`, ohne Anmeldung). Unten im Fenster steht leise "aktuell" oder warum die Prüfung nicht ging (offline, noch kein Release, Abfragelimit von GitHub). Das stört nichts.
+
+Ist das neueste Release neuer als der Launcher, steht oben "Version X verfügbar" mit dem Knopf "Herunterladen und installieren". Erst der Knopf
+
+1. lädt `SHA256SUMS.txt` und `SpedHub-Setup-<Version>.exe` aus dem Release in `%TEMP%\SpedHub-Update`,
+2. vergleicht die SHA-256 des Setups mit der Zeile in `SHA256SUMS.txt`,
+3. startet das Setup nur, wenn sie passt, und schließt sich dann, damit das Setup ihn ersetzen kann.
+
+Fehlt das Setup oder `SHA256SUMS.txt` im Release oder passt die Prüfsumme nicht, wird die Datei gelöscht, nichts gestartet und der Grund angezeigt. Ein stilles Update gibt es nicht.
+
+## Version und Server
+
+Der Launcher schickt bei jeder Anfrage seine Version im Header `X-SpedHub-Version`. Beim Anmelden und beim Laden des Fuhrparks vergleicht er sie mit der Version des Servers. Passen Haupt- und Nebenversion nicht (`0.2.x` gegen `0.3.x`), oder meldet der Server keine Version, steht unter der Leiste ein gelber Hinweis. Anmelden geht trotzdem, aber manches kann fehlschlagen.
+
+## Kommandozeile
+
+| Aufruf | Was passiert |
+|---|---|
+| `spedhub-launcher.exe` | Oberfläche |
+| `spedhub-launcher.exe --install-plugin` | Plugin ins Spiel kopieren, eine ältere DLL ersetzen. Findet er das Spiel nicht: Meldung und Ordnerdialog |
+| `spedhub-launcher.exe --install-plugin --game-dir "D:\Spiele\ETS2"` | Dasselbe in diesen Spielordner, der Ordner wird gemerkt |
+| `spedhub-launcher.exe --uninstall-plugin` | Plugin aus dem gemerkten und dem über Steam gefundenen Spielordner entfernen. Fehlt es, ist das kein Fehler |
+| `--quiet` zusätzlich | Keine Fenster, nur der Exit-Code. Für eine stille Installation |
+| `spedhub-launcher.exe --version` | Version in einem Fenster |
+
+Ohne Oberfläche gibt es keine Ausgabe auf der Konsole, Rückmeldung kommt über den Exit-Code: `0` erledigt, `1` Fehler (stand in einer MessageBox), `2` Spiel nicht gefunden und kein Ordner gewählt, `3` unbekannte Option. In den Spielordner unter `Programme` darf je nach Rechner nur ein Admin schreiben, deshalb ruft das Setup `--install-plugin` mit seinen Adminrechten auf und die Deinstallation `--uninstall-plugin`.
 
 ## Bedienung
 
@@ -83,22 +137,29 @@ Alles liegt in `%LOCALAPPDATA%\SpedHub`:
 
 | Datei | Inhalt |
 |---|---|
-| `launcher.json` | Server, Name, Firma, Profil und der Token. Der Token ist mit DPAPI für deinen Windows-Benutzer verschlüsselt |
+| `launcher.json` | Server, Name, Firma, Profil, ein von Hand gewählter Spielordner und der Token. Der Token ist mit DPAPI für deinen Windows-Benutzer verschlüsselt |
 | `plugin.json` | Server, Token und Firma für das Plugin. Wird geschrieben, sobald eine Firma gewählt ist, und beim Abmelden entfernt. Das Plugin liest den Token im Klartext |
 | `leases\<id>.json` | Bauplan geliehener Lkw, als Zwischenspeicher. Fehlt er, holt der Launcher ihn vom Server. Das dürfen nur du als Ausleiher und der Chef |
 | `backups\` | Kopien der Speicherplätze, aus denen der Launcher einen neuen gemacht hat |
+
+Die Deinstallation fragt "Anmeldung, Einstellungen und Backups behalten?", Standard ist Ja. Mit Nein löscht sie diesen Ordner. Gemeint ist der Ordner des Benutzers, der deinstalliert. Läuft `--install-plugin` aus dem Setup mit einem anderen Admin-Konto, merkt es sich einen gewählten Spielordner in dessen `launcher.json`. Das Setup kopiert das Plugin trotzdem, der Launcher findet es über Steam oder "Ordner wählen".
 
 ## Aufbau
 
 | Datei | Inhalt |
 |---|---|
-| `src/main.rs` | Oberfläche (egui/eframe). Alles, was dauert, läuft in einem eigenen Thread |
+| `src/main.rs` | Oberfläche (egui/eframe) und Weiche zur Kommandozeile. Alles, was dauert, läuft in einem eigenen Thread |
+| `src/cli.rs` | `--install-plugin`, `--uninstall-plugin`: Argumente, Ablauf mit Ordnerwahl |
+| `src/steam.rs` | ETS2 über Registry-Werte, `libraryfolders.vdf` und App-Manifest finden, eigener VDF-Leser |
+| `src/plugin_install.rs` | Plugin kopieren, ersetzen, entfernen, Stand über SHA-256 |
+| `src/update.rs` | GitHub-Releases abfragen, Setup laden und gegen `SHA256SUMS.txt` prüfen |
+| `src/version.rs` | Versionen lesen und vergleichen |
 | `src/client.rs` | Client für den Server |
 | `src/flows.rs` | Bauplan aus der Ablage oder vom Server, Geldabgleich mit neuem Speicherplatz |
 | `src/profiles.rs` | Profile, Hex-Namen, Speicherplätze |
 | `src/savegame.rs` | Lkw übernehmen, einsetzen, Kontostand setzen, für die Rückgabe lesen, über `spedhub-save` |
 | `src/settings.rs` | `launcher.json`, `plugin.json`, Ablage der Baupläne |
-| `src/system.rs` | Windows-Anbindung: Dokumente-Ordner, laufendes Spiel, Steam, DPAPI |
+| `src/system.rs` | Windows-Anbindung: Dokumente-Ordner, laufendes Spiel, Steam, DPAPI, Registry, MessageBox, Ordnerdialog, Neustart mit Adminrechten |
 
 Außer `main.rs` lässt sich alles ohne Fenster testen:
 
@@ -107,4 +168,6 @@ cd C:\dev\SpedHub
 cargo test -p spedhub-launcher
 ```
 
-Die Tests bauen einen Dokumente-Ordner mit der echten Profilstruktur aus `testdata` und starten einen echten `spedhub-server`.
+Die Tests bauen einen Dokumente-Ordner mit der echten Profilstruktur aus `testdata` und starten einen echten `spedhub-server`. Für Steam bauen sie Registry-Werte, `libraryfolders.vdf`, App-Manifeste und Spielordner in Testordnern nach, für Updates spielt ein lokaler HTTP-Server die GitHub-API nach. Kein Test braucht Windows, Steam oder das Internet.
+
+Nicht ohne Windows prüfbar sind die Teile in `src/system.rs`: Registry lesen, MessageBox, Ordnerdialog (`SHBrowseForFolderW`), Neustart über UAC und das Starten des Setups.

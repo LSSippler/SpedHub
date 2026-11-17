@@ -2,7 +2,7 @@
 //!
 //! | Datei in `%LOCALAPPDATA%\SpedHub` | Inhalt |
 //! |---|---|
-//! | `launcher.json` | Server, Name, Firma, Profil, Token (unter Windows mit DPAPI verschlüsselt) |
+//! | `launcher.json` | Server, Name, Firma, Profil, Spielordner, Token (unter Windows mit DPAPI verschlüsselt) |
 //! | `plugin.json` | Server, Token, Firma für das Spiel-Plugin. Das Plugin liest den Token im Klartext |
 //! | `backups\` | Kopien der Speicherplätze, bevor der Launcher etwas schreibt |
 
@@ -54,6 +54,10 @@ pub struct Settings {
     pub company_id: Option<i64>,
     #[serde(default)]
     pub profile_dir: Option<PathBuf>,
+    /// Ordner von Euro Truck Simulator 2, wenn er von Hand gewählt wurde. Sonst sucht der
+    /// Launcher über Steam.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub game_dir: Option<PathBuf>,
     /// Verschlüsselter Token als Hex
     #[serde(default)]
     token: Option<String>,
@@ -70,6 +74,7 @@ impl fmt::Debug for Settings {
             .field("user_name", &self.user_name)
             .field("company_id", &self.company_id)
             .field("profile_dir", &self.profile_dir)
+            .field("game_dir", &self.game_dir)
             .field("token", &self.token.as_ref().map(|_| "***"))
             .finish()
     }

@@ -649,3 +649,49 @@ fn abgelieferter_auftrag_traegt_fracht_und_staedte() {
     }
     let _ = fs::remove_dir_all(dir);
 }
+
+#[test]
+fn version_geht_im_header_mit() {
+    // Ein Server, der nur den Kopf der Anfrage festhält und mit 200 antwortet
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let (mut s, _) = listener.accept().unwrap();
+        let mut head = Vec::new();
+        let mut byte = [0u8; 1];
+        while !head.ends_with(b"\r\n\r\n") && s.read(&mut byte).unwrap_or(0) == 1 {
+            head.push(byte[0]);
+        }
+        let answer = r#"{"duplicate":false}"#;
+        let reply = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\ncontent-length: {}\r\n\r\n{answer}",
+            answer.len()
+        );
+        let _ = s.write_all(reply.as_bytes());
+        tx.send(String::from_utf8_lossy(&head).to_lowercase())
+            .unwrap();
+    });
+    let config = spedhub_plugin::Config {
+        server_url: url,
+        token: "t".repeat(64),
+        company_id: 1,
+    };
+    let booking = Booking {
+        event_id: "v-1".into(),
+        kind: "tollgate".into(),
+        amount: 5,
+        ..Booking::default()
+    };
+    let outcome =
+        spedhub_plugin::send::Sender::new(Duration::from_secs(3)).send(&config, 1, &booking);
+    assert_eq!(
+        outcome,
+        spedhub_plugin::send::Outcome::Sent { duplicate: false }
+    );
+    let head = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(
+        head.contains(&format!("x-spedhub-version: {}", env!("CARGO_PKG_VERSION"))),
+        "{head}"
+    );
+}

@@ -44,7 +44,15 @@ Fracht und Städte für `job_delivered`: Das Plugin merkt sich die letzte nicht 
 
 Voraussetzung ist ETS2 in der 64-Bit-Fassung ab Version 1.35 (Telemetry SDK mit Gameplay-Events).
 
-1. Die DLL holen: entweder als Artefakt `spedhub-plugin-windows-x64` aus dem letzten Lauf der CI auf GitHub (Actions, Lauf öffnen, unten bei Artifacts), oder selbst bauen:
+Normalerweise erledigt das das Setup (siehe `README.md` im Wurzelordner): Es legt `spedhub_plugin.dll` neben den Launcher und ruft am Ende `spedhub-launcher.exe --install-plugin` mit Adminrechten auf. Der Launcher sucht ETS2 über Steam in allen Bibliotheken und kopiert die DLL nach `<Spielordner>\bin\win_x64\plugins`, eine ältere ersetzt er. Findet er das Spiel nicht, lässt er den Ordner wählen. Im Launcher steht danach "Plugin installiert", "Plugin veraltet" oder "Plugin fehlt", mit dem Knopf "Plugin installieren". Details in `crates/spedhub-launcher/README.md`, Abschnitt Plugin. Die Deinstallation von SpedHub entfernt das Plugin wieder.
+
+Die Konfiguration `plugin.json` schreibt der Launcher, sobald du angemeldet bist und eine Firma gewählt hast.
+
+Beim nächsten Start fragt ETS2 einmal nach, ob es Plugins laden darf, das mit OK bestätigen. In der Spielkonsole und in `Dokumente\Euro Truck Simulator 2\game.log.txt` steht dann `SpedHub: aktiv`.
+
+### Von Hand, als Rückfall
+
+1. Die DLL holen: aus `Programme\SpedHub` nach dem Setup, als Artefakt `spedhub-plugin-windows-x64` aus dem letzten Lauf der CI auf GitHub (Actions, Lauf öffnen, unten bei Artifacts), oder selbst bauen:
 
    ```powershell
    cd C:\dev\SpedHub
@@ -61,7 +69,7 @@ Voraussetzung ist ETS2 in der 64-Bit-Fassung ab Version 1.35 (Telemetry SDK mit 
    Copy-Item target\release\spedhub_plugin.dll $plugins
    ```
 
-3. Die Konfiguration anlegen. Später schreibt sie der Launcher, bis dahin von Hand: `%LOCALAPPDATA%\SpedHub\plugin.json`
+3. Die Konfiguration anlegen, falls der Launcher sie nicht schreibt: `%LOCALAPPDATA%\SpedHub\plugin.json`
 
    ```json
    {
@@ -79,7 +87,7 @@ Voraussetzung ist ETS2 in der 64-Bit-Fassung ab Version 1.35 (Telemetry SDK mit 
    @{ server_url = "http://127.0.0.1:8787"; token = $r.token; company_id = 1 } | ConvertTo-Json | Set-Content "$env:LOCALAPPDATA\SpedHub\plugin.json"
    ```
 
-4. Das Spiel starten. Beim Start fragt ETS2 einmal nach, ob es Plugins laden darf, das mit OK bestätigen. In der Spielkonsole und in `Dokumente\Euro Truck Simulator 2\game.log.txt` steht dann `SpedHub: aktiv`.
+4. Das Spiel starten und die Nachfrage nach Plugins mit OK bestätigen.
 
 Zum Entfernen die DLL wieder aus dem Ordner `plugins` löschen.
 
@@ -108,6 +116,7 @@ Der Token steht nur in `plugin.json`, nie im Log.
 - Eine Anfrage dauert höchstens 3 Sekunden. Beim Beenden wartet das Plugin höchstens so lange auf eine laufende Anfrage, Sender- und Herzschlag-Thread bekommen das Signal gleichzeitig. Was nicht raus ist, bleibt im Postausgang.
 - Keine Panic läuft ins Spiel: Das Framework fängt sie an den Einstiegen der DLL ab, und jeder Hook von SpedHub ist zusätzlich abgesichert.
 - Proxy-Einstellungen aus Umgebungsvariablen werden nicht beachtet.
+- Jede Anfrage trägt die Version des Plugins im Header `X-SpedHub-Version`, wie beim Launcher.
 
 ## Aufbau
 
@@ -123,7 +132,7 @@ Der Token steht nur in `plugin.json`, nie im Log.
 | `src/config.rs` | `plugin.json` und Ablageorte |
 | `src/log.rs` | Log mit Rotation |
 | `tests/logic.rs` | Übersetzung, IDs, Konfiguration, Log, Postausgang, Herzschlag aus dem Snapshot, Kennzeichen |
-| `tests/server.rs` | Senden an einen echten spedhub-server, Ausfall, Neustart, doppeltes Senden, Herzschlag, Pause, Fracht und Städte |
+| `tests/server.rs` | Senden an einen echten spedhub-server, Ausfall, Neustart, doppeltes Senden, Herzschlag, Pause, Fracht und Städte, Version im Header |
 
 Außer `ffi.rs` lässt sich alles ohne Spiel testen:
 

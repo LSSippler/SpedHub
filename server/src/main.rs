@@ -1,12 +1,30 @@
-use std::{env, net::SocketAddr};
+use spedhub_server::config::{self, Command, Env};
+use spedhub_server::version::VERSION;
 
 #[tokio::main]
 async fn main() {
-    let db_path = env::var("SPEDHUB_DB").unwrap_or_else(|_| "spedhub.db".into());
-    let addr: SocketAddr = env::var("SPEDHUB_ADDR")
-        .unwrap_or_else(|_| "127.0.0.1:8787".into())
-        .parse()
-        .expect("SPEDHUB_ADDR muss wie 127.0.0.1:8787 aussehen");
+    let cfg = match config::parse(std::env::args().skip(1), &Env::from_process()) {
+        Ok(Command::Run(cfg)) => cfg,
+        Ok(Command::Version) => {
+            println!("spedhub-server {VERSION}");
+            return;
+        }
+        Ok(Command::Help) => {
+            println!("{}", config::HELP);
+            return;
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(2);
+        }
+    };
+    if let Some(dir) = &cfg.create_dir
+        && let Err(e) = std::fs::create_dir_all(dir)
+    {
+        eprintln!("Ordner {} ließ sich nicht anlegen: {e}", dir.display());
+        std::process::exit(1);
+    }
+    let db_path = cfg.db.to_string_lossy().into_owned();
 
     let db = spedhub_server::db::open(&db_path).expect("Datenbank konnte nicht geöffnet werden");
     let app = spedhub_server::api::router(db.clone());
@@ -31,11 +49,12 @@ async fn main() {
             }
         }
     });
+    let addr = cfg.addr;
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .expect("Adresse ist belegt oder ungültig");
 
-    println!("SpedHub läuft auf http://{addr}");
+    println!("SpedHub {VERSION} läuft auf http://{addr}");
     println!("Datenbank: {db_path}");
     println!("Beenden mit Strg+C");
 

@@ -1,6 +1,6 @@
 # SpedHub-Server
 
-Das Backend von SpedHub: Accounts, Firmenkasse und Fuhrpark. Stand v0.1, gedacht zum lokalen Ausprobieren.
+Das Backend von SpedHub: Accounts, Firmenkasse und Fuhrpark. Die Version steht in der `Cargo.toml` im Wurzelordner und gilt für alle Teile von SpedHub.
 
 Der Server ist die Wahrheit. Was im Spielstand steht, ist nur eine Kopie, die der Launcher später bei jedem Abgleich neu aufbaut. Mehr dazu in `docs/architektur.md`.
 
@@ -16,6 +16,20 @@ cargo run --release -p spedhub-server
 ```
 
 Danach läuft der Server auf http://127.0.0.1:8787 und legt im aktuellen Ordner die Datei `spedhub.db` an. Beenden mit Strg+C.
+
+### Aus dem Setup
+
+Mit dem Teil "Server für lokale Tests" aus dem Setup gibt es im Startmenü "SpedHub-Server (lokaler Test)". Das startet `spedhub-server.exe --local`: Adresse `127.0.0.1:8787`, Datenbank in `%LOCALAPPDATA%\SpedHub\server\spedhub.db` des Benutzers, der die Verknüpfung startet. Der Ordner wird angelegt. Beenden mit Strg+C oder Fenster schließen.
+
+### Kommandozeile
+
+| Aufruf | Was passiert |
+|---|---|
+| `spedhub-server` | Datenbank `spedhub.db` im aktuellen Ordner, Adresse `127.0.0.1:8787` |
+| `spedhub-server --local` | Datenbank in `%LOCALAPPDATA%\SpedHub\server`, unter Linux `~/.local/share/SpedHub/server`, Adresse `127.0.0.1:8787` |
+| `spedhub-server --version` | Version ausgeben, etwa `spedhub-server 0.2.0` |
+
+`SPEDHUB_DB` und `SPEDHUB_ADDR` (siehe Einstellungen) gehen immer vor, auch vor `--local`. `--local` gibt es, weil eine Verknüpfung keine Umgebungsvariablen setzen kann.
 
 ## Dashboard
 
@@ -55,6 +69,53 @@ cargo run --release -p spedhub-server
 
 Achtung: Der Server spricht nur HTTP. Solange er auf 127.0.0.1 läuft, ist das egal. Für den Betrieb im Internet gehört ein Reverse Proxy mit HTTPS davor.
 
+## Auf einem VPS
+
+Für Linux-Server gibt es in jedem Release `spedhub-server-linux-x86_64`: x86_64, statisch mit musl gelinkt, braucht also keine Bibliotheken auf dem Server. Ein Beispiel mit systemd:
+
+```bash
+sudo useradd --system --home /opt/spedhub --shell /usr/sbin/nologin spedhub
+sudo mkdir -p /opt/spedhub && cd /opt/spedhub
+sudo curl -fLO https://github.com/LSSippler/SpedHub/releases/download/v0.2.0/spedhub-server-linux-x86_64
+sudo curl -fLO https://github.com/LSSippler/SpedHub/releases/download/v0.2.0/SHA256SUMS.txt
+sha256sum -c --ignore-missing SHA256SUMS.txt
+sudo chmod +x spedhub-server-linux-x86_64
+sudo chown -R spedhub: /opt/spedhub
+./spedhub-server-linux-x86_64 --version
+```
+
+`/etc/systemd/system/spedhub.service`:
+
+```ini
+[Unit]
+Description=SpedHub-Server
+After=network-online.target
+
+[Service]
+User=spedhub
+WorkingDirectory=/opt/spedhub
+Environment=SPEDHUB_DB=/opt/spedhub/spedhub.db
+Environment=SPEDHUB_ADDR=127.0.0.1:8787
+ExecStart=/opt/spedhub/spedhub-server-linux-x86_64
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now spedhub
+```
+
+Davor gehört ein Reverse Proxy mit HTTPS (siehe oben). Für ein Update die Datenbank sichern (`sqlite3 spedhub.db ".backup spedhub-vorher.db"` oder bei gestopptem Dienst kopieren), die neue Datei an den Platz von `spedhub-server-linux-x86_64` legen und `sudo systemctl restart spedhub`. Eine vorhandene Datenbank erweitert der Server beim Start selbst.
+
+Selbst bauen geht unter Linux mit `rustup target add x86_64-unknown-linux-musl`, `sudo apt-get install -y musl-tools` und `cargo build --release -p spedhub-server --target x86_64-unknown-linux-musl`.
+
+## Versionsprüfung
+
+Launcher und Plugin schicken bei jeder Anfrage ihre Version im Header `X-SpedHub-Version`. `POST /api/register` und `POST /api/login` antworten zusätzlich mit `server_version` und `compatible`. Zusammen passen Versionen mit gleicher Haupt- und Nebenversion, `0.2.x` mit `0.2.y`. Passt die Version nicht, meldet sich der Client trotzdem an, der Launcher zeigt einen gelben Hinweis und der Server schreibt eine Warnung ins Log, etwa `Warnung: Alex meldet sich mit Version 0.3.0 an, der Server hat 0.2.0`. Ohne Header, also beim Dashboard, das vom Server selbst kommt, ist `compatible` immer `true`. `GET /api/health` nennt die Version unter `version`.
+
 ## Ausprobieren ohne Dashboard
 
 Dasselbe geht auch direkt über die Schnittstelle. Der Server muss dafür in einem zweiten Fenster laufen.
@@ -92,9 +153,9 @@ Alle Anfragen und Antworten sind JSON. Außer bei `register`, `login` und `healt
 
 | Methode und Pfad | Wer | Was |
 |---|---|---|
-| `GET /api/health` | jeder | Lebenszeichen |
-| `POST /api/register` | jeder | Account anlegen: `name`, `password` (mindestens 8 Zeichen). Liefert `token` |
-| `POST /api/login` | jeder | Anmelden, liefert einen neuen `token` |
+| `GET /api/health` | jeder | Lebenszeichen mit `version` |
+| `POST /api/register` | jeder | Account anlegen: `name`, `password` (mindestens 8 Zeichen). Liefert `token`, `server_version` und `compatible` (siehe Versionsprüfung) |
+| `POST /api/login` | jeder | Anmelden, liefert einen neuen `token`, `server_version` und `compatible` |
 | `POST /api/logout` | angemeldet | Abmelden, der benutzte Token wird ungültig |
 | `GET /api/me` | angemeldet | Eigener Account und Firmen |
 | `POST /api/me/password` | angemeldet | Passwort ändern: `old_password`, `new_password` (mindestens 8 Zeichen). Alle anderen Tokens des Nutzers werden ungültig, der benutzte bleibt. Liefert `other_tokens_removed`. Falsches altes Passwort: 403 |
@@ -310,7 +371,9 @@ Spät gemeldete Ereignisse rechnen das Fenster eines früheren Abgleichs neu (si
 
 | Datei | Inhalt |
 |---|---|
-| `src/main.rs` | Start, Einstellungen |
+| `src/main.rs` | Start |
+| `src/config.rs` | Kommandozeile und Umgebung: Datenbank, Adresse, `--local`, `--version` |
+| `src/version.rs` | Versionsprüfung mit Launcher und Plugin |
 | `src/api.rs` | Alle Endpunkte, Buchungsregeln und Geldabgleich |
 | `src/presence.rs` | Herzschlag, Online, Kennzeichen vergleichen, letzter bekannter Zustand |
 | `src/damage.rs` | Schaden aus dem Zustand, Gewichtung, Kosten der Werkstatt, Haftung |
@@ -323,3 +386,4 @@ Spät gemeldete Ereignisse rechnen das Fenster eines früheren Abgleichs neu (si
 | `src/error.rs` | Fehlerantworten |
 | `web/index.html` | Das Dashboard, eine Datei ohne Build-Schritt |
 | `tests/flow.rs` | Automatische Tests für ganze Abläufe, mit gestellter Uhr |
+| `tests/config.rs` | Wahl von Datenbank und Adresse |

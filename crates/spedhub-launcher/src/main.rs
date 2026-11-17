@@ -4,8 +4,12 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 use eframe::egui;
-use spedhub_launcher::client::{Client, Company, Me, PurchaseCandidate, Truck, format_percent};
+use spedhub_launcher::cli::{self, Command, InstallEnv, InstallOutcome};
+use spedhub_launcher::client::{
+    Client, Company, Me, PurchaseCandidate, Truck, format_percent, version_warning,
+};
 use spedhub_launcher::flows::{describe, lease_package, sync_and_write};
+use spedhub_launcher::plugin_install::{self, GameSource, PluginStatus};
 use spedhub_launcher::profiles::{Profile, SaveSlot, find_profiles, list_slots};
 use spedhub_launcher::savegame::{
     FoundBy, ReturnData, SaveTruck, new_truck_from_save, package_from_checkout, read_for_return,
@@ -14,7 +18,9 @@ use spedhub_launcher::savegame::{
 use spedhub_launcher::settings::{
     AppPaths, DEFAULT_SERVER, Settings, remove_plugin_config, write_plugin_config,
 };
-use spedhub_launcher::system::{self, ProcessCheck};
+use spedhub_launcher::system::{self, MessageKind, ProcessCheck};
+use spedhub_launcher::update::{self, Release, Updater};
+use spedhub_launcher::version::VERSION;
 use spedhub_launcher::{Error, Result};
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},
@@ -32,11 +38,35 @@ const STEAM_WARNING: &str = "Achtung: Dieses Profil liegt in steam_profiles und 
 Steam kann einen bearbeiteten Spielstand mit einer älteren Fassung aus der Cloud überschreiben. \
 Besser ein Profil ohne Steam Cloud als Firmenprofil nehmen.";
 
-fn main() -> eframe::Result {
+const TITLE: &str = "SpedHub";
+
+fn main() {
+    let code = match cli::parse_args(std::env::args_os().skip(1)) {
+        Ok(Command::Gui) => match run_gui() {
+            Ok(()) => cli::EXIT_OK,
+            Err(e) => {
+                system::message_box(
+                    TITLE,
+                    &format!("Das Fenster ließ sich nicht öffnen: {e}"),
+                    MessageKind::Error,
+                );
+                cli::EXIT_ERROR
+            }
+        },
+        Ok(command) => run_cli(command),
+        Err(e) => {
+            system::message_box(TITLE, &e, MessageKind::Error);
+            cli::EXIT_USAGE
+        }
+    };
+    std::process::exit(code);
+}
+
+fn run_gui() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("SpedHub")
-            .with_inner_size([900.0, 640.0])
+            .with_title(format!("SpedHub {VERSION}"))
+            .with_inner_size([900.0, 680.0])
             .with_min_inner_size([640.0, 420.0]),
         ..Default::default()
     };
@@ -47,16 +77,161 @@ fn main() -> eframe::Result {
     )
 }
 
+/// `--install-plugin`, `--uninstall-plugin` und `--version` ohne Oberfläche. Liefert den
+/// Exit-Code. Fehler stehen in einer MessageBox, mit `--quiet` nur im Exit-Code.
+fn run_cli(command: Command) -> i32 {
+    let paths = AppPaths::from_env();
+    let env = InstallEnv {
+        paths: paths.as_ref(),
+        registry: system::steam_registry(),
+        bundled: plugin_install::bundled_dll(),
+        game: &ProcessCheck,
+    };
+    let show = |quiet: bool, text: &str, kind: MessageKind| {
+        eprintln!("{text}");
+        if !quiet {
+            system::message_box(TITLE, text, kind);
+        }
+    };
+    match command {
+        Command::Gui => cli::EXIT_USAGE,
+        Command::Version => {
+            show(
+                false,
+                &format!("SpedHub-Launcher {VERSION}"),
+                MessageKind::Info,
+            );
+            cli::EXIT_OK
+        }
+        Command::InstallPlugin { game_dir, quiet } => {
+            let mut choose = |reason: &str| -> Option<PathBuf> {
+                if quiet {
+                    return None;
+                }
+                system::message_box(TITLE, reason, MessageKind::Warning);
+                system::pick_folder("Ordner von Euro Truck Simulator 2 wählen")
+            };
+            match cli::install_plugin(game_dir.as_deref(), &env, &mut choose) {
+                Ok(InstallOutcome::Installed { not_remembered, .. }) => {
+                    if let Some(e) = not_remembered {
+                        show(
+                            quiet,
+                            &format!(
+                                "Das Plugin ist installiert, aber der Spielordner ließ sich nicht merken: {e}"
+                            ),
+                            MessageKind::Warning,
+                        );
+                    }
+                    cli::EXIT_OK
+                }
+                Ok(InstallOutcome::Cancelled { reason }) => {
+                    show(
+                        quiet,
+                        &format!(
+                            "Das Plugin wurde nicht installiert: {reason}. Das geht später im Launcher über \"Plugin installieren\""
+                        ),
+                        MessageKind::Info,
+                    );
+                    cli::EXIT_CANCELLED
+                }
+                Err(e) => {
+                    show(
+                        quiet,
+                        &format!("Das Plugin wurde nicht installiert: {e}"),
+                        MessageKind::Error,
+                    );
+                    cli::EXIT_ERROR
+                }
+            }
+        }
+        Command::UninstallPlugin { quiet } => match cli::uninstall_plugin(&env) {
+            Ok(_) => cli::EXIT_OK,
+            Err(e) => {
+                show(
+                    quiet,
+                    &format!("Das Plugin ließ sich nicht entfernen: {e}"),
+                    MessageKind::Error,
+                );
+                cli::EXIT_ERROR
+            }
+        },
+    }
+}
+
+/// Stand des Plugins und wo das Spiel liegt.
+struct PluginView {
+    status: PluginStatus,
+    game_dir: Option<PathBuf>,
+    source: Option<GameSource>,
+    /// Warum das Spiel nicht gefunden wurde
+    problem: Option<String>,
+    /// Gerade läuft eine Installation mit Adminrechten
+    installing: bool,
+}
+
+impl PluginView {
+    fn detect(settings: &Settings) -> PluginView {
+        let found = plugin_install::locate_game(
+            None,
+            settings.game_dir.as_deref(),
+            &system::steam_registry(),
+        );
+        let bundled = plugin_install::bundled_dll();
+        match found {
+            Ok((dir, source)) => PluginView {
+                status: plugin_install::status(Some(&dir), bundled.as_deref()),
+                game_dir: Some(dir),
+                source: Some(source),
+                problem: None,
+                installing: false,
+            },
+            Err(problem) => PluginView {
+                status: PluginStatus::GameNotFound,
+                game_dir: None,
+                source: None,
+                problem: Some(problem),
+                installing: false,
+            },
+        }
+    }
+}
+
+/// Stand der Update-Prüfung.
+enum UpdateState {
+    Checking,
+    /// Kein neueres Release
+    Current,
+    Available(Release),
+    Downloading(Release),
+    /// Prüfung ging nicht, wird nur leise angezeigt
+    Failed(String),
+}
+
+/// Ergebnisse von Arbeiten, die nebenher laufen und keine anderen sperren.
+enum Background {
+    UpdateChecked(std::result::Result<Option<Release>, String>),
+    /// Setup geladen, geprüft und gestartet, oder warum nicht
+    UpdateStarted(std::result::Result<PathBuf, String>),
+    /// Exit-Code des Launchers mit Adminrechten
+    PluginInstalled(std::result::Result<i32, String>),
+    FolderChosen(Option<PathBuf>),
+    /// Eine Panic in einer dieser Arbeiten
+    Failed(String),
+}
+
 /// Ergebnis einer Arbeit im Hintergrund.
 enum Done {
     LoggedIn {
         token: String,
         user_name: String,
+        version_warning: Option<String>,
     },
     Loaded {
         me: Me,
         company: Option<Company>,
         trucks: Vec<Truck>,
+        /// Neue Warnung zur Version des Servers, `None`, wenn er nicht gefragt werden konnte
+        version_warning: Option<Option<String>>,
     },
     /// Erfolg mit Meldung, danach wird neu geladen
     Info(String),
@@ -136,6 +311,13 @@ struct App {
     busy: Option<String>,
     tx: Sender<Done>,
     rx: Receiver<Done>,
+
+    /// Launcher und Server passen nicht zusammen
+    version_warning: Option<String>,
+    plugin: PluginView,
+    update: UpdateState,
+    bg_tx: Sender<Background>,
+    bg_rx: Receiver<Background>,
 }
 
 impl App {
@@ -149,6 +331,8 @@ impl App {
         let ets2_dir = system::ets2_documents_dir();
         let profiles = ets2_dir.as_deref().map(find_profiles).unwrap_or_default();
         let (tx, rx) = channel();
+        let (bg_tx, bg_rx) = channel();
+        let plugin = PluginView::detect(&settings);
         let mut app = App {
             name: settings.user_name.clone(),
             token: settings.token(),
@@ -173,7 +357,13 @@ impl App {
             busy: None,
             tx,
             rx,
+            version_warning: None,
+            plugin,
+            update: UpdateState::Checking,
+            bg_tx,
+            bg_rx,
         };
+        app.check_for_update(ctx);
         if app.paths.is_none() {
             app.error("LOCALAPPDATA ist nicht gesetzt. Einstellungen und plugin.json lassen sich nicht speichern");
         }
@@ -260,6 +450,10 @@ impl App {
         let client = self.client();
         let wanted = self.settings.company_id;
         self.run(ctx, "Fuhrpark wird geladen", move || {
+            let version_warning = client
+                .health()
+                .ok()
+                .map(|h| version_warning(h.version.as_deref()));
             let me = client.me()?;
             let id = wanted
                 .filter(|id| me.companies.iter().any(|c| c.id == *id))
@@ -272,6 +466,7 @@ impl App {
                 me,
                 company,
                 trucks,
+                version_warning,
             })
         });
     }
@@ -279,7 +474,12 @@ impl App {
     fn handle(&mut self, ctx: &egui::Context, done: Done) {
         self.busy = None;
         match done {
-            Done::LoggedIn { token, user_name } => {
+            Done::LoggedIn {
+                token,
+                user_name,
+                version_warning,
+            } => {
+                self.version_warning = version_warning;
                 self.token = Some(token.clone());
                 self.password.clear();
                 self.settings.user_name = user_name;
@@ -293,7 +493,11 @@ impl App {
                 me,
                 company,
                 trucks,
+                version_warning,
             } => {
+                if let Some(w) = version_warning {
+                    self.version_warning = w;
+                }
                 if company.is_none() {
                     self.info("Du bist noch in keiner Firma. Gründe eine im Dashboard oder tritt mit einem Einladungscode bei");
                 }
@@ -358,6 +562,7 @@ impl App {
             }
             Done::LoggedOut => {
                 self.token = None;
+                self.version_warning = None;
                 self.linking = None;
                 self.pw_old.clear();
                 self.pw_new.clear();
@@ -387,6 +592,149 @@ impl App {
         }
     }
 
+    // ------------------------------------------------------------------ Nebenher
+
+    /// Startet eine Arbeit, die nebenher läuft und nichts sperrt.
+    fn background(&self, ctx: &egui::Context, job: impl FnOnce() -> Background + Send + 'static) {
+        let tx = self.bg_tx.clone();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let done = catch_unwind(AssertUnwindSafe(job))
+                .unwrap_or_else(|_| Background::Failed("Interner Fehler im Launcher".into()));
+            let _ = tx.send(done);
+            ctx.request_repaint();
+        });
+    }
+
+    /// Fragt GitHub nach einer neueren Version. Fehler stören nicht.
+    fn check_for_update(&mut self, ctx: &egui::Context) {
+        self.update = UpdateState::Checking;
+        self.background(ctx, || {
+            Background::UpdateChecked(Updater::new(update::DEFAULT_API).check_current())
+        });
+    }
+
+    /// Setup laden, Prüfsumme prüfen, starten. Danach schließt sich der Launcher, damit das
+    /// Setup ihn ersetzen kann.
+    fn start_update(&mut self, ctx: &egui::Context) {
+        let release = match std::mem::replace(&mut self.update, UpdateState::Current) {
+            UpdateState::Available(r) => r,
+            other => {
+                self.update = other;
+                return;
+            }
+        };
+        self.update = UpdateState::Downloading(release.clone());
+        self.background(ctx, move || {
+            let updater = Updater::new(update::DEFAULT_API);
+            Background::UpdateStarted(update::download_and_start(
+                &updater,
+                &release,
+                &update::download_dir(),
+                &system::open_path,
+            ))
+        });
+    }
+
+    /// Startet den Launcher über UAC mit `--install-plugin` und wartet im Hintergrund auf ihn.
+    fn install_plugin(&mut self, ctx: &egui::Context) {
+        let exe = match std::env::current_exe() {
+            Ok(e) => e,
+            Err(e) => {
+                self.error(format!("Der Launcher findet sich selbst nicht: {e}"));
+                return;
+            }
+        };
+        // Einen von Hand gewählten Ordner ausdrücklich mitgeben, sonst sucht der Launcher mit
+        // Adminrechten selbst über Steam
+        let dir = match self.plugin.source {
+            Some(GameSource::Settings) | Some(GameSource::Argument) => self.plugin.game_dir.clone(),
+            _ => None,
+        };
+        let params = cli::install_parameters(dir.as_deref());
+        self.plugin.installing = true;
+        self.info("Plugin wird installiert. Bitte die Nachfrage nach Adminrechten bestätigen");
+        self.background(ctx, move || {
+            Background::PluginInstalled(system::run_elevated_and_wait(&exe, &params))
+        });
+    }
+
+    fn choose_game_folder(&mut self, ctx: &egui::Context) {
+        self.background(ctx, || {
+            Background::FolderChosen(system::pick_folder(
+                "Ordner von Euro Truck Simulator 2 wählen",
+            ))
+        });
+    }
+
+    fn handle_background(&mut self, ctx: &egui::Context, done: Background) {
+        match done {
+            Background::UpdateChecked(Ok(Some(r))) => self.update = UpdateState::Available(r),
+            Background::UpdateChecked(Ok(None)) => self.update = UpdateState::Current,
+            Background::UpdateChecked(Err(e)) => self.update = UpdateState::Failed(e),
+            Background::UpdateStarted(Ok(path)) => {
+                self.info(format!(
+                    "Prüfsumme stimmt, das Setup startet: {}. Der Launcher schließt sich",
+                    path.display()
+                ));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            Background::UpdateStarted(Err(e)) => {
+                if let UpdateState::Downloading(r) =
+                    std::mem::replace(&mut self.update, UpdateState::Current)
+                {
+                    self.update = UpdateState::Available(r);
+                }
+                self.error(format!("Update nicht installiert: {e}"));
+            }
+            Background::PluginInstalled(result) => {
+                self.plugin.installing = false;
+                // Ein dabei gewählter Spielordner steht jetzt in launcher.json
+                if let Some(paths) = &self.paths {
+                    self.settings.game_dir = Settings::load(paths).game_dir;
+                }
+                self.plugin = PluginView::detect(&self.settings);
+                match result {
+                    Ok(cli::EXIT_OK) => self.info(format!(
+                        "{}. Beim nächsten Start fragt das Spiel einmal, ob es Plugins laden darf, das mit OK bestätigen",
+                        self.plugin.status.label()
+                    )),
+                    Ok(cli::EXIT_CANCELLED) => {
+                        self.error("Das Plugin wurde nicht installiert, kein Spielordner gewählt")
+                    }
+                    Ok(code) => self.error(format!(
+                        "Das Plugin wurde nicht installiert (Code {code}). Der Grund stand im Fenster davor"
+                    )),
+                    Err(e) => self.error(e),
+                }
+            }
+            Background::Failed(e) => {
+                self.plugin.installing = false;
+                match std::mem::replace(&mut self.update, UpdateState::Current) {
+                    UpdateState::Downloading(r) => self.update = UpdateState::Available(r),
+                    UpdateState::Checking => self.update = UpdateState::Failed(e.clone()),
+                    other => self.update = other,
+                }
+                self.error(e);
+            }
+            Background::FolderChosen(None) => {}
+            Background::FolderChosen(Some(dir)) => {
+                match spedhub_launcher::steam::validate_game_dir(&dir) {
+                    Ok(game_dir) => {
+                        self.settings.game_dir = Some(game_dir);
+                        self.save_settings();
+                        self.plugin = PluginView::detect(&self.settings);
+                        self.info(format!(
+                            "Spielordner gemerkt. {}",
+                            self.plugin.status.label()
+                        ));
+                    }
+                    Err(e) => self.error(e),
+                }
+            }
+        }
+    }
+
     // ------------------------------------------------------------------ Aktionen
 
     fn login(&mut self, ctx: &egui::Context, register: bool) {
@@ -409,6 +757,7 @@ impl App {
                 c.login(&name, &password)?
             };
             Ok(Done::LoggedIn {
+                version_warning: login.version_warning(),
                 token: login.token,
                 user_name: login.name,
             })
@@ -1105,6 +1454,64 @@ impl App {
             });
     }
 
+    /// Hinweis auf eine neue Version, oben im Fenster.
+    fn update_banner(&mut self, ui: &mut egui::Ui) {
+        let (release, downloading) = match &self.update {
+            UpdateState::Available(r) => (r.clone(), false),
+            UpdateState::Downloading(r) => (r.clone(), true),
+            _ => return,
+        };
+        ui.horizontal_wrapped(|ui| {
+            ui.colored_label(
+                egui::Color32::from_rgb(40, 110, 200),
+                format!("Version {} verfügbar, du hast {VERSION}.", release.version),
+            );
+            if downloading {
+                ui.spinner();
+                ui.label("Setup wird geladen und geprüft");
+            } else if ui.button("Herunterladen und installieren").clicked() {
+                self.start_update(ui.ctx());
+            }
+            if !release.html_url.is_empty() {
+                ui.hyperlink_to("Was ist neu?", &release.html_url);
+            }
+        });
+        ui.separator();
+    }
+
+    fn plugin_view(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
+            let status = self.plugin.status;
+            let color = match status {
+                PluginStatus::Installed => egui::Color32::from_rgb(40, 140, 60),
+                PluginStatus::NoBundledDll => ui.visuals().weak_text_color(),
+                _ => egui::Color32::from_rgb(200, 120, 0),
+            };
+            ui.colored_label(color, status.label());
+            if self.plugin.installing {
+                ui.spinner();
+            } else {
+                if (status.can_install() || status == PluginStatus::GameNotFound)
+                    && ui.button("Plugin installieren").clicked()
+                {
+                    self.install_plugin(ui.ctx());
+                }
+                if status == PluginStatus::GameNotFound && ui.button("Ordner wählen").clicked() {
+                    self.choose_game_folder(ui.ctx());
+                }
+                if ui.button("Neu prüfen").clicked() {
+                    self.plugin = PluginView::detect(&self.settings);
+                }
+            }
+        });
+        if let Some(dir) = &self.plugin.game_dir {
+            ui.weak(format!("Spiel: {}", dir.display()));
+        }
+        if let Some(problem) = &self.plugin.problem {
+            ui.weak(problem);
+        }
+    }
+
     fn status_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             if let Some(b) = &self.busy {
@@ -1118,6 +1525,18 @@ impl App {
                 }
             }
         });
+        // Version und Stand der Update-Prüfung, leise
+        ui.horizontal_wrapped(|ui| {
+            ui.weak(format!("SpedHub {VERSION}"));
+            match &self.update {
+                UpdateState::Checking => ui.weak("Suche nach Updates"),
+                UpdateState::Current => ui.weak("aktuell"),
+                UpdateState::Failed(e) => ui.weak(format!("Update-Prüfung: {e}")),
+                UpdateState::Available(r) | UpdateState::Downloading(r) => {
+                    ui.weak(format!("Version {} verfügbar", r.version))
+                }
+            };
+        });
     }
 }
 
@@ -1127,16 +1546,29 @@ impl eframe::App for App {
             let ctx = ui.ctx().clone();
             self.handle(&ctx, done);
         }
+        while let Ok(done) = self.bg_rx.try_recv() {
+            let ctx = ui.ctx().clone();
+            self.handle_background(&ctx, done);
+        }
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
         egui::CentralPanel::default().show(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
+                self.update_banner(ui);
                 if self.token.is_none() {
                     self.login_view(ui);
+                    ui.add_space(12.0);
+                    ui.separator();
+                    self.plugin_view(ui);
                     return;
                 }
                 self.top_bar(ui);
+                if let Some(w) = &self.version_warning {
+                    ui.colored_label(egui::Color32::from_rgb(200, 150, 0), w);
+                }
                 ui.separator();
                 self.profile_view(ui);
+                ui.add_space(4.0);
+                self.plugin_view(ui);
                 ui.add_space(4.0);
                 ui.colored_label(egui::Color32::from_rgb(200, 120, 0), UNCONFIRMED);
                 ui.separator();

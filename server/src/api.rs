@@ -8,6 +8,7 @@ use crate::{
     presence::{self, HeartbeatReq},
     purchases::{self, Budget},
     reconcile::{client_time, correct_late, kind_label, last_point, plausible_time, window_sum},
+    version,
 };
 use argon2::{
     Argon2,
@@ -292,9 +293,31 @@ fn hash_password(password: &str) -> ApiResult<String> {
         .to_string())
 }
 
+/// Versionsprüfung beim Anmelden: Felder `server_version` und `compatible` für die Antwort.
+/// Ohne Header `X-SpedHub-Version` (Dashboard, ältere Launcher) gibt es nichts zu vergleichen,
+/// dann gilt `compatible: true`. Passt die Version nicht, steht eine Warnung im Log.
+fn version_fields(headers: &HeaderMap, name: &str) -> (String, bool) {
+    let client = headers
+        .get(version::HEADER)
+        .map(|v| String::from_utf8_lossy(v.as_bytes()).trim().to_string());
+    let compatible = match &client {
+        None => true,
+        Some(v) => version::compatible(v, version::VERSION),
+    };
+    if !compatible {
+        eprintln!(
+            "Warnung: {name} meldet sich mit Version {} an, der Server hat {}. Die Versionen passen nicht zusammen",
+            client.as_deref().unwrap_or_default(),
+            version::VERSION
+        );
+    }
+    (version::VERSION.to_string(), compatible)
+}
+
 async fn register(
     State(db): State<Db>,
     State(clock): State<Clock>,
+    headers: HeaderMap,
     Json(c): Json<Credentials>,
 ) -> ApiResult<Json<Value>> {
     let name = c.name.trim();
@@ -319,14 +342,20 @@ async fn register(
     }
     let user_id = conn.last_insert_rowid();
     let token = issue_token(&conn, user_id, now)?;
-    Ok(Json(
-        json!({ "user_id": user_id, "name": name, "token": token }),
-    ))
+    let (server_version, compatible) = version_fields(&headers, name);
+    Ok(Json(json!({
+        "user_id": user_id,
+        "name": name,
+        "token": token,
+        "server_version": server_version,
+        "compatible": compatible,
+    })))
 }
 
 async fn login(
     State(db): State<Db>,
     State(clock): State<Clock>,
+    headers: HeaderMap,
     Json(c): Json<Credentials>,
 ) -> ApiResult<Json<Value>> {
     let wrong = || {
@@ -348,9 +377,14 @@ async fn login(
         .verify_password(c.password.as_bytes(), pw_hash.as_str())
         .map_err(|_| wrong())?;
     let token = issue_token(&conn, user_id, clock.now())?;
-    Ok(Json(
-        json!({ "user_id": user_id, "name": name, "token": token }),
-    ))
+    let (server_version, compatible) = version_fields(&headers, &name);
+    Ok(Json(json!({
+        "user_id": user_id,
+        "name": name,
+        "token": token,
+        "server_version": server_version,
+        "compatible": compatible,
+    })))
 }
 
 /// Abmelden: Der benutzte Token wird ungültig.
@@ -2317,7 +2351,7 @@ async fn close_unexplained(
 // ---------------------------------------------------------------- Sonstiges
 
 async fn health() -> Json<Value> {
-    Json(json!({ "ok": true, "version": env!("CARGO_PKG_VERSION") }))
+    Json(json!({ "ok": true, "version": version::VERSION }))
 }
 
 /// Das Dashboard ist eine einzelne HTML-Datei und wird fest in die .exe eingebaut.
