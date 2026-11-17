@@ -2,6 +2,7 @@
 //! Der Server ist die Wahrheit. Was im Spielstand steht, ist nur eine Kopie.
 pub mod api;
 pub mod clock;
+pub mod damage;
 pub mod db;
 pub mod error;
 pub mod levels;

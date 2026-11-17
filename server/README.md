@@ -25,10 +25,10 @@ Unter http://127.0.0.1:8787 liegt die Weboberfläche. Dort kannst du:
 - eine Firma gründen oder mit einem Einladungscode beitreten
 - den Fuhrpark sehen, Lkw ausleihen und zurückgeben
 - bei den Fahrern sehen, wer gerade online ist (grüner Punkt), mit welchem Lkw, in welcher Stadt und mit welchem Auftrag, dazu Level, Firmenkilometer, Lohnstufe, Lohnkonto und offenen Lohn
-- im Fuhrpark sehen, ob ein verliehener Lkw gerade gefahren wird
+- im Fuhrpark sehen, ob ein verliehener Lkw gerade gefahren wird, wie viel Schaden jeder Lkw hat (reparierbar und dauerhaft) und welcher in der Werkstatt steht
 - in der Kopfzeile das Passwort ändern
 - im Kassenbuch alle Buchungen sehen, die Lohnabrechnungen als eine Zeile je Abrechnung zum Aufklappen
-- als Chef: sehen, wer einen Firmen-Lkw fährt, ohne ihn geliehen zu haben, einen Lkw ohne Kilometerstand mit dem letzten bekannten Zustand zurücknehmen, Lkw anlegen, Tagespauschale, Uhrzeit der Abrechnung, Betriebsvorschuss, Erlösfaktor und Lohnstufen einstellen, Geld zwischen Kasse und Fahrern überweisen, ungeklärte Beträge aus dem Geldabgleich sehen und schließen
+- als Chef: sehen, wer einen Firmen-Lkw fährt, ohne ihn geliehen zu haben, einen Lkw ohne Kilometerstand mit dem letzten bekannten Zustand zurücknehmen, Lkw anlegen, Lkw reparieren lassen, Tagespauschale, Uhrzeit der Abrechnung, Betriebsvorschuss, Erlösfaktor, Lohnstufen, Schadensgrenze, Satz der Werkstatt und Haftung einstellen, Geld zwischen Kasse und Fahrern überweisen, ungeklärte Beträge aus dem Geldabgleich sehen und schließen
 - im Testbereich "Ereignis von Hand buchen" Ereignisse mit Strecke buchen, einen Geldabgleich durchspielen, einen Herzschlag senden und die Lohnabrechnung sofort auslösen. Im Spiel melden Ereignisse und Herzschlag das Plugin aus `crates/spedhub-plugin` und den Abgleich der Launcher
 
 Die Seite holt sich alle 5 Sekunden den neuen Stand. Sie steckt als eine einzelne Datei in `server/web/index.html` und wird beim Bauen fest in die .exe eingebaut. Nach einer Änderung an der Datei also neu starten:
@@ -100,14 +100,15 @@ Alle Anfragen und Antworten sind JSON. Außer bei `register`, `login` und `healt
 | `POST /api/me/password` | angemeldet | Passwort ändern: `old_password`, `new_password` (mindestens 8 Zeichen). Alle anderen Tokens des Nutzers werden ungültig, der benutzte bleibt. Liefert `other_tokens_removed`. Falsches altes Passwort: 403 |
 | `POST /api/companies` | angemeldet | Firma gründen: `name`. Wer gründet, ist Chef. Die Firma bekommt die fünf Standard-Lohnstufen |
 | `POST /api/companies/join` | angemeldet | Beitreten mit `invite_code`, Rolle Fahrer |
-| `GET /api/companies/{id}` | Mitglied | Kassenstand, Einstellungen, Lohnstufen, Mitglieder mit Lohnkonto, offenem Lohn, Erfahrung, Level, Firmenkilometern und Lohnstufe. Je Mitglied außerdem `online` und `last_seen`, solange online auch `plate`, `near_city`, `speed_kmh`, `job` und `truck_id` (der eigene geliehene Lkw), siehe Online. Einladungscode, Zahl der offenen ungeklärten Beträge und `foreign_truck` sieht nur der Chef |
-| `PATCH /api/companies/{id}` | Chef | Einstellungen ändern, alle optional: `revenue_factor`, `daily_flat`, `payroll_time` (wie `04:00`), `advance` |
+| `GET /api/companies/{id}` | Mitglied | Kassenstand, Einstellungen (darunter `damage_limit`, `repair_rate`, `liability_percent`), Lohnstufen, Mitglieder mit Lohnkonto, offenem Lohn, Erfahrung, Level, Firmenkilometern und Lohnstufe. Je Mitglied außerdem `online` und `last_seen`, solange online auch `plate`, `near_city`, `speed_kmh`, `job` und `truck_id` (der eigene geliehene Lkw), siehe Online. Einladungscode, Zahl der offenen ungeklärten Beträge und `foreign_truck` sieht nur der Chef |
+| `PATCH /api/companies/{id}` | Chef | Einstellungen ändern, alle optional: `revenue_factor`, `daily_flat`, `payroll_time` (wie `04:00`), `advance`, `damage_limit` (Schadensgrenze in Prozent, 0 bis 100, Standard 25), `repair_rate` (Euro je Prozentpunkt Schaden, 0 bis 1000000, Standard 150), `liability_percent` (Haftung in Prozent, 0 bis 100, Standard 0). Außerhalb der Grenzen 400 |
 | `PUT /api/companies/{id}/wage-levels` | Chef | Lohnstufen ersetzen: `levels`, eine Liste aus `min_level`, `min_km`, `cents_per_km`. 1 bis 20 Stufen |
-| `GET /api/companies/{id}/trucks` | Mitglied | Fuhrpark mit Info, wer was gerade geliehen hat, und `old_plates` (frühere Kennzeichen, älteste zuerst). Dazu `driving` (der Ausleiher ist online und meldet genau diesen Lkw), dann auch `speed_kmh` und `near_city`, und `last_known` (`at`, `odometer_km`) mit dem letzten bekannten Zustand. Der Chef bekommt `foreign_drivers`: wer den Lkw gerade fährt, ohne ihn geliehen zu haben |
+| `GET /api/companies/{id}/trucks` | Mitglied | Fuhrpark mit Info, wer was gerade geliehen hat, und `old_plates` (frühere Kennzeichen, älteste zuerst). Dazu `driving` (der Ausleiher ist online und meldet genau diesen Lkw), dann auch `speed_kmh` und `near_city`, und `last_known` (`at`, `odometer_km`) mit dem letzten bekannten Zustand. Je Lkw außerdem `damage` und `damage_unfixable` (Prozent, siehe Schaden und Werkstatt), `in_workshop` und `repair_cost` (was eine Reparatur jetzt kosten würde). Der Chef bekommt `foreign_drivers`: wer den Lkw gerade fährt, ohne ihn geliehen zu haben |
 | `POST /api/companies/{id}/trucks` | Chef | Lkw anlegen: `plate`, `model`, optional `package`, `odometer_km`, `state` |
-| `POST /api/trucks/{id}/checkout` | Mitglied | Ausleihen. Liefert Bauplan und Zustand. 409, wenn schon verliehen |
+| `POST /api/trucks/{id}/checkout` | Mitglied | Ausleihen. Liefert Bauplan und Zustand. 409, wenn schon verliehen oder in der Werkstatt. Merkt sich den Schaden beim Ausleihen |
 | `GET /api/trucks/{id}/lease` | Ausleiher oder Chef | Die laufende Leihe noch einmal: `lease_id`, `user_id`, `taken_at` und `truck` wie beim Ausleihen, mit Bauplan, Zustand und Kennzeichen. 403 für alle anderen, 409, wenn der Lkw nicht verliehen ist |
-| `POST /api/trucks/{id}/checkin` | Ausleiher oder Chef | Zurückgeben: `odometer_km`, optional `state` und `plate`. Mit `plate` bekommt der Lkw ein neues Kennzeichen, das alte kommt in `old_plates`. 409, wenn ein anderer Lkw der Firma das Kennzeichen gerade hat. Ohne `odometer_km` nimmt der Chef den Lkw mit dem letzten bekannten Zustand zurück, die Antwort sagt unter `from_last_known.at`, von wann er ist. Ohne letzten Zustand 409, ein Fahrer ohne Kilometerstand bekommt 400 |
+| `POST /api/trucks/{id}/checkin` | Ausleiher oder Chef | Zurückgeben: `odometer_km`, optional `state` und `plate`. Mit `plate` bekommt der Lkw ein neues Kennzeichen, das alte kommt in `old_plates`. 409, wenn ein anderer Lkw der Firma das Kennzeichen gerade hat. Ohne `odometer_km` nimmt der Chef den Lkw mit dem letzten bekannten Zustand zurück, die Antwort sagt unter `from_last_known.at`, von wann er ist. Ohne letzten Zustand 409, ein Fahrer ohne Kilometerstand bekommt 400. Die Antwort enthält außerdem `damage`, `damage_unfixable`, `damage_out` (beim Ausleihen), `damage_new` (dazugekommen), `liability` (was der Ausleiher zahlt), `liability_user_id`, `damage_limit` und `in_workshop` |
+| `POST /api/trucks/{id}/repair` | Chef | Lkw reparieren lassen, siehe Schaden und Werkstatt. 409, wenn er verliehen ist, keinen Schaden hat oder die Kasse nicht reicht. Liefert `cost`, `damage_before`, `damage`, `damage_unfixable`, `rev`, `in_workshop` und den neuen Kassenstand `balance` |
 | `POST /api/companies/{id}/heartbeat` | Mitglied | Herzschlag aus dem Spiel, siehe Online: `plate`, optional `odometer_km`, `wear` (`engine`, `transmission`, `cabin`, `chassis`, `wheels`, je 0 bis 1), `fuel_relative` (0 bis 1), `fuel_liters`, `near_city`, `speed_kmh`, `job` (`cargo`, `source_city`, `target_city`) oder `null`. Ohne Kennzeichen oder mit unplausiblen Zahlen 400. Liefert `last_seen` und `leased_truck_id`, wenn das Kennzeichen zum eigenen geliehenen Lkw passt |
 | `POST /api/companies/{id}/events` | Mitglied | Ereignis aus dem Spiel buchen: `event_id`, `type`, `amount`, optional `distance_km`, `note` und `occurred_at` (wann es im Spiel passiert ist, Unix-Sekunden). Bei `job_delivered` optional `cargo`, `source_city` und `target_city` (höchstens 64 Zeichen, ohne Steuerzeichen). War es vor einem schon abgeglichenen Spielstand passiert, korrigiert der Server diesen Abgleich, die Antwort sagt das unter `late`. Die Antwort enthält `occurred_at`, leer ohne plausiblen Zeitpunkt |
 | `GET /api/companies/{id}/ledger` | Mitglied | Die letzten Buchungen, `?limit=50`. Jede mit `game_amount` (Betrag im Spiel), `distance_km`, `payroll_id`, `event_id`, `occurred_at` (leer, wenn der Client keinen plausiblen Zeitpunkt geschickt hat) und bei Aufträgen `cargo`, `source_city`, `target_city` (leer bei alten Buchungen) |
@@ -160,6 +161,14 @@ Dazu kommen Buchungen aus dem Geldabgleich, alle auf die Firmenkasse und mit dem
 |---|---|---|
 | `betriebskosten` | negativ | Im Spiel fehlt Geld, das die gemeldeten Ereignisse nicht erklären |
 | `betriebskosten_korrektur` | positiv | Ein spät gemeldetes Ereignis zeigt, dass ein Abgleich zu viel Betriebskosten gebucht hat. Im Kassenbuch "Betriebskosten, Korrektur" |
+
+Und aus Werkstatt und Haftung (siehe Schaden und Werkstatt):
+
+| `kind` | Konto | Betrag | Wann |
+|---|---|---|---|
+| `werkstatt` | Firmenkasse, `user_id` ist der Chef, der reparieren lässt | negativ | Der Chef lässt einen Lkw reparieren. Notiz wie "Werkstatt SPED 001, 28,5 %". Im Kassenbuch "Werkstatt" |
+| `haftung` | Lohnkonto des Ausleihers | negativ | Rückgabe mit neuem Schaden, Haftung über 0. Im Kassenbuch "Haftung" |
+| `haftung` | Firmenkasse, `user_id` ist der Ausleiher | positiv | dieselbe Rückgabe, gleicher Betrag. Notiz wie "Haftung SPED 001, 6 Prozentpunkte neuer Schaden" |
 
 Die Typen entsprechen den Gameplay-Events aus dem Telemetrie-SDK. Jede `event_id` wird pro Firma nur einmal gebucht. Schickt der Client ein Ereignis doppelt, kommt `duplicate: true` zurück und es passiert nichts.
 
@@ -214,6 +223,32 @@ Spät gemeldete Ereignisse: Kommt ein Ereignis erst an, nachdem sein Fenster sch
 - Ein offener ungeklärter Betrag wird kleiner oder geschlossen (ohne Namen, Notiz "Durch spät gemeldete Ereignisse erklärt"). Was der Chef schon geschlossen hat, bleibt geschlossen. Bleibt mehr übrig, als er hingenommen hat, kommt ein neuer offener Eintrag dazu.
 - Ereignisse vor dem ersten Abgleich stecken im Anfangsstand, Ereignisse zwischen gelesenem und neu geschriebenem Spielstand zählen nirgends. Dort wird nichts korrigiert.
 
+## Schaden und Werkstatt
+
+Reparaturen im Spiel bezahlt der Fahrer mit Geld aus dem Spiel, das landet über den Geldabgleich als Betriebskosten bei der Firma. Gibt ein Fahrer einen Lkw beschädigt zurück, bekäme ohne Werkstatt der nächste Fahrer den Schaden mit. Deshalb rechnet der Server je Lkw einen Schaden aus und sperrt Lkw mit zu viel davon.
+
+**Schaden.** Aus dem gespeicherten Zustand (`trucks.state`, Feldnamen von `TruckState`, Verschleiß 0 bis 1) rechnet `src/damage.rs` die gewichtete Summe der reparierbaren Verschleißwerte, in Prozent auf eine Nachkommastelle gerundet. Die Gewichtung steht dort an einer Stelle (`WEIGHTS`):
+
+| Bauteil | Feld | Gewicht |
+|---|---|---|
+| Motor | `engine_wear` | 30 |
+| Getriebe | `transmission_wear` | 20 |
+| Kabine | `cabin_wear` | 10 |
+| Fahrgestell | `chassis_wear` | 25 |
+| Räder | `wheels_wear`, Mittelwert über die Achsen | 15 |
+
+Ein ganz verschlissener Lkw hat also 100 Prozent Schaden. Fehlende Felder und Werte, die keine Zahl sind, zählen als 0, Werte außerhalb von 0 bis 1 werden begrenzt. Der dauerhafte Verschleiß (`*_unfixable`, `wheels_wear_unfixable`) zählt nicht als Schaden. Er wird mit derselben Gewichtung getrennt berechnet (`damage_unfixable`) und nur angezeigt. Der Schaden in der Fuhrparkliste ist der vom gespeicherten Zustand, also der von der letzten Rückgabe oder Reparatur, nicht der aus dem Herzschlag während einer Leihe.
+
+**Werkstatt.** Nach jeder Rückgabe, auch wenn der Chef mit dem letzten bekannten Zustand zurücknimmt, rechnet der Server den Schaden des neuen Zustands. Liegt er über der Schadensgrenze der Firma (`damage_limit`, Standard 25 Prozent, genau auf der Grenze zählt noch nicht), steht der Lkw in der Werkstatt (`trucks.in_workshop`) und lässt sich nicht ausleihen (409). Eine geänderte Grenze gilt ab der nächsten Rückgabe, ein Lkw in der Werkstatt bleibt dort, bis er repariert ist.
+
+**Reparatur.** `POST /api/trucks/{id}/repair`, nur der Chef, nur wenn der Lkw nicht verliehen ist und Schaden hat. Kosten = Schaden mal `repair_rate` (Standard 150 Euro je Prozentpunkt), auf ganze Euro gerundet. Reicht die Kasse nicht, ändert sich nichts. Sonst in einer Transaktion: Buchung `werkstatt` aus der Firmenkasse, im gespeicherten Zustand `engine_wear`, `transmission_wear`, `cabin_wear`, `chassis_wear` und jede Achse in `wheels_wear` auf 0 (fehlende Felder werden nicht angelegt), der dauerhafte Verschleiß bleibt. Die Revision steigt, weil sich der Zustand geändert hat, und der Lkw ist wieder frei. Der nächste Fahrer bekommt beim Ausleihen den reparierten Zustand. Kosten von 0 Euro (Satz 0 oder auf 0 gerundet) sind kostenlos: Dann wird nichts gebucht, und die Reparatur geht auch, wenn die Kasse im Minus ist.
+
+**Haftung.** Beim Ausleihen merkt sich der Server den Schaden in `leases.damage_out`. Bei der Rückgabe ist der neue Schaden `max(0, Schaden bei Rückgabe - damage_out)` in Prozentpunkten. Der Ausleiher zahlt davon den Haftungsanteil der Firma (`liability_percent`, Standard 0):
+
+    Haftung = runden(neuer Schaden * repair_rate * liability_percent / 100)
+
+Gebucht wird vom Lohnkonto des Ausleihers in die Firmenkasse, beides `haftung` und in derselben Transaktion wie die Rückgabe. Das zahlt immer der Ausleiher, auch wenn der Chef den Lkw zurücknimmt. Schaden, der beim Ausleihen schon da war, zählt nicht. Bei 0 wird nichts gebucht. Das Lohnkonto darf dabei ins Minus. Leihen von vor dieser Fassung haben kein `damage_out`, dann gilt der gespeicherte Zustand, der sich während einer Leihe nicht ändert.
+
 ## Was noch fehlt
 
 - Lkw-Kauf für die Firma
@@ -226,6 +261,7 @@ Spät gemeldete Ereignisse: Kommt ein Ereignis erst an, nachdem sein Fenster sch
 | `src/main.rs` | Start, Einstellungen |
 | `src/api.rs` | Alle Endpunkte, Buchungsregeln und Geldabgleich |
 | `src/presence.rs` | Herzschlag, Online, Kennzeichen vergleichen, letzter bekannter Zustand |
+| `src/damage.rs` | Schaden aus dem Zustand, Gewichtung, Kosten der Werkstatt, Haftung |
 | `src/reconcile.rs` | Abgleichfenster, Zeitpunkte und Korrektur bei spät gemeldeten Ereignissen |
 | `src/payroll.rs` | Tägliche Lohnabrechnung |
 | `src/levels.rs` | Level aus Erfahrungspunkten, Lohnstufen |

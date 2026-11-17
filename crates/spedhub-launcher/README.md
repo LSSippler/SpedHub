@@ -33,6 +33,8 @@ Läuft das Spiel, schreibt der Launcher nichts in den Spielstand und sagt das au
 
 Über dem Fuhrpark zeigt der Launcher dein Lohnkonto, offenen Lohn, Level, Firmenkilometer und Lohnstufe. Im Fuhrpark steht bei einem verliehenen Lkw "fährt gerade" mit der Geschwindigkeit, wenn das Plugin des Ausleihers gerade Herzschläge mit genau diesem Lkw schickt.
 
+Die Spalte "Schaden" zeigt den Schaden jedes Lkw in Prozent, so wie der Server ihn aus dem Zustand der letzten Rückgabe rechnet, dazu den dauerhaften Verschleiß, etwa `12,5 %, dauerhaft 3 %`. Liegt ein Lkw nach der Rückgabe über der Schadensgrenze der Firma, steht er "in der Werkstatt" und "Ausleihen" ist ausgegraut, bis der Chef ihn im Dashboard reparieren lässt. Nach der Rückgabe sagt der Launcher, wie viel Schaden der Lkw hat, ob er in die Werkstatt muss und was du an Haftung für neuen Schaden aus dem Lohnkonto zahlst, wenn die Firma eine Haftung eingestellt hat. Details in `server/README.md`, Abschnitt "Schaden und Werkstatt".
+
 ## Einstellungen
 
 Unten im Fenster, zum Aufklappen. Dort lässt sich das Passwort ändern: altes Passwort, neues (mindestens 8 Zeichen) und die Wiederholung, dann "Passwort ändern". Danach sind alle anderen Anmeldungen mit diesem Konto abgemeldet, zum Beispiel das Dashboard auf einem anderen Rechner. Der Launcher behält seinen Token und bleibt angemeldet, ebenso das Plugin, das denselben Token aus `plugin.json` nimmt. Ein falsches altes Passwort meldet der Launcher im Klartext und meldet dich dabei nicht ab.

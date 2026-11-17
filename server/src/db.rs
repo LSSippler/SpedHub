@@ -234,6 +234,23 @@ const COLUMNS: &[(&str, &str, &str)] = &[
         "unexplained_attributed",
         "INTEGER NOT NULL DEFAULT 0",
     ),
+    // Schadensgrenze in Prozent: Liegt ein Lkw nach der Rückgabe darüber, kommt er in die
+    // Werkstatt und lässt sich nicht ausleihen
+    ("companies", "damage_limit", "INTEGER NOT NULL DEFAULT 25"),
+    // Werkstatt: Euro je Prozentpunkt Schaden
+    ("companies", "repair_rate", "INTEGER NOT NULL DEFAULT 150"),
+    // Haftung: so viel Prozent des neuen Schadens zahlt der Fahrer bei der Rückgabe
+    (
+        "companies",
+        "liability_percent",
+        "INTEGER NOT NULL DEFAULT 0",
+    ),
+    // 1, solange der Lkw in der Werkstatt steht. Gesetzt bei der Rückgabe, gelöscht bei der
+    // Reparatur.
+    ("trucks", "in_workshop", "INTEGER NOT NULL DEFAULT 0"),
+    // Schaden in Prozent beim Ausleihen. Leer bei Leihen von vor der Werkstatt, dann gilt der
+    // gespeicherte Zustand, der sich während einer Leihe nicht ändert.
+    ("leases", "damage_out", "REAL"),
 ];
 
 /// Fünf Lohnstufen von 40 bis 80 Cent je Kilometer: (Level im Spiel, Firmenkilometer, Cent je km).

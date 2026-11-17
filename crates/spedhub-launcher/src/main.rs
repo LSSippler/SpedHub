@@ -4,7 +4,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 use eframe::egui;
-use spedhub_launcher::client::{Client, Company, Me, Truck};
+use spedhub_launcher::client::{Client, Company, Me, Truck, format_percent};
 use spedhub_launcher::flows::{describe, lease_package, sync_and_write};
 use spedhub_launcher::profiles::{Profile, SaveSlot, find_profiles, list_slots};
 use spedhub_launcher::savegame::{
@@ -518,10 +518,24 @@ impl App {
                 Some(p) => format!(". Neues Kennzeichen {p}, das alte merkt sich der Server"),
                 None => String::new(),
             };
-            Ok(Done::Info(format!(
-                "{plate} ist zurückgegeben, {} km gefahren{renamed}",
-                r.driven_km
-            )))
+            let mut text = format!(
+                "{plate} ist zurückgegeben, {} km gefahren{renamed}. Schaden {} %",
+                r.driven_km,
+                format_percent(r.damage)
+            );
+            if r.liability > 0 {
+                text.push_str(&format!(
+                    ". Haftung für {} Prozentpunkte neuen Schaden: {} Euro vom Lohnkonto",
+                    format_percent(r.damage_new),
+                    r.liability
+                ));
+            }
+            if r.in_workshop {
+                text.push_str(
+                    ". Das ist über der Schadensgrenze, der Lkw steht jetzt in der Werkstatt",
+                );
+            }
+            Ok(Done::Info(text))
         });
     }
 
@@ -750,13 +764,14 @@ impl App {
         }
         let mut action: Option<(&'static str, Truck)> = None;
         egui::Grid::new("fuhrpark")
-            .num_columns(5)
+            .num_columns(6)
             .striped(true)
             .spacing([16.0, 6.0])
             .show(ui, |ui| {
                 ui.strong("Kennzeichen");
                 ui.strong("Modell");
                 ui.strong("km");
+                ui.strong("Schaden");
                 ui.strong("Fährt gerade");
                 ui.strong("");
                 ui.end_row();
@@ -764,11 +779,13 @@ impl App {
                     ui.label(&t.plate);
                     ui.label(&t.model);
                     ui.label(t.odometer_km.to_string());
+                    ui.label(t.damage_text());
                     let mine = t
                         .leased_by
                         .as_ref()
                         .is_some_and(|l| Some(l.user_id) == my_id);
                     let who = match &t.leased_by {
+                        None if t.in_workshop => "in der Werkstatt".to_string(),
                         None => "frei".to_string(),
                         Some(_) if mine => "du".to_string(),
                         Some(l) => l.name.clone(),
@@ -783,8 +800,14 @@ impl App {
                     ui.horizontal(|ui| {
                         let idle = self.busy.is_none();
                         if t.leased_by.is_none() {
+                            // Ein Lkw in der Werkstatt lässt sich erst nach der Reparatur ausleihen
                             if ui
-                                .add_enabled(idle, egui::Button::new("Ausleihen"))
+                                .add_enabled(idle && !t.in_workshop, egui::Button::new("Ausleihen"))
+                                .on_disabled_hover_text(if t.in_workshop {
+                                    "In der Werkstatt. Ausleihen geht erst, wenn der Chef ihn im Dashboard reparieren lässt"
+                                } else {
+                                    "Bitte warten"
+                                })
                                 .clicked()
                             {
                                 action = Some(("ausleihen", t.clone()));

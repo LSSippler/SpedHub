@@ -88,6 +88,43 @@ pub struct Truck {
     /// Geschwindigkeit in km/h, nur solange `driving`
     #[serde(default)]
     pub speed_kmh: Option<f64>,
+    /// Reparierbarer Schaden in Prozent aus dem Zustand der letzten Rückgabe. Ältere Server
+    /// liefern das nicht.
+    #[serde(default)]
+    pub damage: f64,
+    /// Dauerhafter Verschleiß in Prozent, lässt sich nicht reparieren
+    #[serde(default)]
+    pub damage_unfixable: f64,
+    /// Der Lkw steht in der Werkstatt und lässt sich erst nach der Reparatur ausleihen
+    #[serde(default)]
+    pub in_workshop: bool,
+    /// Was eine Reparatur jetzt kosten würde, in Euro
+    #[serde(default)]
+    pub repair_cost: i64,
+}
+
+impl Truck {
+    /// Schaden für die Fuhrparkliste, etwa `12,5 %, dauerhaft 3 %`.
+    pub fn damage_text(&self) -> String {
+        let mut text = format!("{} %", format_percent(self.damage));
+        if self.damage_unfixable > 0.0 {
+            text.push_str(&format!(
+                ", dauerhaft {} %",
+                format_percent(self.damage_unfixable)
+            ));
+        }
+        text
+    }
+}
+
+/// Prozent mit höchstens einer Nachkommastelle und deutschem Komma: `12,5`, `3`.
+pub fn format_percent(p: f64) -> String {
+    let p = (p * 10.0).round() / 10.0;
+    if p.fract() == 0.0 {
+        format!("{p:.0}")
+    } else {
+        format!("{p:.1}").replace('.', ",")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -187,6 +224,18 @@ pub struct Checkin {
     pub odometer_km: i64,
     pub rev: i64,
     pub driven_km: i64,
+    /// Schaden in Prozent nach der Rückgabe
+    #[serde(default)]
+    pub damage: f64,
+    /// Schaden, der während dieser Leihe dazugekommen ist, in Prozentpunkten
+    #[serde(default)]
+    pub damage_new: f64,
+    /// Was der Ausleiher dafür aus dem Lohnkonto zahlt, in Euro
+    #[serde(default)]
+    pub liability: i64,
+    /// Über der Schadensgrenze: Der Lkw steht jetzt in der Werkstatt
+    #[serde(default)]
+    pub in_workshop: bool,
 }
 
 pub struct Client {

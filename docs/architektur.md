@@ -26,7 +26,7 @@ Nicht Teil des Projekts: ein eigener Multiplayer, Eingriffe in den Arbeitsspeich
 
 | Baustein | Aufgabe | Stand |
 |---|---|---|
-| Server (`server/`) | Accounts, Firma, Kasse, Fuhrpark, Leihen, tägliche Lohnabrechnung, Geldabgleich | läuft |
+| Server (`server/`) | Accounts, Firma, Kasse, Fuhrpark, Leihen, tägliche Lohnabrechnung, Geldabgleich, Schaden und Werkstatt | läuft |
 | Dashboard (`server/web/`) | Weboberfläche für Chef und Fahrer | läuft |
 | Save-Bibliothek (`crates/spedhub-save`) | Spielstand lesen und schreiben, Lkw exportieren, einsetzen, entfernen, Kontostand setzen | erste Fassung, im Spiel noch nicht geprüft |
 | Launcher (`crates/spedhub-launcher`) | Anmelden, Abgleich, Spielstand vorbereiten, Spiel starten, Abgleich beim Beenden | erste Fassung: Anmelden, Fuhrpark, Ausleihen und Zurückgeben, Lkw in den Spielstand schreiben, Geldabgleich, `plugin.json`, Spiel starten. Aufräumen des Profils: offen |
@@ -82,6 +82,17 @@ Das Plugin schickt alle 10 Sekunden einen Herzschlag an `POST /api/companies/{id
 ### Anmeldung
 
 Tokens laufen nach 30 Tagen ohne Benutzung ab. Wer sein Passwort ändert, meldet alle anderen Anmeldungen ab, die benutzte bleibt. Launcher und Plugin teilen sich einen Token und bleiben deshalb angemeldet, wenn das Passwort im Launcher geändert wird. Das Dashboard hat einen eigenen Token. Wird das Passwort dort geändert, sind Launcher und Plugin abgemeldet, auch auf demselben Rechner: Bis zur neuen Anmeldung im Launcher und zum nächsten Spielstart gehen keine Herzschläge durch, Buchungen warten im Postausgang.
+
+### Schaden und Werkstatt
+
+Reparaturen im Spiel zahlt der Fahrer mit Geld aus dem Spiel, das über den Geldabgleich als Betriebskosten bei der Firma landet. Gibt er einen Lkw beschädigt zurück, bekäme der nächste Fahrer den Schaden mit. Deshalb:
+
+- **Schaden:** Der Server rechnet je Lkw aus dem gespeicherten Zustand einen Schaden in Prozent, die gewichtete Summe der reparierbaren Verschleißwerte, auf eine Nachkommastelle gerundet. Gewichtung (`server/src/damage.rs`, `WEIGHTS`): Motor 30, Getriebe 20, Kabine 10, Fahrgestell 25, Räder 15 (Mittelwert über die Achsen). Fehlende Felder zählen als 0. Der dauerhafte Verschleiß (`*_unfixable`) zählt nicht als Schaden und wird mit derselben Gewichtung getrennt angezeigt.
+- **Werkstatt:** Liegt der Schaden nach einer Rückgabe über der Schadensgrenze der Firma (Standard 25 Prozent), steht der Lkw in der Werkstatt und lässt sich nicht ausleihen. Das gilt auch, wenn der Chef mit dem letzten bekannten Zustand zurücknimmt.
+- **Reparatur:** Der Chef lässt einen Lkw reparieren, der nicht verliehen ist. Kosten: Schaden mal Satz je Prozentpunkt (Standard 150 Euro), aus der Firmenkasse. Reicht sie nicht, geht es nicht. Kostet die Reparatur 0 Euro, geht sie immer, auch bei einer Kasse im Minus. Danach ist der reparierbare Verschleiß im gespeicherten Zustand 0, der dauerhafte bleibt, die Revision steigt und der Lkw ist frei.
+- **Haftung:** Je Firma ein Anteil in Prozent (Standard 0). Bei der Rückgabe zahlt der Ausleiher diesen Anteil des Schadens, der während seiner Leihe dazugekommen ist (Kosten der Werkstatt dafür), aus seinem Lohnkonto an die Firmenkasse. Der Schaden beim Ausleihen steht dafür in `leases.damage_out` und zählt nicht.
+
+Einstellungen, Formeln und Buchungsarten (`werkstatt`, `haftung`) im Detail in `server/README.md`, Abschnitt "Schaden und Werkstatt".
 
 ### Kasse
 
@@ -146,7 +157,7 @@ So liegt ein Firmen-Lkw auf dem Server (`trucks.package` und `trucks.state`):
 - **Zustand:** Kilometerstand, Wartungs-Kilometer, Verschleiß je Bauteil, Tank.
 - **Kennzeichen:** eindeutig je Lkw und Firma, aber nicht dauerhaft: Das Spiel kann es ersetzen (im Spiel bestätigt). Der Launcher meldet das neue Kennzeichen bei der Rückgabe, der Server behält die alten in `old_plates`. So lässt sich auch Telemetrie mit einem alten Kennzeichen noch zuordnen. Im Spielstand erkennt SpedHub den Lkw über Modell und Teile wieder, nicht über das Kennzeichen.
 - **Abhängigkeiten:** alle `data_path`-Einträge. Daraus ergibt sich, welche DLCs und Mods ein Fahrer braucht.
-- **Revision:** steigt bei jeder Rückgabe.
+- **Revision:** steigt bei jeder Rückgabe und bei jeder Reparatur in der Werkstatt.
 
 ## Reihenfolge
 

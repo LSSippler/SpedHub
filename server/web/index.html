@@ -90,8 +90,11 @@
   .stand { font-weight: 600; }
   .stand.frei { color: var(--frei); }
   .stand.weg { color: var(--weg); }
+  .stand.werkstatt { color: var(--fehler); }
+  .schaden.hoch { color: var(--fehler); font-weight: 600; }
+  .knoepfe { display: flex; flex-wrap: wrap; gap: .5rem; justify-content: flex-end; }
   .rueckgabe { grid-column: 1 / -1; background: var(--papier); border: 1px solid var(--rand); padding: .75rem; margin-top: .5rem; }
-  @media (max-width: 34rem) { .lkw { grid-template-columns: minmax(0, 1fr); } }
+  @media (max-width: 34rem) { .lkw { grid-template-columns: minmax(0, 1fr); } .knoepfe { justify-content: flex-start; } }
 
   table { border-collapse: collapse; width: 100%; }
   th, td { text-align: left; padding: .45rem .75rem .45rem 0; border-bottom: 1px solid var(--rand); }
@@ -249,10 +252,13 @@ const modellName = (m) => m.split(/[._]/).filter(Boolean)
 
 const ARTEN = { lohn: "Lohnanteil (altes Modell)", auftrag: "Auftrag", strafe: "Strafe", maut: "Maut", faehre: "Fähre", zug: "Zug",
                 auftrag_abgebrochen: "Auftrag abgebrochen", ueberweisung: "Überweisung", betriebskosten: "Betriebskosten",
-                betriebskosten_korrektur: "Betriebskosten, Korrektur" };
+                betriebskosten_korrektur: "Betriebskosten, Korrektur", werkstatt: "Werkstatt", haftung: "Haftung" };
 /** "2026-11-16" wird zu "16.11.2026". */
 const tag = (d) => d.split("-").reverse().join(".");
 const cent = (n) => new Intl.NumberFormat("de-DE").format(n) + "\u00a0ct";
+/** Schaden mit höchstens einer Nachkommastelle: 12,5 %. */
+const zehntel = (n) => new Intl.NumberFormat("de-DE", { maximumFractionDigits: 1 }).format(n);
+const prozent = (n) => zehntel(n) + "\u00a0%";
 
 function feld(beschriftung, eingabe, klasse) {
   if (!eingabe.id) eingabe.id = "f" + Math.random().toString(36).slice(2, 9);
@@ -440,7 +446,7 @@ function baueFirma() {
     h("div", { class: "stapel" },
       h("section", {},
         h("h2", {}, "Fuhrpark"),
-        h("p", { class: "blass klein" }, "Ausleihen sperrt den Lkw für alle anderen. In den Spielstand schreibt ihn später der Launcher."),
+        h("p", { class: "blass klein", id: "fuhrpark-hinweis" }),
         h("div", { id: "fuhrpark" })),
       h("section", {}, h("h2", {}, "Fahrer"), h("div", { id: "fahrer" })),
       chef ? baueBuero() : null,
@@ -464,6 +470,9 @@ function zeichneDaten() {
 function zeichneFuhrpark() {
   const chef = zustand.firma.your_role === "chef";
   const box = $("fuhrpark");
+  $("fuhrpark-hinweis").textContent = "Ausleihen sperrt den Lkw für alle anderen. In den Spielstand schreibt ihn später der Launcher. "
+    + "Liegt der Schaden nach der Rückgabe über " + prozent(zustand.firma.damage_limit)
+    + ", kommt der Lkw in die Werkstatt und lässt sich erst nach der Reparatur wieder ausleihen.";
   if (!zustand.lkw.length) {
     box.replaceChildren(h("p", {}, chef
       ? "Noch kein Lkw im Fuhrpark. Leg unten im Büro den ersten an."
@@ -473,16 +482,24 @@ function zeichneFuhrpark() {
   box.replaceChildren(...zustand.lkw.map((t) => {
     const bei = t.leased_by;
     const meiner = bei && bei.user_id === zustand.ich.user_id;
-    let knopf = null;
-    if (!bei) {
-      knopf = h("button", { onclick: (e) => versuche(async () => {
+    const knoepfe = [];
+    if (!bei && !t.in_workshop) {
+      knoepfe.push(h("button", { onclick: (e) => versuche(async () => {
         await api("POST", "/api/trucks/" + t.id + "/checkout");
         await auffrischen();
         melde(t.plate + " ist jetzt an dich verliehen.");
-      }, e.target) }, "Ausleihen");
-    } else if (meiner || chef) {
-      knopf = h("button", { class: "leise", onclick: () => { zustand.rueckgabe = t.id; zeichneFuhrpark(); } },
-        meiner ? "Zurückgeben" : "Zurücknehmen");
+      }, e.target) }, "Ausleihen"));
+    } else if (bei && (meiner || chef)) {
+      knoepfe.push(h("button", { class: "leise", onclick: () => { zustand.rueckgabe = t.id; zeichneFuhrpark(); } },
+        meiner ? "Zurückgeben" : "Zurücknehmen"));
+    }
+    // Werkstatt: nur der Chef, nur bei einem Lkw mit Schaden, der gerade nicht verliehen ist
+    if (chef && !bei && t.damage > 0) {
+      knoepfe.push(h("button", { class: t.in_workshop ? "" : "leise", onclick: (e) => versuche(async () => {
+        const r = await api("POST", "/api/trucks/" + t.id + "/repair", {});
+        await auffrischen();
+        melde(t.plate + " ist repariert" + (r.cost ? ", " + euro(r.cost) + " aus der Firmenkasse" : "") + ". Der Lkw ist wieder frei.");
+      }, e.target) }, "Reparieren lassen, " + euro(t.repair_cost)));
     }
     // Aus dem Herzschlag: der Ausleiher fährt gerade genau diesen Lkw
     const faehrt = t.driving
@@ -493,18 +510,39 @@ function zeichneFuhrpark() {
     // Nur der Chef sieht, wer einen Lkw fährt, ohne ihn geliehen zu haben
     const fremd = (t.foreign_drivers || []).map((d) =>
       h("div", { class: "klein fremd" }, d.name + " fährt diesen Lkw, ohne ihn geliehen zu haben"));
+    // Schaden aus dem Zustand der letzten Rückgabe. Dauerhafter Verschleiß lässt sich nicht reparieren.
+    const ueber = t.damage > zustand.firma.damage_limit;
+    const schaden = h("div", { class: "klein schaden" + (ueber ? " hoch" : "") },
+      "Schaden " + prozent(t.damage) + (t.damage_unfixable > 0 ? ", dauerhaft " + prozent(t.damage_unfixable) : ""));
+    const werkstatt = t.in_workshop && !chef
+      ? h("div", { class: "klein blass" }, "Ausleihen geht erst wieder, wenn der Chef ihn reparieren lässt.")
+      : null;
+    const stand = bei
+      ? h("span", { class: "stand weg" }, meiner ? "bei dir" : "bei " + bei.name, " seit " + wann(bei.since))
+      : t.in_workshop ? h("span", { class: "stand werkstatt" }, "in der Werkstatt")
+      : h("span", { class: "stand frei" }, "frei");
     const zeile = h("div", { class: "lkw" },
       h("div", {}, h("span", { class: "kz" }, h("span", {}, t.plate))),
       h("div", {},
         h("div", { class: "modell" }, modellName(t.model)),
-        h("div", { class: "klein" }, km(t.odometer_km), ", ",
-          bei ? h("span", { class: "stand weg" }, meiner ? "bei dir" : "bei " + bei.name, " seit " + wann(bei.since))
-              : h("span", { class: "stand frei" }, "frei")),
-        faehrt, fremd),
-      h("div", {}, zustand.rueckgabe === t.id ? null : knopf));
+        h("div", { class: "klein" }, km(t.odometer_km), ", ", stand),
+        schaden, werkstatt, faehrt, fremd),
+      h("div", { class: "knoepfe" }, zustand.rueckgabe === t.id ? null : knoepfe));
     if (zustand.rueckgabe === t.id) zeile.append(baueRueckgabe(t));
     return zeile;
   }));
+}
+
+/** Meldung nach einer Rückgabe: Schaden, Haftung und ob der Lkw jetzt in der Werkstatt steht. */
+function nachRueckgabe(t, r, anfang) {
+  let text = anfang + " Schaden " + prozent(r.damage) + ".";
+  if (r.liability > 0) {
+    const wer = r.liability_user_id === zustand.ich.user_id ? "deinem Lohnkonto"
+      : "dem Lohnkonto von " + ((t.leased_by && t.leased_by.name) || "dem Fahrer");
+    text += " Haftung für " + zehntel(r.damage_new) + " Prozentpunkte neuen Schaden: " + euro(r.liability) + " von " + wer + ".";
+  }
+  if (r.in_workshop) text += " Das ist über der Grenze von " + prozent(r.damage_limit) + ", der Lkw steht jetzt in der Werkstatt.";
+  melde(text);
 }
 
 function baueRueckgabe(t) {
@@ -522,14 +560,14 @@ function baueRueckgabe(t) {
           const r = await api("POST", "/api/trucks/" + t.id + "/checkin", {});
           zustand.rueckgabe = null;
           await auffrischen();
-          melde(t.plate + " ist zurück mit dem letzten bekannten Zustand von " + wann(r.from_last_known.at) + ", " + km(r.driven_km) + " gefahren.");
+          nachRueckgabe(t, r, t.plate + " ist zurück mit dem letzten bekannten Zustand von " + wann(r.from_last_known.at) + ", " + km(r.driven_km) + " gefahren.");
         }, e.target) }, "Mit letztem bekanntem Zustand zurücknehmen"))
     : null;
   const form = formular(async () => {
       const r = await api("POST", "/api/trucks/" + t.id + "/checkin", { odometer_km: Number(stand.value) });
       zustand.rueckgabe = null;
       await auffrischen();
-      melde(t.plate + " ist zurück, " + km(r.driven_km) + " gefahren.");
+      nachRueckgabe(t, r, t.plate + " ist zurück, " + km(r.driven_km) + " gefahren.");
     },
     h("div", { class: "zeile" },
       feld("Kilometerstand bei Rückgabe", stand),
@@ -707,6 +745,9 @@ function baueBuero() {
   const pauschale = h("input", { type: "number", min: 0, max: 100000, value: f0.daily_flat, required: true });
   const uhr = h("input", { type: "time", value: f0.payroll_time, required: true });
   const vorschuss = h("input", { type: "number", min: 0, max: 10000000, value: f0.advance, required: true });
+  const grenze = h("input", { type: "number", min: 0, max: 100, value: f0.damage_limit, required: true });
+  const satz = h("input", { type: "number", min: 0, max: 1000000, value: f0.repair_rate, required: true });
+  const haftung = h("input", { type: "number", min: 0, max: 100, value: f0.liability_percent, required: true });
   const kz = h("input", { required: true, maxlength: 12, placeholder: "SPED 001" });
   const modell = h("input", { required: true, placeholder: "scania.s_2016" });
   const stand = h("input", { type: "number", min: 0, value: 0, required: true });
@@ -742,6 +783,19 @@ function baueBuero() {
           feld("Betriebsvorschuss in Euro, zusätzlich zum Lohnkonto im Spiel", vorschuss),
           feld("Erlösfaktor: der gemeldete Erlös mal diese Zahl geht in die Kasse", faktor),
           h("button", {}, "Einstellungen speichern"))),
+      h("div", { class: "blatt" },
+        h("h3", {}, "Werkstatt und Haftung"),
+        h("p", { class: "klein" }, "Liegt der Schaden eines Lkw nach der Rückgabe über der Grenze, kommt er in die Werkstatt. Die Reparatur zahlt die Firmenkasse, danach ist er wieder frei. Für Schaden, der während seiner Leihe dazukommt, zahlt der Fahrer den Haftungsanteil aus dem Lohnkonto."),
+        formular(async () => {
+            await api("PATCH", "/api/companies/" + id, {
+              damage_limit: Number(grenze.value), repair_rate: Number(satz.value), liability_percent: Number(haftung.value) });
+            await auffrischen();
+            melde("Werkstatt und Haftung gespeichert. Die Grenze gilt ab der nächsten Rückgabe.");
+          },
+          feld("Schadensgrenze in Prozent", grenze),
+          feld("Werkstatt: Euro je Prozentpunkt Schaden", satz),
+          feld("Haftung: so viel Prozent des neuen Schadens zahlt der Fahrer", haftung),
+          h("button", {}, "Werkstatt und Haftung speichern"))),
       baueStufen(),
       h("div", { class: "blatt" },
         h("h3", {}, "Lkw anlegen"),

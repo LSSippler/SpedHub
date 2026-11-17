@@ -3045,3 +3045,632 @@ async fn alte_tokens_gelten_ab_der_umstellung_30_tage() {
     drop(db);
     let _ = std::fs::remove_file(&path);
 }
+
+// ------------------------------------------------------------ Schaden und Werkstatt
+
+/// Ein voller Zustand mit diesen reparierbaren Verschleißwerten, dauerhafter Verschleiß 0
+fn worn(
+    km: i64,
+    engine: f64,
+    transmission: f64,
+    cabin: f64,
+    chassis: f64,
+    wheels: &[f64],
+) -> Value {
+    let mut s = full_state(km);
+    s["engine_wear"] = json!(engine);
+    s["transmission_wear"] = json!(transmission);
+    s["cabin_wear"] = json!(cabin);
+    s["chassis_wear"] = json!(chassis);
+    s["wheels_wear"] = json!(wheels);
+    s["wheels_wear_unfixable"] = json!(vec![0.0; wheels.len()]);
+    s
+}
+
+fn pct(v: &Value) -> f64 {
+    v.as_f64().unwrap_or_else(|| panic!("keine Zahl: {v}"))
+}
+
+impl Firma {
+    async fn repair(&self, token: &str, truck: i64) -> (StatusCode, Value) {
+        self.post(token, &format!("/api/trucks/{truck}/repair"), json!({}))
+            .await
+    }
+
+    /// Ausleihen und mit diesem Zustand zurückgeben, beides als Fahrer. Liefert die Antwort
+    /// der Rückgabe.
+    async fn drive(&self, truck: i64, km: i64, state: Value) -> Value {
+        self.checkout(&self.fahrer, truck).await;
+        let (s, r) = self
+            .checkin(
+                &self.fahrer,
+                truck,
+                json!({ "odometer_km": km, "state": state }),
+            )
+            .await;
+        assert_eq!(s, StatusCode::OK, "{r}");
+        r
+    }
+
+    /// Alle Buchungen einer Art, neueste zuerst
+    async fn entries(&self, kind: &str) -> Vec<Value> {
+        self.ledger()
+            .await
+            .into_iter()
+            .filter(|e| e["kind"] == kind)
+            .collect()
+    }
+
+    fn rev(&self, truck: i64) -> i64 {
+        let conn = self.db.lock().unwrap();
+        conn.query_row("SELECT rev FROM trucks WHERE id = ?1", [truck], |r| {
+            r.get(0)
+        })
+        .unwrap()
+    }
+}
+
+#[tokio::test]
+async fn schaden_wird_aus_dem_zustand_berechnet() {
+    let f = Firma::new().await;
+    let mut state = worn(1000, 0.1, 0.2, 0.3, 0.4, &[0.1, 0.3]);
+    state["engine_wear_unfixable"] = json!(0.1);
+    state["wheels_wear_unfixable"] = json!([0.2, 0.0]);
+    let a = f.truck("SPED 001", 1000, state).await;
+    let b = f.truck("SPED 002", 1000, json!({})).await;
+    let c = f
+        .truck("SPED 003", 1000, json!({ "engine_wear": 0.5 }))
+        .await;
+
+    // Motor 30, Getriebe 20, Kabine 10, Fahrgestell 25, Räder 15 (Mittel der Achsen):
+    // 3 + 4 + 3 + 10 + 3 = 23. Dauerhaft getrennt: 30 * 0,1 + 15 * 0,1 = 4,5
+    for token in [&f.chef, &f.fahrer] {
+        let t = f.truck_as(token, a).await;
+        assert_eq!(pct(&t["damage"]), 23.0, "{t}");
+        assert_eq!(pct(&t["damage_unfixable"]), 4.5, "{t}");
+        assert_eq!(t["in_workshop"], false);
+        assert_eq!(t["repair_cost"], 3450, "23 Prozentpunkte mal 150 Euro");
+    }
+    // Ohne Zustand kein Schaden, fehlende Felder zählen als 0
+    let t = f.truck_as(&f.fahrer, b).await;
+    assert_eq!(
+        (
+            pct(&t["damage"]),
+            pct(&t["damage_unfixable"]),
+            &t["repair_cost"]
+        ),
+        (0.0, 0.0, &json!(0))
+    );
+    let t = f.truck_as(&f.fahrer, c).await;
+    assert_eq!(pct(&t["damage"]), 15.0);
+
+    // Der Satz der Werkstatt ändert die Kosten
+    let (s, v) = f.patch(&f.chef, json!({ "repair_rate": 200 })).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(f.truck_as(&f.fahrer, a).await["repair_cost"], 4600);
+}
+
+#[tokio::test]
+async fn ueber_der_schadensgrenze_in_die_werkstatt() {
+    let f = Firma::new().await;
+    let t = f
+        .truck(
+            "SPED 001",
+            1000,
+            worn(1000, 0.0, 0.0, 0.0, 0.0, &[0.0, 0.0]),
+        )
+        .await;
+
+    // Genau auf der Grenze von 25 Prozent: noch frei
+    let r = f
+        .drive(t, 1100, worn(1100, 0.0, 0.0, 0.0, 1.0, &[0.0, 0.0]))
+        .await;
+    assert_eq!(pct(&r["damage"]), 25.0, "{r}");
+    assert_eq!(r["in_workshop"], false);
+    assert_eq!(f.truck_as(&f.chef, t).await["in_workshop"], false);
+
+    // Ein Zehntel darüber: Werkstatt
+    let r = f
+        .drive(t, 1200, worn(1200, 0.0, 0.0, 0.01, 1.0, &[0.0, 0.0]))
+        .await;
+    assert_eq!(pct(&r["damage"]), 25.1, "{r}");
+    assert_eq!(r["in_workshop"], true);
+    let l = f.truck_as(&f.fahrer, t).await;
+    assert_eq!(l["in_workshop"], true);
+    assert!(l["leased_by"].is_null());
+
+    // Ausleihen geht für niemanden, auch nicht für den Chef
+    for token in [&f.fahrer, &f.chef] {
+        let (s, v) = f
+            .post(token, &format!("/api/trucks/{t}/checkout"), json!({}))
+            .await;
+        assert_eq!(s, StatusCode::CONFLICT, "{v}");
+        assert_eq!(
+            v["error"],
+            "Der Lkw steht in der Werkstatt. Ausleihen geht erst, wenn der Chef ihn reparieren lässt"
+        );
+    }
+    assert!(f.truck_as(&f.chef, t).await["leased_by"].is_null());
+
+    // Eine höhere Grenze gilt ab der nächsten Rückgabe, der Lkw bleibt in der Werkstatt
+    f.patch(&f.chef, json!({ "damage_limit": 50 })).await;
+    assert_eq!(f.truck_as(&f.chef, t).await["in_workshop"], true);
+}
+
+#[tokio::test]
+async fn chef_rueckgabe_mit_letztem_zustand_schickt_in_die_werkstatt() {
+    let f = Firma::new().await;
+    let t = f.truck("SPED 001", 1000, full_state(1000)).await;
+    f.checkout(&f.fahrer, t).await;
+    f.clock.advance(60);
+    f.beat(
+        &f.fahrer,
+        json!({ "plate": "SPED 001", "odometer_km": 1300.0, "wear": { "engine": 0.9, "chassis": 0.5 } }),
+    )
+    .await;
+    // Das Spiel stürzt ab, die Chefin nimmt den Lkw mit dem letzten Zustand zurück:
+    // Motor 27, Getriebe 0,4, Kabine 0,3, Fahrgestell 12,5, Räder 0
+    let (s, r) = f.checkin(&f.chef, t, json!({})).await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert!(r["from_last_known"].is_object());
+    assert_eq!(pct(&r["damage"]), 40.2);
+    assert_eq!(r["in_workshop"], true);
+    assert_eq!(f.truck_as(&f.chef, t).await["in_workshop"], true);
+    let (s, _) = f
+        .post(&f.fahrer, &format!("/api/trucks/{t}/checkout"), json!({}))
+        .await;
+    assert_eq!(s, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn werkstatt_mit_genug_geld() {
+    let f = Firma::new().await;
+    f.event(&f.fahrer, "job-1", "job_delivered", 10_000, None)
+        .await;
+    let t = f
+        .truck(
+            "SPED 001",
+            1000,
+            worn(1000, 0.0, 0.0, 0.0, 0.0, &[0.0, 0.0]),
+        )
+        .await;
+    // 6 + 2 + 1 + 15 + 4,5 = 28,5 Prozent, dazu dauerhaft am Motor 1,5
+    let mut state = worn(1400, 0.2, 0.1, 0.1, 0.6, &[0.2, 0.4]);
+    state["engine_wear_unfixable"] = json!(0.05);
+    state["fuel_relative"] = json!(0.3);
+    let r = f.drive(t, 1400, state).await;
+    assert_eq!(r["in_workshop"], true, "{r}");
+    let l = f.truck_as(&f.chef, t).await;
+    assert_eq!(
+        (
+            pct(&l["damage"]),
+            pct(&l["damage_unfixable"]),
+            &l["repair_cost"]
+        ),
+        (28.5, 1.5, &json!(4275))
+    );
+    assert_eq!(f.rev(t), 2);
+
+    // Reparieren lassen darf nur der Chef
+    let (s, v) = f.repair(&f.fahrer, t).await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "{v}");
+    assert_eq!(v["error"], "Das darf nur der Chef");
+    let (s, v) = f.repair(&f.chef, 999).await;
+    assert_eq!(s, StatusCode::NOT_FOUND, "{v}");
+
+    let (s, r) = f.repair(&f.chef, t).await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!(r["cost"], 4275);
+    assert_eq!(r["balance"], 5725);
+    assert_eq!(pct(&r["damage_before"]), 28.5);
+    assert_eq!(pct(&r["damage"]), 0.0);
+    assert_eq!(r["rev"], 3);
+    assert_eq!(r["in_workshop"], false);
+    assert_eq!(f.balance().await, 5725);
+
+    // Eine Buchung aus der Firmenkasse
+    let w = f.entries("werkstatt").await;
+    assert_eq!(w.len(), 1);
+    assert_eq!(
+        (&w[0]["account"], &w[0]["amount"], &w[0]["note"]),
+        (
+            &json!("firma"),
+            &json!(-4275),
+            &json!("Werkstatt SPED 001, 28,5 %")
+        )
+    );
+
+    // Reparierbarer Verschleiß auf 0, dauerhafter und alles andere bleibt
+    let (km, state, ..) = f.truck_row(t);
+    assert_eq!(km, 1400);
+    for k in [
+        "engine_wear",
+        "transmission_wear",
+        "cabin_wear",
+        "chassis_wear",
+    ] {
+        assert_eq!(state[k], 0.0, "{k}");
+    }
+    assert_eq!(state["wheels_wear"], json!([0.0, 0.0]));
+    assert_eq!(state["engine_wear_unfixable"], 0.05);
+    assert_eq!(state["fuel_relative"], 0.3);
+    assert_eq!(state["odometer"], 1400);
+    let l = f.truck_as(&f.chef, t).await;
+    assert_eq!((pct(&l["damage"]), pct(&l["damage_unfixable"])), (0.0, 1.5));
+    assert_eq!(
+        (&l["in_workshop"], &l["repair_cost"], &l["rev"]),
+        (&json!(false), &json!(0), &json!(3))
+    );
+
+    // Nichts mehr zu reparieren
+    let (s, v) = f.repair(&f.chef, t).await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    assert_eq!(v["error"], "Am Lkw ist nichts zu reparieren");
+    assert_eq!(f.entries("werkstatt").await.len(), 1);
+
+    // Wieder ausleihbar, der nächste Fahrer bekommt den reparierten Zustand
+    let (s, out) = f
+        .post(&f.fahrer, &format!("/api/trucks/{t}/checkout"), json!({}))
+        .await;
+    assert_eq!(s, StatusCode::OK, "{out}");
+    assert_eq!(out["truck"]["rev"], 3);
+    assert_eq!(out["truck"]["state"]["engine_wear"], 0.0);
+    assert_eq!(out["truck"]["state"]["wheels_wear"], json!([0.0, 0.0]));
+    assert_eq!(out["truck"]["state"]["engine_wear_unfixable"], 0.05);
+
+    // Ein verliehener Lkw kommt nicht in die Werkstatt, auch mit Schaden nicht
+    let (s, _) = f
+        .checkin(
+            &f.fahrer,
+            t,
+            json!({ "odometer_km": 1500, "state": worn(1500, 0.1, 0.0, 0.0, 0.0, &[0.0, 0.0]) }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    f.checkout(&f.fahrer, t).await;
+    let (s, v) = f.repair(&f.chef, t).await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    assert_eq!(
+        v["error"],
+        "Der Lkw ist gerade an Fahrer verliehen. Reparieren geht erst nach der Rückgabe"
+    );
+    assert_eq!(f.entries("werkstatt").await.len(), 1);
+    assert_eq!(f.balance().await, 5725);
+}
+
+#[tokio::test]
+async fn werkstatt_mit_zu_wenig_geld() {
+    let f = Firma::new().await;
+    f.event(&f.fahrer, "job-1", "job_delivered", 1000, None)
+        .await;
+    let t = f
+        .truck(
+            "SPED 001",
+            1000,
+            worn(1000, 0.0, 0.0, 0.0, 0.0, &[0.0, 0.0]),
+        )
+        .await;
+    f.drive(t, 1400, worn(1400, 0.2, 0.1, 0.1, 0.6, &[0.2, 0.4]))
+        .await;
+    let before = f.truck_row(t).1;
+
+    // 4275 Euro, in der Kasse sind 1000: nichts ändert sich
+    let (s, v) = f.repair(&f.chef, t).await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    assert_eq!(
+        v["error"],
+        "In der Kasse ist nicht genug Geld für die Werkstatt: nötig 4275 €, da sind 1000 €"
+    );
+    assert_eq!(f.balance().await, 1000);
+    assert!(f.entries("werkstatt").await.is_empty());
+    assert_eq!(f.truck_row(t).1, before);
+    assert_eq!(f.rev(t), 2);
+    let l = f.truck_as(&f.chef, t).await;
+    assert_eq!((&l["in_workshop"], pct(&l["damage"])), (&json!(true), 28.5));
+
+    // Mit einem kleineren Satz reicht es: 28,5 mal 20 Euro
+    f.patch(&f.chef, json!({ "repair_rate": 20 })).await;
+    let (s, r) = f.repair(&f.chef, t).await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!((&r["cost"], &r["balance"]), (&json!(570), &json!(430)));
+
+    // Satz 0: Die Werkstatt ist kostenlos, gebucht wird nichts
+    let u = f
+        .truck("SPED 002", 1000, worn(1000, 0.5, 0.0, 0.0, 0.0, &[0.0]))
+        .await;
+    f.patch(&f.chef, json!({ "repair_rate": 0 })).await;
+    let (s, r) = f.repair(&f.chef, u).await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!((&r["cost"], &r["balance"]), (&json!(0), &json!(430)));
+    assert_eq!(f.entries("werkstatt").await.len(), 1);
+    assert_eq!(f.truck_row(u).1["engine_wear"], 0.0);
+}
+
+#[tokio::test]
+async fn kostenlose_werkstatt_auch_bei_negativer_kasse() {
+    // Betriebskosten aus dem Geldabgleich werden ohne Deckung gebucht: Kasse -500
+    let f = Firma::new().await;
+    first_sync(&f).await;
+    let r = sync_written_at(&f, 1500, 60).await;
+    assert_eq!(
+        r["booked"],
+        json!([{ "account": "firma", "kind": "betriebskosten", "amount": -500 }])
+    );
+    assert_eq!(f.balance().await, -500);
+
+    let t = f
+        .truck(
+            "SPED 001",
+            1000,
+            worn(1000, 0.0, 0.0, 0.0, 0.0, &[0.0, 0.0]),
+        )
+        .await;
+    f.drive(t, 1400, worn(1400, 0.2, 0.1, 0.1, 0.6, &[0.2, 0.4]))
+        .await;
+    assert_eq!(f.truck_as(&f.chef, t).await["in_workshop"], true);
+
+    // Mit Kosten über 0 reicht eine negative Kasse nicht
+    let (s, v) = f.repair(&f.chef, t).await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    assert_eq!(
+        v["error"],
+        "In der Kasse ist nicht genug Geld für die Werkstatt: nötig 4275 €, da sind -500 €"
+    );
+
+    // Satz 0: kostenlos, also geht es auch mit negativer Kasse, gebucht wird nichts
+    f.patch(&f.chef, json!({ "repair_rate": 0 })).await;
+    let (s, r) = f.repair(&f.chef, t).await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!((&r["cost"], &r["balance"]), (&json!(0), &json!(-500)));
+    assert_eq!(r["in_workshop"], false);
+    assert!(f.entries("werkstatt").await.is_empty());
+    assert_eq!(f.truck_as(&f.chef, t).await["in_workshop"], false);
+
+    // Kosten, die auf 0 € gerundet werden: 0,1 % mal 4 € sind 0,40 €
+    let u = f
+        .truck("SPED 002", 1000, worn(1000, 0.0, 0.0, 0.01, 0.0, &[0.0]))
+        .await;
+    f.patch(&f.chef, json!({ "repair_rate": 4 })).await;
+    let l = f.truck_as(&f.chef, u).await;
+    assert_eq!((pct(&l["damage"]), &l["repair_cost"]), (0.1, &json!(0)));
+    let (s, r) = f.repair(&f.chef, u).await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!((&r["cost"], &r["balance"]), (&json!(0), &json!(-500)));
+    assert!(f.entries("werkstatt").await.is_empty());
+    assert_eq!(f.truck_row(u).1["cabin_wear"], 0.0);
+    assert_eq!(f.balance().await, -500);
+}
+
+#[tokio::test]
+async fn haftung_nur_fuer_neuen_schaden() {
+    let f = Firma::new().await;
+    f.patch(&f.chef, json!({ "liability_percent": 50 })).await;
+    // Vorschaden 10 Prozent am Fahrgestell
+    let t = f
+        .truck(
+            "SPED 001",
+            1000,
+            worn(1000, 0.0, 0.0, 0.0, 0.4, &[0.0, 0.0]),
+        )
+        .await;
+    f.checkout(&f.fahrer, t).await;
+    let damage_out: f64 = {
+        let conn = f.db.lock().unwrap();
+        conn.query_row(
+            "SELECT damage_out FROM leases WHERE truck_id = ?1",
+            [t],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
+    assert_eq!(damage_out, 10.0);
+
+    // Zurück mit 16 Prozent: 6 neu, davon zahlt der Fahrer die Hälfte von 6 mal 150 Euro
+    let (s, r) = f
+        .checkin(
+            &f.fahrer,
+            t,
+            json!({ "odometer_km": 1200, "state": worn(1200, 0.2, 0.0, 0.0, 0.4, &[0.0, 0.0]) }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!(
+        (pct(&r["damage"]), pct(&r["damage_new"]), &r["liability"]),
+        (16.0, 6.0, &json!(450))
+    );
+    assert_eq!(r["in_workshop"], false);
+    let h = f.entries("haftung").await;
+    assert_eq!(h.len(), 2, "{h:?}");
+    for e in &h {
+        assert_eq!(e["user_id"], f.fahrer_id);
+        assert_eq!(e["note"], "Haftung SPED 001, 6 Prozentpunkte neuer Schaden");
+    }
+    let by = |account: &str| h.iter().find(|e| e["account"] == account).unwrap()["amount"].clone();
+    assert_eq!((by("fahrer"), by("firma")), (json!(-450), json!(450)));
+    // Das Lohnkonto darf ins Minus
+    assert_eq!(f.wallet(f.fahrer_id).await, -450);
+    assert_eq!(f.balance().await, 450);
+
+    // Nächste Leihe ohne neuen Schaden: keine Haftung, keine Buchung
+    let r = f
+        .drive(t, 1300, worn(1300, 0.2, 0.0, 0.0, 0.4, &[0.0, 0.0]))
+        .await;
+    assert_eq!((pct(&r["damage_new"]), &r["liability"]), (0.0, &json!(0)));
+    assert_eq!(f.entries("haftung").await.len(), 2);
+    assert_eq!(f.wallet(f.fahrer_id).await, -450);
+}
+
+#[tokio::test]
+async fn haftung_0_bucht_nichts() {
+    let f = Firma::new().await;
+    assert_eq!(f.company(&f.chef).await["liability_percent"], 0);
+    let t = f
+        .truck("SPED 001", 1000, worn(1000, 0.0, 0.0, 0.0, 0.0, &[0.0]))
+        .await;
+    let r = f
+        .drive(t, 1200, worn(1200, 0.5, 0.0, 0.0, 0.0, &[0.0]))
+        .await;
+    assert_eq!((pct(&r["damage_new"]), &r["liability"]), (15.0, &json!(0)));
+    assert!(f.entries("haftung").await.is_empty());
+    assert_eq!(f.wallet(f.fahrer_id).await, 0);
+}
+
+#[tokio::test]
+async fn haftung_bei_chef_rueckgabe_zahlt_der_ausleiher() {
+    let f = Firma::new().await;
+    f.patch(&f.chef, json!({ "liability_percent": 100 })).await;
+    let t = f
+        .truck(
+            "SPED 001",
+            1000,
+            worn(1000, 0.0, 0.0, 0.0, 0.0, &[0.0, 0.0]),
+        )
+        .await;
+
+    // Die Chefin nimmt mit Zustand zurück: 3 Prozentpunkte mal 150 Euro
+    f.checkout(&f.fahrer, t).await;
+    let (s, r) = f
+        .checkin(
+            &f.chef,
+            t,
+            json!({ "odometer_km": 1100, "state": worn(1100, 0.1, 0.0, 0.0, 0.0, &[0.0, 0.0]) }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!(r["liability"], 450);
+    assert_eq!(r["liability_user_id"], f.fahrer_id);
+    assert_eq!(f.wallet(f.fahrer_id).await, -450);
+    assert_eq!(f.wallet(f.chef_id).await, 0);
+
+    // Und mit dem letzten bekannten Zustand: Motor jetzt 0,3, also 6 Prozentpunkte neu
+    f.checkout(&f.fahrer, t).await;
+    f.clock.advance(60);
+    f.beat(
+        &f.fahrer,
+        json!({ "plate": "SPED 001", "odometer_km": 1250.0, "wear": { "engine": 0.3 } }),
+    )
+    .await;
+    let (s, r) = f.checkin(&f.chef, t, json!({})).await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!((pct(&r["damage_new"]), &r["liability"]), (6.0, &json!(900)));
+    assert_eq!(f.wallet(f.fahrer_id).await, -1350);
+    assert_eq!(f.wallet(f.chef_id).await, 0);
+    let h = f.entries("haftung").await;
+    assert_eq!(h.len(), 4);
+    assert!(h.iter().all(|e| e["user_id"] == f.fahrer_id));
+}
+
+#[tokio::test]
+async fn leihe_von_vor_der_werkstatt_rechnet_vom_gespeicherten_zustand() {
+    let f = Firma::new().await;
+    f.patch(&f.chef, json!({ "liability_percent": 100 })).await;
+    let t = f
+        .truck("SPED 001", 1000, worn(1000, 0.0, 0.0, 0.0, 0.4, &[0.0]))
+        .await;
+    f.checkout(&f.fahrer, t).await;
+    // Wie eine Leihe aus einer alten Datenbank: kein Schaden beim Ausleihen gespeichert
+    f.db.lock()
+        .unwrap()
+        .execute("UPDATE leases SET damage_out = NULL", [])
+        .unwrap();
+    let (s, r) = f
+        .checkin(
+            &f.fahrer,
+            t,
+            json!({ "odometer_km": 1100, "state": worn(1100, 0.1, 0.0, 0.0, 0.4, &[0.0]) }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!(pct(&r["damage_out"]), 10.0);
+    assert_eq!((pct(&r["damage_new"]), &r["liability"]), (3.0, &json!(450)));
+}
+
+#[tokio::test]
+async fn einstellungen_fuer_werkstatt_und_haftung() {
+    let f = Firma::new().await;
+    for token in [&f.chef, &f.fahrer] {
+        let c = f.company(token).await;
+        assert_eq!(
+            (
+                &c["damage_limit"],
+                &c["repair_rate"],
+                &c["liability_percent"]
+            ),
+            (&json!(25), &json!(150), &json!(0))
+        );
+    }
+    for (body, error) in [
+        (
+            json!({ "damage_limit": 101 }),
+            "Die Schadensgrenze muss zwischen 0 und 100 Prozent liegen",
+        ),
+        (
+            json!({ "damage_limit": -1 }),
+            "Die Schadensgrenze muss zwischen 0 und 100 Prozent liegen",
+        ),
+        (
+            json!({ "repair_rate": -1 }),
+            "Der Satz der Werkstatt muss zwischen 0 und 1000000 Euro je Prozentpunkt liegen",
+        ),
+        (
+            json!({ "liability_percent": 101 }),
+            "Die Haftung muss zwischen 0 und 100 Prozent liegen",
+        ),
+        (
+            json!({ "liability_percent": -5, "damage_limit": 30 }),
+            "Die Haftung muss zwischen 0 und 100 Prozent liegen",
+        ),
+    ] {
+        let (s, v) = f.patch(&f.chef, body.clone()).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{body}: {v}");
+        assert_eq!(v["error"], error);
+    }
+    let (s, _) = f.patch(&f.fahrer, json!({ "damage_limit": 50 })).await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    let c = f.company(&f.chef).await;
+    assert_eq!(
+        (
+            &c["damage_limit"],
+            &c["repair_rate"],
+            &c["liability_percent"]
+        ),
+        (&json!(25), &json!(150), &json!(0)),
+        "nichts geändert"
+    );
+
+    let (s, v) = f
+        .patch(
+            &f.chef,
+            json!({ "damage_limit": 40, "repair_rate": 90, "liability_percent": 25 }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(
+        (
+            &v["damage_limit"],
+            &v["repair_rate"],
+            &v["liability_percent"]
+        ),
+        (&json!(40), &json!(90), &json!(25))
+    );
+    let c = f.company(&f.fahrer).await;
+    assert_eq!(
+        (
+            &c["damage_limit"],
+            &c["repair_rate"],
+            &c["liability_percent"],
+            &c["advance"]
+        ),
+        (&json!(40), &json!(90), &json!(25), &json!(2000))
+    );
+    // Die Ränder gehen
+    let (s, v) = f
+        .patch(
+            &f.chef,
+            json!({ "damage_limit": 0, "repair_rate": 0, "liability_percent": 100 }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let (s, _) = f.patch(&f.chef, json!({ "damage_limit": 100 })).await;
+    assert_eq!(s, StatusCode::OK);
+}

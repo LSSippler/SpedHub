@@ -1,5 +1,6 @@
 use crate::{
     clock::{Clock, format_minute, parse_minute},
+    damage::{self, Damage},
     db::{Db, insert_default_wage_levels},
     error::{ApiError, ApiResult},
     levels::{WageLevel, standing, wage_levels},
@@ -88,6 +89,7 @@ pub fn router_with(db: Db, clock: Clock) -> Router {
         .route("/api/trucks/{id}/checkout", post(checkout))
         .route("/api/trucks/{id}/checkin", post(checkin))
         .route("/api/trucks/{id}/lease", get(get_lease))
+        .route("/api/trucks/{id}/repair", post(repair))
         .with_state(AppState { db, clock })
 }
 
@@ -153,6 +155,31 @@ fn wallet(conn: &Connection, company_id: i64, user_id: i64) -> rusqlite::Result<
         "SELECT COALESCE(SUM(amount), 0) FROM ledger WHERE company_id = ?1 AND account = 'fahrer' AND user_id = ?2",
         [company_id, user_id],
         |r| r.get(0),
+    )
+}
+
+/// Einstellungen der Firma für Schaden und Werkstatt.
+#[derive(Debug, Clone, Copy)]
+struct DamageSettings {
+    /// Schadensgrenze in Prozent
+    limit: i64,
+    /// Euro je Prozentpunkt Schaden
+    rate: i64,
+    /// Haftungsanteil des Fahrers in Prozent
+    liability_percent: i64,
+}
+
+fn damage_settings(conn: &Connection, company_id: i64) -> rusqlite::Result<DamageSettings> {
+    conn.query_row(
+        "SELECT damage_limit, repair_rate, liability_percent FROM companies WHERE id = ?1",
+        [company_id],
+        |r| {
+            Ok(DamageSettings {
+                limit: r.get(0)?,
+                rate: r.get(1)?,
+                liability_percent: r.get(2)?,
+            })
+        },
     )
 }
 
@@ -494,6 +521,7 @@ async fn get_company(
             },
         )?;
     let levels = wage_levels(&conn, id)?;
+    let ds = damage_settings(&conn, id)?;
     let people: Vec<(i64, String, String)> = conn
         .prepare(
             "SELECT u.id, u.name, m.role FROM memberships m JOIN users u ON u.id = m.user_id
@@ -541,7 +569,8 @@ async fn get_company(
         "id": id, "name": name, "your_role": role,
         "balance": company_balance(&conn, id)?, "members": members,
         "revenue_factor": factor, "daily_flat": flat, "payroll_time": format_minute(minute),
-        "advance": advance, "wage_levels": wage_levels_json(&levels)
+        "advance": advance, "wage_levels": wage_levels_json(&levels),
+        "damage_limit": ds.limit, "repair_rate": ds.rate, "liability_percent": ds.liability_percent
     });
     // Einladungscode und ungeklärte Beträge sieht nur der Chef.
     if role == "chef" {
@@ -564,6 +593,12 @@ struct CompanyPatch {
     /// Uhrzeit der täglichen Abrechnung wie `04:00`, Europe/Berlin
     payroll_time: Option<String>,
     advance: Option<i64>,
+    /// Schadensgrenze in Prozent, 0 bis 100
+    damage_limit: Option<i64>,
+    /// Werkstatt: Euro je Prozentpunkt Schaden
+    repair_rate: Option<i64>,
+    /// Haftungsanteil des Fahrers in Prozent, 0 bis 100
+    liability_percent: Option<i64>,
 }
 
 async fn update_company(
@@ -591,6 +626,27 @@ async fn update_company(
     {
         return Err(ApiError::bad(
             "Der Betriebsvorschuss muss zwischen 0 und 10000000 Euro liegen",
+        ));
+    }
+    if let Some(l) = b.damage_limit
+        && !(0..=100).contains(&l)
+    {
+        return Err(ApiError::bad(
+            "Die Schadensgrenze muss zwischen 0 und 100 Prozent liegen",
+        ));
+    }
+    if let Some(r) = b.repair_rate
+        && !(0..=1_000_000).contains(&r)
+    {
+        return Err(ApiError::bad(
+            "Der Satz der Werkstatt muss zwischen 0 und 1000000 Euro je Prozentpunkt liegen",
+        ));
+    }
+    if let Some(p) = b.liability_percent
+        && !(0..=100).contains(&p)
+    {
+        return Err(ApiError::bad(
+            "Die Haftung muss zwischen 0 und 100 Prozent liegen",
         ));
     }
     let minute =
@@ -624,6 +680,19 @@ async fn update_company(
     if let Some(a) = b.advance {
         tx.execute("UPDATE companies SET advance = ?1 WHERE id = ?2", [a, id])?;
     }
+    for (column, value) in [
+        ("damage_limit", b.damage_limit),
+        ("repair_rate", b.repair_rate),
+        ("liability_percent", b.liability_percent),
+    ] {
+        if let Some(v) = value {
+            tx.execute(
+                &format!("UPDATE companies SET {column} = ?1 WHERE id = ?2"),
+                [v, id],
+            )?;
+        }
+    }
+    let ds = damage_settings(&tx, id)?;
     let (factor, flat, minute, advance): (f64, i64, i64, i64) = tx.query_row(
         "SELECT revenue_factor, daily_flat, payroll_minute, advance FROM companies WHERE id = ?1",
         [id],
@@ -632,7 +701,8 @@ async fn update_company(
     tx.commit()?;
     Ok(Json(json!({
         "id": id, "revenue_factor": factor, "daily_flat": flat,
-        "payroll_time": format_minute(minute), "advance": advance
+        "payroll_time": format_minute(minute), "advance": advance,
+        "damage_limit": ds.limit, "repair_rate": ds.rate, "liability_percent": ds.liability_percent
     })))
 }
 
@@ -756,6 +826,7 @@ async fn list_trucks(
     let now = clock.now();
     let conn = db.lock().unwrap();
     let role = role_in(&conn, company_id, user.id)?;
+    let ds = damage_settings(&conn, company_id)?;
     // Wer gerade online ist und welchen Firmen-Lkw er meldet
     let seen = presence::all(&conn, company_id)?;
     let names: std::collections::HashMap<i64, String> = conn
@@ -767,7 +838,7 @@ async fn list_trucks(
         .collect::<Result<_, _>>()?;
     let mut stmt = conn.prepare(
         "SELECT t.id, t.plate, t.model, t.odometer_km, t.rev, u.id, u.name, l.taken_at,
-                t.last_seen_at, t.last_odometer_km
+                t.last_seen_at, t.last_odometer_km, t.state, t.in_workshop
          FROM trucks t
          LEFT JOIN leases l ON l.truck_id = t.id AND l.returned_at IS NULL
          LEFT JOIN users u ON u.id = l.user_id
@@ -790,6 +861,8 @@ async fn list_trucks(
             let holder: Option<i64> = r.get(5)?;
             let id: i64 = r.get(0)?;
             let last_seen_at: Option<i64> = r.get(8)?;
+            // Schaden aus dem gespeicherten Zustand, also dem bei der letzten Rückgabe
+            let d = damage::damage_of(&r.get::<_, String>(10)?);
             // Der Ausleiher ist online und meldet genau diesen Lkw
             let driving = holder
                 .and_then(|h| seen.get(&h))
@@ -806,7 +879,10 @@ async fn list_trucks(
                 "driving": driving.is_some(),
                 "last_known": last_seen_at.map(|at| json!({
                     "at": at, "odometer_km": r.get::<_, Option<i64>>(9).ok().flatten()
-                }))
+                })),
+                "damage": d.fixable, "damage_unfixable": d.unfixable,
+                "in_workshop": r.get::<_, i64>(11)? != 0,
+                "repair_cost": damage::repair_cost(d.fixable, ds.rate)
             });
             if let Some(p) = driving {
                 t["speed_kmh"] = p.speed_kmh();
@@ -831,6 +907,15 @@ async fn list_trucks(
         })?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Json(json!({ "trucks": trucks })))
+}
+
+/// Schaden aus dem gespeicherten Zustand eines Lkw.
+fn stored_damage(conn: &Connection, truck_id: i64) -> rusqlite::Result<Damage> {
+    let state: String =
+        conn.query_row("SELECT state FROM trucks WHERE id = ?1", [truck_id], |r| {
+            r.get(0)
+        })?;
+    Ok(damage::damage_of(&state))
 }
 
 /// Bauplan, Zustand und Kennzeichen eines Lkw, wie sie beim Ausleihen herausgehen.
@@ -859,11 +944,11 @@ async fn checkout(
 ) -> ApiResult<Json<Value>> {
     let mut conn = db.lock().unwrap();
     let tx = conn.transaction()?;
-    let (company_id, rev): (i64, i64) = tx
+    let (company_id, rev, state, in_workshop): (i64, i64, String, bool) = tx
         .query_row(
-            "SELECT company_id, rev FROM trucks WHERE id = ?1",
+            "SELECT company_id, rev, state, in_workshop FROM trucks WHERE id = ?1",
             [truck_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get::<_, i64>(3)? != 0)),
         )
         .optional()?
         .ok_or_else(|| ApiError::not_found("Diesen Lkw gibt es nicht"))?;
@@ -881,9 +966,17 @@ async fn checkout(
             "Der Lkw ist gerade an {name} verliehen"
         )));
     }
+    if in_workshop {
+        return Err(ApiError::conflict(
+            "Der Lkw steht in der Werkstatt. Ausleihen geht erst, wenn der Chef ihn reparieren lässt",
+        ));
+    }
+    // Schaden beim Ausleihen: Was danach dazukommt, ist neuer Schaden dieser Leihe
+    let damage_out = damage::damage_of(&state).fixable;
     tx.execute(
-        "INSERT INTO leases (truck_id, user_id, rev_out, taken_at) VALUES (?1, ?2, ?3, ?4)",
-        params![truck_id, user.id, rev, clock.now()],
+        "INSERT INTO leases (truck_id, user_id, rev_out, taken_at, damage_out)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![truck_id, user.id, rev, clock.now(), damage_out],
     )?;
     let lease_id = tx.last_insert_rowid();
     let truck = truck_package(&tx, truck_id)?;
@@ -973,14 +1066,19 @@ async fn checkin(
         .optional()?
         .ok_or_else(|| ApiError::not_found("Diesen Lkw gibt es nicht"))?;
     let role = role_in(&tx, company_id, user.id)?;
-    let (lease_id, holder): (i64, i64) = tx
+    let (lease_id, holder, damage_out): (i64, i64, Option<f64>) = tx
         .query_row(
-            "SELECT id, user_id FROM leases WHERE truck_id = ?1 AND returned_at IS NULL",
+            "SELECT id, user_id, damage_out FROM leases WHERE truck_id = ?1 AND returned_at IS NULL",
             [truck_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .optional()?
         .ok_or_else(|| ApiError::conflict("Der Lkw ist gar nicht verliehen"))?;
+    // Leihen von vor der Werkstatt: Der gespeicherte Zustand ist noch der vom Ausleihen
+    let damage_out = match damage_out {
+        Some(d) => d,
+        None => stored_damage(&tx, truck_id)?.fixable,
+    };
     // Zurückgeben darf, wer ihn hat. Der Chef darf ihn zur Not für andere zurücknehmen.
     if holder != user.id && role != "chef" {
         return Err(ApiError::forbidden(
@@ -1066,13 +1164,117 @@ async fn checkin(
     let rev: i64 = tx.query_row("SELECT rev FROM trucks WHERE id = ?1", [truck_id], |r| {
         r.get(0)
     })?;
-    tx.commit()?;
     let plate = new_plate.unwrap_or(current_plate);
+    // Schaden des neuen Zustands: über der Grenze in die Werkstatt, neuer Schaden kostet
+    // den Ausleiher seinen Haftungsanteil
+    let ds = damage_settings(&tx, company_id)?;
+    let d = stored_damage(&tx, truck_id)?;
+    let in_workshop = d.fixable > ds.limit as f64;
+    tx.execute(
+        "UPDATE trucks SET in_workshop = ?1 WHERE id = ?2",
+        params![in_workshop, truck_id],
+    )?;
+    let damage_new = damage::new_damage(d.fixable, damage_out);
+    let liability = damage::liability(damage_new, ds.rate, ds.liability_percent);
+    if liability > 0 {
+        let note = format!(
+            "Haftung {plate}, {} Prozentpunkte neuer Schaden",
+            damage::percent_text(damage_new)
+        );
+        for (account, amount) in [("fahrer", -liability), ("firma", liability)] {
+            tx.execute(
+                "INSERT INTO ledger (company_id, account, user_id, kind, amount, note, created_at)
+                 VALUES (?1, ?2, ?3, 'haftung', ?4, ?5, ?6)",
+                params![company_id, account, holder, amount, note, clock.now()],
+            )?;
+        }
+    }
+    tx.commit()?;
     Ok(Json(json!({
         "id": truck_id, "plate": plate, "odometer_km": new_odometer, "rev": rev,
         "driven_km": new_odometer - odometer,
         // Gesetzt, wenn der letzte bekannte Zustand übernommen wurde: von wann er ist
-        "from_last_known": from_last.map(|at| json!({ "at": at }))
+        "from_last_known": from_last.map(|at| json!({ "at": at })),
+        "damage": d.fixable, "damage_unfixable": d.unfixable, "damage_out": damage_out,
+        "damage_new": damage_new, "liability": liability, "liability_user_id": holder,
+        "damage_limit": ds.limit, "in_workshop": in_workshop
+    })))
+}
+
+/// Lkw in die Werkstatt: Nur der Chef, nur wenn der Lkw nicht verliehen ist und Schaden hat.
+/// Die Kosten (Schaden mal Satz je Prozentpunkt) gehen aus der Firmenkasse, reicht sie nicht,
+/// ändert sich nichts. Danach sind alle reparierbaren Verschleißwerte im gespeicherten Zustand
+/// 0, der dauerhafte Verschleiß bleibt. Die Revision steigt, weil sich der Zustand geändert
+/// hat, und der Lkw ist wieder frei.
+async fn repair(
+    State(db): State<Db>,
+    State(clock): State<Clock>,
+    user: AuthUser,
+    Path(truck_id): Path<i64>,
+) -> ApiResult<Json<Value>> {
+    let mut conn = db.lock().unwrap();
+    let tx = conn.transaction()?;
+    let (company_id, plate, state): (i64, String, String) = tx
+        .query_row(
+            "SELECT company_id, plate, state FROM trucks WHERE id = ?1",
+            [truck_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()?
+        .ok_or_else(|| ApiError::not_found("Diesen Lkw gibt es nicht"))?;
+    require_chef(&tx, company_id, user.id)?;
+    let holder: Option<String> = tx
+        .query_row(
+            "SELECT u.name FROM leases l JOIN users u ON u.id = l.user_id
+             WHERE l.truck_id = ?1 AND l.returned_at IS NULL",
+            [truck_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if let Some(name) = holder {
+        return Err(ApiError::conflict(&format!(
+            "Der Lkw ist gerade an {name} verliehen. Reparieren geht erst nach der Rückgabe"
+        )));
+    }
+    let state: Value = serde_json::from_str(&state).unwrap_or(Value::Null);
+    let before = damage::damage(&state);
+    if before.fixable <= 0.0 {
+        return Err(ApiError::conflict("Am Lkw ist nichts zu reparieren"));
+    }
+    let ds = damage_settings(&tx, company_id)?;
+    let cost = damage::repair_cost(before.fixable, ds.rate);
+    let balance = company_balance(&tx, company_id)?;
+    if cost > 0 && cost > balance {
+        return Err(ApiError::conflict(&format!(
+            "In der Kasse ist nicht genug Geld für die Werkstatt: nötig {cost} €, da sind {balance} €"
+        )));
+    }
+    if cost > 0 {
+        let note = format!(
+            "Werkstatt {plate}, {} %",
+            damage::percent_text(before.fixable)
+        );
+        tx.execute(
+            "INSERT INTO ledger (company_id, account, user_id, kind, amount, note, created_at)
+             VALUES (?1, 'firma', ?2, 'werkstatt', ?3, ?4, ?5)",
+            params![company_id, user.id, -cost, note, clock.now()],
+        )?;
+    }
+    let repaired = damage::repaired(&state);
+    tx.execute(
+        "UPDATE trucks SET state = ?1, rev = rev + 1, in_workshop = 0 WHERE id = ?2",
+        params![repaired.to_string(), truck_id],
+    )?;
+    let rev: i64 = tx.query_row("SELECT rev FROM trucks WHERE id = ?1", [truck_id], |r| {
+        r.get(0)
+    })?;
+    let after = damage::damage(&repaired);
+    let balance = company_balance(&tx, company_id)?;
+    tx.commit()?;
+    Ok(Json(json!({
+        "id": truck_id, "plate": plate, "cost": cost, "damage_before": before.fixable,
+        "damage": after.fixable, "damage_unfixable": after.unfixable, "rev": rev,
+        "in_workshop": false, "balance": balance
     })))
 }
 

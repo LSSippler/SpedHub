@@ -732,3 +732,110 @@ fn fuhrpark_zeigt_ob_der_lkw_gerade_gefahren_wird() {
     assert_eq!(t.speed_kmh, Some(85.0));
     let _ = fs::remove_dir_all(dir);
 }
+
+#[test]
+fn rueckgabe_mit_viel_verschleiss_bringt_den_lkw_in_die_werkstatt() {
+    let dir = temp_dir("werkstatt");
+    let s = setup(&dir);
+    let url = s.server.url();
+    let docs = documents("werkstatt-docs");
+    let backups = dir.join("backups");
+
+    // Chef übernimmt den Scania aus dem Spielstand, der Fahrer leiht ihn und setzt ihn ein
+    let quelle = docs.nordfracht.join("save").join("1").join("game.sii");
+    let truck_id = s
+        .chef
+        .add_truck(
+            s.company,
+            &new_truck_from_save(&quelle, "SPED 001").unwrap(),
+        )
+        .unwrap();
+    let before = s.fahrer.trucks(s.company).unwrap().remove(0);
+    assert!(!before.in_workshop);
+    let checkout = s.fahrer.checkout(truck_id).unwrap();
+    let package = package_from_checkout(&checkout.truck).unwrap();
+    let deployed = deploy_truck(
+        &docs.nordfracht,
+        &package,
+        &backups,
+        &FakeGame::closed(),
+        SystemTime::now(),
+    )
+    .unwrap();
+
+    // Im Spiel einen Unfall gebaut: viel Verschleiß an Motor und Fahrgestell
+    let game_path = deployed.slot_dir.join("game.sii");
+    let (mut save, _) = Save::read(&game_path).unwrap();
+    let mut state = truck_state(&save, Some("SPED 001")).unwrap();
+    state.odometer += 120;
+    state.engine_wear = 0.5;
+    state.chassis_wear = 0.6;
+    set_truck_state(&mut save, Some("SPED 001"), &state).unwrap();
+    write_save(&game_path, &save).unwrap();
+
+    // Rückgabe über den echten Ablauf: Zustand aus dem Spielstand lesen und melden
+    let back = read_for_return(&docs.nordfracht, "SPED 001", None)
+        .unwrap()
+        .unwrap();
+    let r = s
+        .fahrer
+        .checkin(truck_id, back.odometer_km, Some(&back.state), None)
+        .unwrap();
+    assert!(r.in_workshop, "{r:?}");
+    assert!(r.damage > 25.0, "{r:?}");
+    assert_eq!(r.liability, 0, "Haftung steht auf 0");
+
+    // Die Fuhrparkliste zeigt die Werkstatt und den Schaden
+    let t = s.fahrer.trucks(s.company).unwrap().remove(0);
+    assert!(t.in_workshop);
+    assert!(t.leased_by.is_none());
+    assert_eq!(t.damage, r.damage);
+    assert!(t.damage_text().starts_with(&format!(
+        "{} %",
+        spedhub_launcher::client::format_percent(r.damage)
+    )));
+    assert_eq!(t.repair_cost, (t.damage * 150.0).round() as i64);
+
+    // Ausleihen gibt eine Meldung im Klartext, auch für den Chef
+    let e = s.fahrer.checkout(truck_id).unwrap_err();
+    assert_eq!(
+        e.to_string(),
+        "Server: Der Lkw steht in der Werkstatt. Ausleihen geht erst, wenn der Chef ihn reparieren lässt"
+    );
+    assert!(s.chef.checkout(truck_id).is_err());
+
+    // Kasse füllen, reparieren lassen, danach geht es wieder
+    post_raw(
+        &format!("{url}/api/companies/{}/events", s.company),
+        s.fahrer.token().unwrap(),
+        json!({ "event_id": "job-1", "type": "job_delivered", "amount": 100000 }),
+    );
+    post_raw(
+        &format!("{url}/api/trucks/{truck_id}/repair"),
+        &s.chef_token,
+        json!({}),
+    );
+    let t = s.fahrer.trucks(s.company).unwrap().remove(0);
+    assert!(!t.in_workshop);
+    assert_eq!(t.damage, 0.0);
+    let again = s.fahrer.checkout(truck_id).unwrap();
+    let p = package_from_checkout(&again.truck).unwrap();
+    assert_eq!((p.state.engine_wear, p.state.chassis_wear), (0.0, 0.0));
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn schaden_als_text() {
+    let mut t: spedhub_launcher::client::Truck = serde_json::from_value(json!({
+        "id": 1, "plate": "SPED 001", "model": "scania.s_2016", "odometer_km": 1000, "rev": 1,
+        "leased_by": null
+    }))
+    .unwrap();
+    // Ältere Server ohne Schaden
+    assert_eq!((t.damage, t.in_workshop, t.repair_cost), (0.0, false, 0));
+    assert_eq!(t.damage_text(), "0 %");
+    t.damage = 12.5;
+    assert_eq!(t.damage_text(), "12,5 %");
+    t.damage_unfixable = 3.0;
+    assert_eq!(t.damage_text(), "12,5 %, dauerhaft 3 %");
+}
