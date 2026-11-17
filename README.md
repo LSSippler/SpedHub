@@ -1,5 +1,7 @@
 # SpedHub
 
+[![CI](https://github.com/LSSippler/SpedHub/actions/workflows/ci.yml/badge.svg)](https://github.com/LSSippler/SpedHub/actions/workflows/ci.yml)
+
 SpedHub macht aus Euro Truck Simulator 2 eine echte Firma. Mehrere Fahrer fahren zusammen im Convoy, die Einnahmen gehen in eine gemeinsame Kasse, und wer keinen eigenen Lkw hat, leiht sich einen aus dem Fuhrpark der Firma. Der geliehene Lkw landet wirklich im eigenen Spielstand, mit Kilometerstand, Schaden und Tuning.
 
 Das Projekt steht am Anfang. Was schon läuft und was noch fehlt:
