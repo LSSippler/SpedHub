@@ -131,7 +131,7 @@ pub fn create_company(server_url: &str, name: &str) -> (String, i64) {
     let c = post(
         &format!("{server_url}/api/companies"),
         Some(&token),
-        json!({ "name": format!("Firma {name}"), "wage_percent": 30 }),
+        json!({ "name": format!("Firma {name}") }),
     );
     (token, c["id"].as_i64().unwrap())
 }

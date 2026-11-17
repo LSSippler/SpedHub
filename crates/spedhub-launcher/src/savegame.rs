@@ -2,6 +2,8 @@
 //!
 //! - [`new_truck_from_save`]: Lkw aus einem Spielstand als Paket für den Fuhrpark
 //! - [`deploy_truck`]: geliehenen Lkw als neuen Speicherplatz ins Profil schreiben
+//! - [`prepare_slot`] und [`write_slot`]: dasselbe in zwei Schritten, dazwischen lässt sich
+//!   der Kontostand setzen (Geldabgleich)
 //! - [`read_for_return`]: Kilometerstand und Zustand für die Rückgabe lesen
 
 use crate::client::{LeasedTruck, NewTruck};
@@ -11,8 +13,8 @@ use crate::system::GameCheck;
 use serde_json::Value;
 use spedhub_save::{
     DEFAULT_MIN_MATCH, InsertOptions, Save, TruckPackage, TruckState, export_truck,
-    find_package_truck, insert_truck, plate_text, set_info_file_time, set_info_name, truck_state,
-    write_saves,
+    find_package_truck, info_experience, insert_truck, money, plate_text, set_info_file_time,
+    set_info_money, set_info_name, set_money, truck_state, write_saves,
 };
 use std::{
     fs,
@@ -22,6 +24,8 @@ use std::{
 
 /// Präfix für den Namen des neuen Speicherplatzes.
 pub const SLOT_NAME_PREFIX: &str = "SpedHub: ";
+/// Name eines Speicherplatzes, der nur den Kontostand abgleicht.
+pub const SYNC_SLOT_NAME: &str = "SpedHub: Geldabgleich";
 
 /// Ein Lkw in einem Spielstand, zur Auswahl in der Oberfläche.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -93,36 +97,90 @@ pub struct Deployed {
     pub backup_dir: PathBuf,
 }
 
-/// Setzt einen Lkw in den neuesten Spielstand des Profils ein und legt das Ergebnis als neuen
-/// Speicherplatz mit eigener `info.sii` an. Nichts Vorhandenes wird überschrieben.
-///
-/// Reihenfolge: Spiel prüfen, neuesten Speicherplatz lesen, Lkw einsetzen (auf einer Kopie),
-/// Ausgangs-Speicherplatz sichern, neuen Speicherplatz schreiben. Läuft das Spiel oder lässt
-/// sich das nicht prüfen, wird nichts geschrieben.
-pub fn deploy_truck(
+/// Ein neuer Speicherplatz, fertig im Speicher, noch nicht geschrieben.
+pub struct PreparedSlot {
+    source: SaveSlot,
+    game: Save,
+    info: Save,
+    name: String,
+    /// Kontostand im Ausgangs-Speicherplatz
+    pub ingame_money: i64,
+    /// Erfahrungspunkte aus `info.sii`, `None`, wenn das Feld fehlt oder unlesbar ist
+    pub xp: Option<u64>,
+}
+
+impl PreparedSlot {
+    /// Aus welchem Speicherplatz der neue entsteht.
+    pub fn source_label(&self) -> String {
+        self.source.label()
+    }
+
+    /// Setzt den Kontostand in `game.sii` und `info.sii`.
+    pub fn set_money(&mut self, amount: i64) -> Result<()> {
+        set_money(&mut self.game, amount)?;
+        set_info_money(&mut self.info, amount)?;
+        Ok(())
+    }
+}
+
+/// Erster Schritt: Spiel prüfen, neuesten Speicherplatz lesen, Kontostand und Erfahrung
+/// auslesen und, mit `package`, den Lkw einsetzen. Geschrieben wird nichts.
+pub fn prepare_slot(
     profile_dir: &Path,
-    package: &TruckPackage,
+    package: Option<&TruckPackage>,
+    game: &dyn GameCheck,
+) -> Result<PreparedSlot> {
+    ensure_game_closed(game)?;
+    let source = newest_slot(profile_dir)?;
+    let (mut save, _) = Save::read(source.game())?;
+    let (info, _) = Save::read(source.info())?;
+    let ingame_money = money(&save)?;
+    let xp = info_experience(&info).ok();
+
+    let name = match package {
+        None => SYNC_SLOT_NAME.to_string(),
+        Some(package) => {
+            // Steht der Lkw schon im Spielstand, etwa von einer früheren Leihe, dann womöglich
+            // unter einem Kennzeichen, das das Spiel vergeben hat. Die Prüfung auf gleiches
+            // Kennzeichen beim Einsetzen greift dann nicht, deshalb hier zusätzlich über die Teile.
+            if let Some(m) = find_package_truck(&save, package, DEFAULT_MIN_MATCH)? {
+                return Err(Error::Other(format!(
+                    "Der Lkw steht schon im neuesten Spielstand ({}), unter dem Kennzeichen {}. Er wird nicht ein zweites Mal eingesetzt",
+                    source.label(),
+                    plate_text(&m.plate)
+                )));
+            }
+            insert_truck(&mut save, package, &InsertOptions::default())?;
+            format!("{SLOT_NAME_PREFIX}{}", plate_text(&package.license_plate))
+        }
+    };
+    Ok(PreparedSlot {
+        source,
+        game: save,
+        info,
+        name,
+        ingame_money,
+        xp,
+    })
+}
+
+/// Zweiter Schritt: Namen und Zeit in `info.sii` setzen, Ausgangs-Speicherplatz sichern, kurz
+/// vor dem Schreiben noch einmal das Spiel prüfen und den neuen Speicherplatz anlegen.
+/// Vorhandenes wird nie überschrieben. Scheitert das Schreiben, wird der neue Ordner entfernt.
+pub fn write_slot(
+    prepared: PreparedSlot,
+    profile_dir: &Path,
     backup_root: &Path,
     game: &dyn GameCheck,
     now: SystemTime,
 ) -> Result<Deployed> {
-    ensure_game_closed(game)?;
-    let source = newest_slot(profile_dir)?;
-    let (mut save, _) = Save::read(source.game())?;
-    let (mut info, _) = Save::read(source.info())?;
-
-    // Steht der Lkw schon im Spielstand, etwa von einer früheren Leihe, dann womöglich unter
-    // einem Kennzeichen, das das Spiel vergeben hat. Die Prüfung auf gleiches Kennzeichen beim
-    // Einsetzen greift dann nicht, deshalb hier zusätzlich über die Teile.
-    if let Some(m) = find_package_truck(&save, package, DEFAULT_MIN_MATCH)? {
-        return Err(Error::Other(format!(
-            "Der Lkw steht schon im neuesten Spielstand ({}), unter dem Kennzeichen {}. Er wird nicht ein zweites Mal eingesetzt",
-            source.label(),
-            plate_text(&m.plate)
-        )));
-    }
-    insert_truck(&mut save, package, &InsertOptions::default())?;
-    let name = format!("{SLOT_NAME_PREFIX}{}", plate_text(&package.license_plate));
+    let PreparedSlot {
+        source,
+        game: save,
+        mut info,
+        name,
+        ..
+    } = prepared;
     set_info_name(&mut info, &name)?;
     set_info_file_time(&mut info, unix_seconds(now))?;
 
@@ -146,6 +204,24 @@ pub fn deploy_truck(
         source_slot: source.id,
         backup_dir,
     })
+}
+
+/// Setzt einen Lkw in den neuesten Spielstand des Profils ein und legt das Ergebnis als neuen
+/// Speicherplatz mit eigener `info.sii` an, ohne den Kontostand anzufassen. Mit Geldabgleich
+/// geht das über [`crate::flows::sync_and_write`].
+///
+/// Reihenfolge: Spiel prüfen, neuesten Speicherplatz lesen, Lkw einsetzen (auf einer Kopie),
+/// Ausgangs-Speicherplatz sichern, neuen Speicherplatz schreiben. Läuft das Spiel oder lässt
+/// sich das nicht prüfen, wird nichts geschrieben.
+pub fn deploy_truck(
+    profile_dir: &Path,
+    package: &TruckPackage,
+    backup_root: &Path,
+    game: &dyn GameCheck,
+    now: SystemTime,
+) -> Result<Deployed> {
+    let prepared = prepare_slot(profile_dir, Some(package), game)?;
+    write_slot(prepared, profile_dir, backup_root, game, now)
 }
 
 /// Wie der Lkw im Spielstand gefunden wurde.

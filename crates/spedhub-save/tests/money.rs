@@ -88,3 +88,19 @@ fn name_und_zeit_des_speicherplatzes() {
     // game.sii hat keinen save_container
     assert!(spedhub_save::set_info_name(&mut load(ZIEL), "x").is_err());
 }
+
+#[test]
+fn erfahrungspunkte_aus_info() {
+    let info = load(INFO);
+    assert_eq!(spedhub_save::info_experience(&info).unwrap(), 0);
+    let mut info = info;
+    let unit = info.single("save_container").unwrap();
+    info.set(&unit, "info_players_experience", "11100").unwrap();
+    assert_eq!(spedhub_save::info_experience(&info).unwrap(), 11_100);
+    info.set(&unit, "info_players_experience", "-5").unwrap();
+    assert!(matches!(
+        spedhub_save::info_experience(&info),
+        Err(Error::InvalidValue { .. })
+    ));
+    assert!(spedhub_save::info_experience(&load(ZIEL)).is_err());
+}

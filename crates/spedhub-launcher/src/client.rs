@@ -30,10 +30,18 @@ pub struct CompanyRef {
 pub struct Company {
     pub id: i64,
     pub name: String,
-    pub wage_percent: i64,
     pub your_role: String,
     pub balance: i64,
     pub members: Vec<Member>,
+    /// Betriebsvorschuss: so viel Geld hat der Fahrer im Spiel zusätzlich zum Lohnkonto
+    #[serde(default)]
+    pub advance: i64,
+    #[serde(default)]
+    pub daily_flat: i64,
+    #[serde(default)]
+    pub revenue_factor: f64,
+    #[serde(default)]
+    pub payroll_time: String,
 }
 
 impl Company {
@@ -48,6 +56,17 @@ pub struct Member {
     pub name: String,
     pub role: String,
     pub wallet: i64,
+    #[serde(default)]
+    pub open_claim: i64,
+    #[serde(default)]
+    pub company_km: i64,
+    #[serde(default)]
+    pub game_level: i64,
+    /// Lohnstufe, `None`, wenn keine passt
+    #[serde(default)]
+    pub stage: Option<i64>,
+    #[serde(default)]
+    pub cents_per_km: i64,
 }
 
 /// Ein Lkw im Fuhrpark, wie die Liste ihn zeigt.
@@ -92,6 +111,50 @@ pub struct LeasedTruck {
     pub odometer_km: i64,
     pub rev: i64,
     pub state: Value,
+}
+
+/// Antwort von `GET /api/trucks/{id}/lease`: die laufende Leihe mit Bauplan.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct LeaseInfo {
+    pub lease_id: i64,
+    /// Wer den Lkw hat
+    pub user_id: i64,
+    pub truck: LeasedTruck,
+}
+
+/// Antwort beim Geldabgleich.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SyncResult {
+    pub sync_id: i64,
+    /// Erster Abgleich dieses Fahrers: nichts gebucht
+    pub first: bool,
+    pub ingame_money: i64,
+    /// Was die gemeldeten Ereignisse erklären, `None` beim ersten Abgleich
+    pub expected: Option<i64>,
+    pub booked: Vec<SyncBooking>,
+    /// Mehr Geld im Spiel als erklärt
+    pub unexplained: Option<Unexplained>,
+    pub wallet: i64,
+    pub advance: i64,
+    /// Das kommt in den Spielstand
+    pub write_money: i64,
+    #[serde(default)]
+    pub game_level: i64,
+    #[serde(default)]
+    pub stage: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SyncBooking {
+    pub account: String,
+    pub kind: String,
+    pub amount: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Unexplained {
+    pub id: i64,
+    pub amount: i64,
 }
 
 /// Ein neuer Lkw für `POST /api/companies/{id}/trucks`.
@@ -231,6 +294,30 @@ impl Client {
             body["plate"] = json!(p);
         }
         self.post(&format!("/api/trucks/{truck_id}/checkin"), &body)
+    }
+
+    /// Die laufende Leihe eines Lkw mit Bauplan, Zustand und Kennzeichen. Darf der Fahrer, der
+    /// ihn hat, und der Chef.
+    pub fn lease(&self, truck_id: i64) -> Result<LeaseInfo> {
+        self.get(&format!("/api/trucks/{truck_id}/lease"))
+    }
+
+    /// Geldabgleich: Kontostand und Erfahrungspunkte aus dem Spielstand melden.
+    pub fn sync(&self, company_id: i64, ingame_money: i64, xp: Option<u64>) -> Result<SyncResult> {
+        let mut body = json!({ "ingame_money": ingame_money });
+        if let Some(xp) = xp {
+            body["xp"] = json!(xp);
+        }
+        self.post(&format!("/api/companies/{company_id}/sync"), &body)
+    }
+
+    /// Meldet, dass der Betrag aus dem Abgleich im Spielstand steht.
+    pub fn sync_written(&self, company_id: i64, sync_id: i64) -> Result<()> {
+        let _: Value = self.post(
+            &format!("/api/companies/{company_id}/sync/{sync_id}/written"),
+            &json!({}),
+        )?;
+        Ok(())
     }
 
     fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T> {

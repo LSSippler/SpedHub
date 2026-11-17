@@ -20,6 +20,7 @@ fn draft(kind: &'static str, amount: i64, note: &str) -> Option<Draft> {
     Some(Draft {
         kind,
         amount,
+        distance_km: None,
         note: note.into(),
     })
 }
@@ -36,12 +37,24 @@ fn alle_events_werden_uebersetzt() {
     };
     assert_eq!(
         translate(&delivered),
-        Ok(draft(
-            "job_delivered",
-            12_480,
-            "Auftrag abgeliefert, 523 km, Frachtschaden 2,5 %"
-        ))
+        Ok(Some(Draft {
+            distance_km: Some(523),
+            ..draft(
+                "job_delivered",
+                12_480,
+                "Auftrag abgeliefert, 523 km, Frachtschaden 2,5 %"
+            )
+            .unwrap()
+        }))
     );
+    // Die Strecke geht als eigenes Feld an den Server, gerundet
+    let booking = translate(&delivered)
+        .unwrap()
+        .unwrap()
+        .with_id("a-1".into());
+    let json = serde_json::to_value(&booking).unwrap();
+    assert_eq!(json["distance_km"], 523);
+    assert_eq!(json["type"], "job_delivered");
 
     let cancelled = GameplayData {
         cancel_penalty: Some(1_250),
@@ -98,6 +111,7 @@ fn notizen_ohne_zusatzwerte_und_grenzfaelle() {
         ..data("job.delivered")
     };
     assert_eq!(translate(&d).unwrap().unwrap().note, "Auftrag abgeliefert");
+    assert_eq!(translate(&d).unwrap().unwrap().distance_km, None);
     // Kein Schaden, krumme Werte, NaN
     let d = GameplayData {
         revenue: Some(1),
@@ -109,6 +123,15 @@ fn notizen_ohne_zusatzwerte_und_grenzfaelle() {
         translate(&d).unwrap().unwrap().note,
         "Auftrag abgeliefert, Frachtschaden 0,0 %"
     );
+    assert_eq!(translate(&d).unwrap().unwrap().distance_km, None);
+    // Ohne Strecke fehlt das Feld ganz, alte Zeilen im Postausgang lesen sich weiter
+    let b = translate(&d).unwrap().unwrap().with_id("a-2".into());
+    let json = serde_json::to_string(&b).unwrap();
+    assert!(!json.contains("distance_km"), "{json}");
+    let old: Booking =
+        serde_json::from_str(r#"{"event_id":"a-3","type":"tollgate","amount":5,"note":"Maut"}"#)
+            .unwrap();
+    assert_eq!(old.distance_km, None);
     // Unbekannte Strafe bleibt mit Originaltext, fehlende Strafe ist schlicht "Strafe"
     let f = GameplayData {
         fine_amount: Some(10),
@@ -344,6 +367,7 @@ fn postausgang_ueberlebt_kaputte_zeilen() {
             event_id: format!("x-1-{n}"),
             kind: "tollgate".into(),
             amount: 10,
+            distance_km: None,
             note: "Maut".into(),
         },
     };

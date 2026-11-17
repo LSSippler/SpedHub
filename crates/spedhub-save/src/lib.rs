@@ -29,7 +29,7 @@ pub mod write;
 
 pub use check::{Problem, Report, check};
 pub use error::{Error, Result};
-pub use info::{info_name, set_info_file_time, set_info_name};
+pub use info::{info_experience, info_name, set_info_file_time, set_info_name};
 pub use money::{info_money, money, set_info_money, set_money};
 pub use plate::{custom_plate, plate_country, plate_text};
 pub use sii::{Field, Format, Save, Unit, decode};

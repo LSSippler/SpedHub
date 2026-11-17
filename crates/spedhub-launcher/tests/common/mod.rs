@@ -205,16 +205,29 @@ impl Drop for TestServer {
 
 /// Direkte Anfrage an den Server für Dinge, die der Launcher (noch) nicht kann.
 pub fn post_raw(url: &str, token: &str, body: serde_json::Value) -> serde_json::Value {
+    send_raw("POST", url, token, body)
+}
+
+pub fn send_raw(
+    method: &str,
+    url: &str,
+    token: &str,
+    body: serde_json::Value,
+) -> serde_json::Value {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .http_status_as_error(false)
         .proxy(None)
+        .allow_non_standard_methods(true)
         .build()
         .into();
-    let mut res = agent
-        .post(url)
-        .header("Authorization", &format!("Bearer {token}"))
-        .send_json(body)
+    let req = ureq::http::Request::builder()
+        .method(method)
+        .uri(url)
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Content-Type", "application/json")
+        .body(body.to_string())
         .unwrap();
+    let mut res = agent.run(req).unwrap();
     assert!(res.status().is_success(), "{url}: {}", res.status());
     res.body_mut().read_json().unwrap()
 }

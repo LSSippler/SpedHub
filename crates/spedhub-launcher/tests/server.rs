@@ -6,10 +6,14 @@ use common::*;
 use serde_json::json;
 use spedhub_launcher::Error;
 use spedhub_launcher::client::Client;
+use spedhub_launcher::flows::{PackageSource, describe, lease_package, sync_and_write};
 use spedhub_launcher::savegame::{
-    deploy_truck, new_truck_from_save, package_from_checkout, read_for_return,
+    SYNC_SLOT_NAME, deploy_truck, new_truck_from_save, package_from_checkout, read_for_return,
 };
-use spedhub_save::{Save, set_truck_state, truck_state, write_save};
+use spedhub_launcher::settings::AppPaths;
+use spedhub_save::{
+    Save, info_money, info_name, money, set_money, set_truck_state, truck_state, write_save,
+};
 use std::{fs, time::SystemTime};
 
 #[test]
@@ -269,5 +273,283 @@ fn rueckgabe_mit_neuem_kennzeichen_vom_spiel() {
         .checkin(truck_id, back.odometer_km, Some(&back.state), None)
         .unwrap();
     assert_eq!(r.plate, "EF XU 577");
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Firma mit Chefin und Fahrer auf einem echten Server.
+struct Setup {
+    server: TestServer,
+    company: i64,
+    chef: Client,
+    chef_token: String,
+    invite: String,
+    fahrer: Client,
+}
+
+fn setup(dir: &std::path::Path) -> Setup {
+    let server = TestServer::start(&dir.join("server.db"));
+    let url = server.url();
+    let mut chef = Client::new(&url);
+    let chef_token = chef.register("Chefin", "geheim1234").unwrap().token;
+    let firma = post_raw(
+        &format!("{url}/api/companies"),
+        &chef_token,
+        json!({ "name": "Nordfracht" }),
+    );
+    let mut fahrer = Client::new(&url);
+    let t = fahrer.register("Fahrer", "geheim1234").unwrap().token;
+    post_raw(
+        &format!("{url}/api/companies/join"),
+        &t,
+        json!({ "invite_code": firma["invite_code"] }),
+    );
+    Setup {
+        server,
+        company: firma["id"].as_i64().unwrap(),
+        chef,
+        chef_token,
+        invite: firma["invite_code"].as_str().unwrap().to_string(),
+        fahrer,
+    }
+}
+
+fn slot_count(profile: &std::path::Path) -> usize {
+    fs::read_dir(profile.join("save")).unwrap().count()
+}
+
+/// Wie das Spiel einen Speicherplatz neu schreibt: Kontostand ändern, Änderungszeit jetzt.
+fn play(slot_dir: &std::path::Path, money_now: i64) {
+    let path = slot_dir.join("game.sii");
+    let (mut save, _) = Save::read(&path).unwrap();
+    set_money(&mut save, money_now).unwrap();
+    write_save(&path, &save).unwrap();
+    fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(SystemTime::now())
+        .unwrap();
+}
+
+#[test]
+fn geld_abgleichen_mit_neuem_speicherplatz() {
+    let dir = temp_dir("abgleich");
+    let s = setup(&dir);
+    let url = s.server.url();
+    let docs = documents("abgleich-docs");
+    let backups = dir.join("backups");
+    // Vorschuss 3000, damit der neue Kontostand vom alten (2000) zu unterscheiden ist
+    send_raw(
+        "PATCH",
+        &format!("{url}/api/companies/{}", s.company),
+        &s.chef_token,
+        json!({ "advance": 3000 }),
+    );
+
+    // Erster Abgleich: nichts gebucht, neuer Speicherplatz mit 0 + 3000
+    let before = slot_count(&docs.nordfracht);
+    let o = sync_and_write(
+        &s.fahrer,
+        s.company,
+        &docs.nordfracht,
+        None,
+        &backups,
+        &FakeGame::closed(),
+        SystemTime::now(),
+    )
+    .unwrap();
+    assert!(o.sync.first);
+    assert!(o.confirmed);
+    assert_eq!((o.sync.ingame_money, o.sync.write_money), (2000, 3000));
+    assert_eq!(o.deployed.name, SYNC_SLOT_NAME);
+    assert_eq!(o.deployed.source_slot, "autosave");
+    assert_eq!(slot_count(&docs.nordfracht), before + 1);
+    let (game, _) = Save::read(o.deployed.slot_dir.join("game.sii")).unwrap();
+    let (info, _) = Save::read(o.deployed.slot_dir.join("info.sii")).unwrap();
+    assert_eq!(money(&game).unwrap(), 3000);
+    assert_eq!(info_money(&info).unwrap(), 3000);
+    assert_eq!(info_name(&info).unwrap(), "SpedHub: Geldabgleich");
+    assert!(o.deployed.backup_dir.join("game.sii").is_file());
+    assert!(describe(&o.sync).contains("Erster Abgleich"));
+    // Erfahrung aus info.sii ist angekommen
+    let me = s.fahrer.me().unwrap();
+    let m = s.fahrer.company(s.company).unwrap();
+    let mine = m.members.iter().find(|x| x.user_id == me.user_id).unwrap();
+    assert_eq!((mine.game_level, mine.stage), (0, Some(1)));
+
+    // Im Spiel: Auftrag über 1500 €, 200 € fürs Tanken. Das Plugin meldet den Auftrag.
+    play(&o.deployed.slot_dir, 3000 + 1500 - 200);
+    post_raw(
+        &format!("{url}/api/companies/{}/events", s.company),
+        s.fahrer.token().unwrap(),
+        json!({ "event_id": "job-1", "type": "job_delivered", "amount": 1500, "distance_km": 400 }),
+    );
+    let o = sync_and_write(
+        &s.fahrer,
+        s.company,
+        &docs.nordfracht,
+        None,
+        &backups,
+        &FakeGame::closed(),
+        SystemTime::now(),
+    )
+    .unwrap();
+    assert!(!o.sync.first);
+    assert_eq!(o.sync.expected, Some(4500));
+    assert_eq!(o.sync.booked.len(), 1);
+    assert_eq!(
+        (o.sync.booked[0].kind.as_str(), o.sync.booked[0].amount),
+        ("betriebskosten", -200)
+    );
+    assert_eq!(o.sync.write_money, 3000);
+    assert!(describe(&o.sync).contains("Betriebskosten 200 €"));
+    let (game, _) = Save::read(o.deployed.slot_dir.join("game.sii")).unwrap();
+    assert_eq!(money(&game).unwrap(), 3000);
+    assert_eq!(s.chef.company(s.company).unwrap().balance, 1300);
+
+    // Läuft das Spiel schon vorher, fragt der Launcher den Server gar nicht erst
+    let snap = snapshot(&docs.nordfracht);
+    let e = sync_and_write(
+        &s.fahrer,
+        s.company,
+        &docs.nordfracht,
+        None,
+        &backups,
+        &FakeGame::running(),
+        SystemTime::now(),
+    )
+    .unwrap_err();
+    assert_eq!(e, Error::GameRunning);
+    // Startet es zwischen Abgleich und Schreiben: nichts geschrieben, der Abgleich bleibt
+    // unbestätigt und der nächste rechnet vom gelesenen Stand
+    let e = sync_and_write(
+        &s.fahrer,
+        s.company,
+        &docs.nordfracht,
+        None,
+        &backups,
+        &FakeGame::sequence(vec![Ok(false), Ok(true)]),
+        SystemTime::now(),
+    )
+    .unwrap_err();
+    assert_eq!(e, Error::GameRunning);
+    assert_eq!(snapshot(&docs.nordfracht), snap, "nichts geschrieben");
+    let o = sync_and_write(
+        &s.fahrer,
+        s.company,
+        &docs.nordfracht,
+        None,
+        &backups,
+        &FakeGame::closed(),
+        SystemTime::now(),
+    )
+    .unwrap();
+    assert_eq!(o.sync.expected, Some(3000));
+    assert!(o.sync.booked.is_empty());
+    assert!(o.sync.unexplained.is_none());
+    assert!(describe(&o.sync).contains("Kontostand passt"));
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn einsetzen_und_abgleich_in_einem_schritt() {
+    let dir = temp_dir("einsetzen-abgleich");
+    let s = setup(&dir);
+    let docs = documents("einsetzen-abgleich-docs");
+    let quelle = docs.nordfracht.join("save").join("1").join("game.sii");
+    let truck_id = s
+        .chef
+        .add_truck(
+            s.company,
+            &new_truck_from_save(&quelle, "SPED 001").unwrap(),
+        )
+        .unwrap();
+    let checkout = s.fahrer.checkout(truck_id).unwrap();
+    let package = package_from_checkout(&checkout.truck).unwrap();
+
+    let before = slot_count(&docs.nordfracht);
+    let o = sync_and_write(
+        &s.fahrer,
+        s.company,
+        &docs.nordfracht,
+        Some(&package),
+        &dir.join("backups"),
+        &FakeGame::closed(),
+        SystemTime::now(),
+    )
+    .unwrap();
+    // Genau ein neuer Speicherplatz, mit Lkw und neuem Kontostand
+    assert_eq!(slot_count(&docs.nordfracht), before + 1);
+    assert_eq!(o.deployed.name, "SpedHub: SPED 001");
+    let (game, _) = Save::read(o.deployed.slot_dir.join("game.sii")).unwrap();
+    let (info, _) = Save::read(o.deployed.slot_dir.join("info.sii")).unwrap();
+    assert_eq!(truck_state(&game, Some("SPED 001")).unwrap().odometer, 3865);
+    assert_eq!(
+        (money(&game).unwrap(), info_money(&info).unwrap()),
+        (2000, 2000)
+    );
+    assert!(o.sync.first && o.confirmed);
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn bauplan_vom_server_wenn_hier_keiner_liegt() {
+    let dir = temp_dir("bauplan");
+    let s = setup(&dir);
+    let url = s.server.url();
+    let docs = documents("bauplan-docs");
+    let quelle = docs.nordfracht.join("save").join("1").join("game.sii");
+    let truck_id = s
+        .chef
+        .add_truck(
+            s.company,
+            &new_truck_from_save(&quelle, "SPED 001").unwrap(),
+        )
+        .unwrap();
+    let checkout = s.fahrer.checkout(truck_id).unwrap();
+    let expected = package_from_checkout(&checkout.truck).unwrap();
+
+    // Ein anderer Rechner: leere Ablage, der Bauplan kommt vom Server und wird abgelegt
+    let other_pc = AppPaths::new(dir.join("anderer-rechner"));
+    assert!(other_pc.load_lease(truck_id).is_none());
+    let (p, from) = lease_package(&s.fahrer, &other_pc, truck_id).unwrap();
+    assert_eq!(from, PackageSource::Server);
+    assert_eq!(p, expected);
+    assert_eq!(other_pc.load_lease(truck_id), Some(expected.clone()));
+    let (_, from) = lease_package(&s.fahrer, &other_pc, truck_id).unwrap();
+    assert_eq!(from, PackageSource::Local);
+
+    // Die Chefin darf auch, ein Kollege nicht
+    let (p, _) = lease_package(&s.chef, &AppPaths::new(dir.join("chef")), truck_id).unwrap();
+    assert_eq!(p, expected);
+    let mut kollege = Client::new(&url);
+    let t = kollege.register("Kollege", "geheim1234").unwrap().token;
+    post_raw(
+        &format!("{url}/api/companies/join"),
+        &t,
+        json!({ "invite_code": s.invite }),
+    );
+    let e = lease_package(&kollege, &AppPaths::new(dir.join("kollege")), truck_id).unwrap_err();
+    assert_eq!(
+        e.to_string(),
+        "Server: Den Lkw hat jemand anderes ausgeliehen"
+    );
+
+    // Damit lässt sich auf dem anderen Rechner einsetzen und zurückgeben
+    let d = sync_and_write(
+        &s.fahrer,
+        s.company,
+        &docs.nordfracht,
+        Some(&p),
+        &other_pc.backups(),
+        &FakeGame::closed(),
+        SystemTime::now(),
+    )
+    .unwrap();
+    assert_eq!(d.deployed.name, "SpedHub: SPED 001");
+    let back = read_for_return(&docs.nordfracht, "SPED 001", Some(&p))
+        .unwrap()
+        .unwrap();
+    assert_eq!(back.odometer_km, 3865);
     let _ = fs::remove_dir_all(dir);
 }

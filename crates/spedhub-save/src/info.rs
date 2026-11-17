@@ -1,4 +1,4 @@
-//! Name und Zeitstempel eines Speicherplatzes in `info.sii`.
+//! Name, Zeitstempel und Erfahrung eines Speicherplatzes in `info.sii`.
 
 use crate::error::{Error, Result};
 use crate::layout::info as i;
@@ -33,4 +33,13 @@ pub fn set_info_file_time(info: &mut Save, unix_seconds: u64) -> Result<()> {
     let raw = info.get(&unit, i::FILE_TIME)?;
     parse_int(raw).ok_or_else(|| Error::invalid_value(&unit, i::FILE_TIME, raw))?;
     info.set(&unit, i::FILE_TIME, &unix_seconds.to_string())
+}
+
+/// Erfahrungspunkte des Fahrers (`info_players_experience`).
+pub fn info_experience(info: &Save) -> Result<u64> {
+    let unit = info.single(i::KIND)?;
+    let raw = info.get(&unit, i::EXPERIENCE)?;
+    parse_int(raw)
+        .and_then(|v| u64::try_from(v).ok())
+        .ok_or_else(|| Error::invalid_value(&unit, i::EXPERIENCE, raw))
 }

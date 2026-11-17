@@ -5,10 +5,11 @@
 
 use eframe::egui;
 use spedhub_launcher::client::{Client, Company, Me, Truck};
+use spedhub_launcher::flows::{describe, lease_package, sync_and_write};
 use spedhub_launcher::profiles::{Profile, SaveSlot, find_profiles, list_slots};
 use spedhub_launcher::savegame::{
-    FoundBy, ReturnData, SaveTruck, deploy_truck, new_truck_from_save, package_from_checkout,
-    read_for_return, trucks_in_save,
+    FoundBy, ReturnData, SaveTruck, new_truck_from_save, package_from_checkout, read_for_return,
+    trucks_in_save,
 };
 use spedhub_launcher::settings::{
     AppPaths, DEFAULT_SERVER, Settings, remove_plugin_config, write_plugin_config,
@@ -367,6 +368,7 @@ impl App {
     fn checkout(&mut self, ctx: &egui::Context, truck: &Truck) {
         let client = self.client();
         let (truck_id, plate) = (truck.id, truck.plate.clone());
+        let company = self.company.as_ref().map(|c| c.id);
         let paths = self.paths.clone();
         let profile = self.profile().map(|p| p.dir.clone());
         self.run(ctx, "Lkw wird ausgeliehen", move || {
@@ -392,7 +394,7 @@ impl App {
                     "{plate} ist ausgeliehen. Wähle ein Firmenprofil und schreibe den Lkw dann in den Spielstand"
                 )));
             };
-            match deploy(&profile, &package, paths.as_ref()) {
+            match deploy(&client, company, &profile, Some(&package), paths.as_ref()) {
                 Ok(text) => Ok(Done::Info(format!("{plate} ist ausgeliehen. {text}"))),
                 Err(e) => {
                     // Nur wenn das Spiel lief, hilft ein zweiter Versuch später
@@ -415,15 +417,27 @@ impl App {
             return;
         };
         let paths = self.paths.clone();
-        let Some(package) = paths.as_ref().and_then(|p| p.load_lease(truck.id)) else {
-            self.error(format!(
-                "Für {} liegt hier kein Bauplan. Den gibt der Server nur beim Ausleihen heraus. Bitte zurückgeben und neu ausleihen",
-                truck.plate
-            ));
+        let client = self.client();
+        let company = self.company.as_ref().map(|c| c.id);
+        let truck_id = truck.id;
+        self.run(ctx, "Lkw wird in den Spielstand geschrieben", move || {
+            // Liegt der Bauplan nicht auf diesem Rechner, kommt er vom Server
+            let package = package_for(&client, paths.as_ref(), truck_id)?;
+            deploy(&client, company, &profile, Some(&package), paths.as_ref()).map(Done::Info)
+        });
+    }
+
+    /// Geldabgleich ohne Lkw: Kontostand und Erfahrung melden, neuen Kontostand schreiben.
+    fn sync_money(&mut self, ctx: &egui::Context) {
+        let Some(profile) = self.profile().map(|p| p.dir.clone()) else {
+            self.error("Bitte zuerst ein Firmenprofil wählen");
             return;
         };
-        self.run(ctx, "Lkw wird in den Spielstand geschrieben", move || {
-            deploy(&profile, &package, paths.as_ref()).map(Done::Info)
+        let paths = self.paths.clone();
+        let client = self.client();
+        let company = self.company.as_ref().map(|c| c.id);
+        self.run(ctx, "Geld wird abgeglichen", move || {
+            deploy(&client, company, &profile, None, paths.as_ref()).map(Done::Info)
         });
     }
 
@@ -439,9 +453,12 @@ impl App {
             });
             return;
         };
-        // Das Paket vom Ausleihen hilft, den Lkw ohne Kennzeichen wiederzuerkennen.
-        let package = self.paths.as_ref().and_then(|p| p.load_lease(truck_id));
+        let paths = self.paths.clone();
+        let client = self.client();
         self.run(ctx, "Spielstand wird gelesen", move || {
+            // Der Bauplan hilft, den Lkw ohne Kennzeichen wiederzuerkennen. Ohne ihn geht es
+            // nur über das Kennzeichen.
+            let package = package_for(&client, paths.as_ref(), truck_id).ok();
             // Lässt sich der Spielstand nicht lesen, bleibt die Eingabe von Hand.
             let (data, problem) = match read_for_return(&profile, &plate, package.as_ref()) {
                 Ok(d) => (d, None),
@@ -664,6 +681,35 @@ impl App {
         ui.heading(format!("Fuhrpark von {}", company.name));
         ui.label(format!("Firmenkasse: {} Euro", company.balance));
         let my_id = self.me.as_ref().map(|m| m.user_id);
+        if let Some(m) = company.members.iter().find(|m| Some(m.user_id) == my_id) {
+            let stage = m.stage.map_or_else(
+                || "keine Lohnstufe".to_string(),
+                |s| format!("Lohnstufe {s}"),
+            );
+            let claim = if m.open_claim > 0 {
+                format!(", offene Lohnforderung {} Euro", m.open_claim)
+            } else {
+                String::new()
+            };
+            ui.label(format!(
+                "Dein Lohnkonto: {} Euro{claim}. Level {}, {} Firmenkilometer, {stage} ({} Cent je km)",
+                m.wallet, m.game_level, m.company_km, m.cents_per_km
+            ));
+        }
+        ui.horizontal_wrapped(|ui| {
+            let ready = self.busy.is_none() && self.profile().is_some();
+            if ui
+                .add_enabled(ready, egui::Button::new("Geld abgleichen"))
+                .clicked()
+            {
+                self.sync_money(ui.ctx());
+            }
+            ui.label(format!(
+                "Liest Kontostand und Erfahrung aus dem neuesten Spielstand und legt einen neuen Speicherplatz mit Lohnkonto plus {} Euro Vorschuss an",
+                company.advance
+            ));
+        });
+        ui.add_space(4.0);
         if self.trucks.is_empty() {
             ui.label("Noch keine Lkw im Fuhrpark");
         }
@@ -889,18 +935,47 @@ fn profile_label(p: &Profile) -> String {
     }
 }
 
-/// Lkw als neuen Speicherplatz in das Profil schreiben. Text für die Erfolgsmeldung.
+/// Bauplan eines geliehenen Lkw: aus `leases\` oder vom Server.
+fn package_for(
+    client: &Client,
+    paths: Option<&AppPaths>,
+    truck_id: i64,
+) -> Result<spedhub_save::TruckPackage> {
+    match paths {
+        Some(p) => lease_package(client, p, truck_id).map(|(package, _)| package),
+        None => package_from_checkout(&client.lease(truck_id)?.truck),
+    }
+}
+
+/// Neuen Speicherplatz mit Geldabgleich anlegen, mit `package` auch mit dem Lkw. Text für die
+/// Erfolgsmeldung.
 fn deploy(
+    client: &Client,
+    company: Option<i64>,
     profile: &std::path::Path,
-    package: &spedhub_save::TruckPackage,
+    package: Option<&spedhub_save::TruckPackage>,
     paths: Option<&AppPaths>,
 ) -> Result<String> {
+    let company = company.ok_or_else(|| Error::Other("Bitte zuerst eine Firma wählen".into()))?;
     let backups = paths
         .map(AppPaths::backups)
         .ok_or_else(|| Error::Other("Kein Ort für Backups, LOCALAPPDATA fehlt".into()))?;
-    let d = deploy_truck(profile, package, &backups, &ProcessCheck, SystemTime::now())?;
-    Ok(format!(
-        "Neuer Speicherplatz \"{}\" angelegt. Im Spiel unter Laden auswählen",
-        d.name
-    ))
+    let o = sync_and_write(
+        client,
+        company,
+        profile,
+        package,
+        &backups,
+        &ProcessCheck,
+        SystemTime::now(),
+    )?;
+    let mut text = format!(
+        "Neuer Speicherplatz \"{}\" angelegt. Im Spiel unter Laden auswählen. {}",
+        o.deployed.name,
+        describe(&o.sync)
+    );
+    if !o.confirmed {
+        text.push_str(". Der Server hat die Bestätigung nicht bekommen, beim nächsten Abgleich kann deshalb eine Differenz entstehen");
+    }
+    Ok(text)
 }

@@ -97,35 +97,44 @@ fn alle_events_kommen_beim_server_an() {
     };
     assert_eq!(agent.submit(&broken), Submitted::Invalid);
 
-    wait_until("sieben Buchungen", || {
-        ledger(&server.url(), &token, company).len() == 7
+    wait_until("sechs Buchungen", || {
+        ledger(&server.url(), &token, company).len() == 6
     });
     wait_until("Postausgang leer", || {
         read_entries(&paths.outbox()).is_empty()
     });
     agent.shutdown();
 
-    // Auftrag: 30 % an den Fahrer, 70 % an die Firma. Der Rest nach den Buchungsregeln.
+    // Auftrag: der ganze Erlös an die Firma. Der Rest nach den Buchungsregeln.
     let l = ledger(&server.url(), &token, company);
     assert_eq!(
         amounts(&l),
         vec![
             ("fahrer".into(), "auftrag_abgebrochen".into(), -500),
-            ("fahrer".into(), "lohn".into(), 3_000),
             ("fahrer".into(), "strafe".into(), -300),
-            ("firma".into(), "auftrag".into(), 7_000),
+            ("firma".into(), "auftrag".into(), 10_000),
             ("firma".into(), "faehre".into(), -700),
             ("firma".into(), "maut".into(), -40),
             ("firma".into(), "zug".into(), -600),
         ]
+    );
+    // Die Strecke kommt als eigenes Feld an und zählt als Firmenkilometer
+    let job = l.iter().find(|e| e["kind"] == "auftrag").unwrap();
+    assert_eq!(job["distance_km"], 412);
+    assert_eq!(job["game_amount"], 10_000);
+    assert!(
+        l.iter()
+            .filter(|e| e["kind"] != "auftrag")
+            .all(|e| e["distance_km"].is_null())
     );
     let notes: Vec<&str> = l.iter().map(|e| e["note"].as_str().unwrap()).collect();
     assert!(notes.contains(&"Auftrag abgeliefert, 412 km, Frachtschaden 3,1 %"));
     assert!(notes.contains(&"Strafe: Zu schnell"));
     assert!(notes.contains(&"Fähre Calais nach Dover"));
     let c = company_info(&server.url(), &token, company);
-    assert_eq!(c["balance"], 7_000 - 700 - 40 - 600);
-    assert_eq!(c["members"][0]["wallet"], 3_000 - 500 - 300);
+    assert_eq!(c["balance"], 10_000 - 700 - 40 - 600);
+    assert_eq!(c["members"][0]["wallet"], -500 - 300);
+    assert_eq!(c["members"][0]["company_km"], 412);
 
     let log = read_log(&paths);
     assert!(log.contains("Gesendet: job_delivered 10000 Euro"));
@@ -171,7 +180,7 @@ fn ohne_server_landet_alles_im_postausgang_und_geht_spaeter_raus() {
     wait_until("Postausgang leer", || {
         read_entries(&paths.outbox()).is_empty()
     });
-    assert_eq!(ledger(&url, &token, company).len(), 7);
+    assert_eq!(ledger(&url, &token, company).len(), 6);
     assert!(read_log(&paths).contains("Server wieder erreichbar"));
     agent.shutdown();
     drop(server);
@@ -208,7 +217,7 @@ fn postausgang_ueberlebt_einen_neustart_des_spiels() {
         second_ids.push(queued(second.submit(&e)));
     }
     wait_until("alle sechs Events gebucht", || {
-        ledger(&url, &token, company).len() == 7
+        ledger(&url, &token, company).len() == 6
     });
     second.shutdown();
     for id in &second_ids {
@@ -246,6 +255,7 @@ fn erneutes_senden_bucht_nicht_doppelt_und_abgelehntes_bleibt_liegen() {
             event_id: id.clone(),
             kind: "tollgate".into(),
             amount: 40,
+            distance_km: None,
             note: "Maut".into(),
         },
     };
@@ -255,6 +265,7 @@ fn erneutes_senden_bucht_nicht_doppelt_und_abgelehntes_bleibt_liegen() {
             event_id: "kaputt-1".into(),
             kind: "geschenk".into(),
             amount: 5,
+            distance_km: None,
             note: String::new(),
         },
     };

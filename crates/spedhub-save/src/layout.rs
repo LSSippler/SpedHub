@@ -128,6 +128,9 @@ pub mod info {
     /// Zeitpunkt des Speicherns in Sekunden seit 1970. Vermutlich sortiert das Spiel danach,
     /// bestätigt ist das nicht.
     pub const FILE_TIME: &str = "file_time";
+    /// Erfahrungspunkte des Fahrers. Das Level rechnet das Spiel daraus selbst aus, siehe
+    /// `docs/save-format.md` unter "Erfahrung und Level".
+    pub const EXPERIENCE: &str = "info_players_experience";
 }
 
 /// Neue Unit-Namen sehen aus wie die des Spiels: `_nameless.2ff.<hhhh>.<llll>`, die hinteren

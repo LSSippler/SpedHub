@@ -9,7 +9,8 @@
 //! | `player.use.ferry` | `pay.amount` | `ferry` |
 //! | `player.use.train` | `pay.amount` | `train` |
 //!
-//! Beträge sind in der Spielwährung, bei ETS2 also Euro.
+//! Beträge sind in der Spielwährung, bei ETS2 also Euro. Bei `job_delivered` geht außerdem die
+//! Strecke als `distance_km` mit, der Server schreibt sie dem Fahrer als Firmenkilometer gut.
 
 use serde::{Deserialize, Serialize};
 
@@ -37,6 +38,9 @@ pub struct Booking {
     #[serde(rename = "type")]
     pub kind: String,
     pub amount: i64,
+    /// Gefahrene Kilometer, gerundet. Nur bei `job_delivered`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distance_km: Option<i64>,
     pub note: String,
 }
 
@@ -45,6 +49,7 @@ pub struct Booking {
 pub struct Draft {
     pub kind: &'static str,
     pub amount: i64,
+    pub distance_km: Option<i64>,
     pub note: String,
 }
 
@@ -54,6 +59,7 @@ impl Draft {
             event_id,
             kind: self.kind.to_string(),
             amount: self.amount,
+            distance_km: self.distance_km,
             note: self.note,
         }
     }
@@ -107,7 +113,19 @@ pub fn translate(data: &GameplayData) -> Result<Option<Draft>, String> {
             data.id
         ));
     }
-    Ok(Some(Draft { kind, amount, note }))
+    let distance_km = match kind {
+        "job_delivered" => data
+            .distance_km
+            .filter(|v| v.is_finite())
+            .map(|v| v.max(0.0).round() as i64),
+        _ => None,
+    };
+    Ok(Some(Draft {
+        kind,
+        amount,
+        distance_km,
+        note,
+    }))
 }
 
 fn delivered_note(data: &GameplayData) -> String {
