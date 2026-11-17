@@ -208,7 +208,16 @@ fn rueckgabe_mit_neuem_kennzeichen_vom_spiel() {
     .unwrap();
 
     // Das Spiel speichert: neue Namen, neues Kennzeichen, 425 km gefahren
-    fs::copy(testdata(NACH_SPIEL), deployed.slot_dir.join("game.sii")).unwrap();
+    // Wie das Spiel die Datei neu schreiben: Unter Windows behält fs::copy die alte
+    // Änderungszeit, deshalb ausdrücklich auf jetzt setzen.
+    let game_sii = deployed.slot_dir.join("game.sii");
+    fs::copy(testdata(NACH_SPIEL), &game_sii).unwrap();
+    fs::File::options()
+        .write(true)
+        .open(&game_sii)
+        .unwrap()
+        .set_modified(SystemTime::now())
+        .unwrap();
 
     // Rückgabe: über das Kennzeichen nichts, über die Teile der Lkw mit neuem Kennzeichen
     let lease = app.load_lease(truck_id).unwrap();
