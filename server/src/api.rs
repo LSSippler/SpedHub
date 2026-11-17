@@ -4,6 +4,7 @@ use crate::{
     error::{ApiError, ApiResult},
     levels::{WageLevel, standing, wage_levels},
     payroll,
+    reconcile::{client_time, correct_late, kind_label, last_point, plausible_time, window_sum},
 };
 use argon2::{
     Argon2,
@@ -884,6 +885,10 @@ struct EventReq {
     distance_km: Option<f64>,
     #[serde(default)]
     note: String,
+    /// Wann das Ereignis im Spiel passiert ist: Systemzeit des Fahrer-PCs, Unix-Sekunden UTC.
+    /// Fehlt er oder ist er unplausibel, gilt der Empfangszeitpunkt.
+    #[serde(default)]
+    occurred_at: Option<i64>,
 }
 
 /// Ereignis aus dem Spiel buchen. Die Regeln:
@@ -892,7 +897,13 @@ struct EventReq {
 /// - tollgate, ferry, train: zahlt die Firma
 ///
 /// Jede Buchung merkt sich in `game_amount` den vollen Betrag aus dem Spiel mit Vorzeichen, so
-/// wie er den Kontostand im Spiel verändert hat. Daraus rechnet der Geldabgleich.
+/// wie er den Kontostand im Spiel verändert hat, und in `occurred_at`, wann es laut Client im
+/// Spiel passiert ist. Ohne plausiblen Zeitpunkt bleibt `occurred_at` leer, dann zählt das
+/// Ereignis im nächsten Abgleich. Daraus rechnet der Geldabgleich.
+///
+/// Ist das Ereignis laut Client vor einem Abgleich passiert, der es nicht kannte, steckte sein Spielbetrag
+/// schon im damaligen Kontostand. Dann wird dieser Abgleich korrigiert (siehe
+/// [`correct_late`]), und die Antwort sagt das unter `late`.
 async fn post_event(
     State(db): State<Db>,
     State(clock): State<Clock>,
@@ -952,10 +963,26 @@ async fn post_event(
     };
     let (account, kind, amount, game_amount) = booking;
     let distance = if kind == "auftrag" { distance } else { None };
+    let now = clock.now();
+    // Nur ein Zeitpunkt vom Client kann einen alten Abgleich korrigieren. Ohne ihn ist das
+    // Ereignis nach jedem bisherigen Abgleich angekommen und zählt im nächsten Fenster.
+    let reported_at = client_time(b.occurred_at, now);
+    let late = match reported_at {
+        Some(t) => correct_late(
+            &tx,
+            company_id,
+            user.id,
+            t,
+            game_amount,
+            kind_label(kind),
+            now,
+        )?,
+        None => None,
+    };
     tx.execute(
         "INSERT INTO ledger (company_id, account, user_id, kind, amount, event_id, note, created_at,
-                             game_amount, distance_km)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                             game_amount, distance_km, occurred_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             company_id,
             account,
@@ -964,22 +991,28 @@ async fn post_event(
             amount,
             event_id,
             b.note,
-            clock.now(),
+            now,
             game_amount,
-            distance
+            distance,
+            reported_at
         ],
     )?;
     let balance = company_balance(&tx, company_id)?;
     let my_wallet = wallet(&tx, company_id, user.id)?;
     tx.commit()?;
-    Ok(Json(json!({
+    let mut res = json!({
         "duplicate": false,
         "booked": [{
             "account": account, "kind": kind, "amount": amount, "game_amount": game_amount,
             "distance_km": distance
         }],
+        "occurred_at": reported_at,
         "balance": balance, "wallet": my_wallet
-    })))
+    });
+    if let Some(late) = late {
+        res["late"] = late;
+    }
+    Ok(Json(res))
 }
 
 #[derive(Deserialize)]
@@ -1046,7 +1079,7 @@ async fn get_ledger(
     role_in(&conn, company_id, user.id)?;
     let mut stmt = conn.prepare(
         "SELECT l.id, l.account, u.name, l.kind, l.amount, l.note, l.created_at, l.user_id,
-                l.game_amount, l.distance_km, l.payroll_id
+                l.game_amount, l.distance_km, l.payroll_id, l.occurred_at, l.event_id
          FROM ledger l LEFT JOIN users u ON u.id = l.user_id
          WHERE l.company_id = ?1 ORDER BY l.id DESC LIMIT ?2",
     )?;
@@ -1059,7 +1092,9 @@ async fn get_ledger(
                 "created_at": r.get::<_, i64>(6)?, "user_id": r.get::<_, Option<i64>>(7)?,
                 "game_amount": r.get::<_, Option<i64>>(8)?,
                 "distance_km": r.get::<_, Option<i64>>(9)?,
-                "payroll_id": r.get::<_, Option<i64>>(10)?
+                "payroll_id": r.get::<_, Option<i64>>(10)?,
+                "occurred_at": r.get::<_, Option<i64>>(11)?,
+                "event_id": r.get::<_, Option<String>>(12)?
             }))
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -1118,12 +1153,19 @@ struct SyncReq {
     /// Erfahrungspunkte aus `info.sii`
     #[serde(default)]
     xp: Option<i64>,
+    /// Änderungszeit von `game.sii` des gelesenen Spielstands, Unix-Sekunden. Der Kontostand
+    /// darin enthält die Ereignisse bis hier. Fehlt sie, gilt der Empfangszeitpunkt.
+    #[serde(default)]
+    saved_at: Option<i64>,
 }
 
 /// Geldabgleich eines Fahrers. Vergleicht den Kontostand im Spiel mit dem, was die gemeldeten
 /// Ereignisse seit dem letzten Abgleich erklären:
 ///
-/// erwartet = Stand nach dem letzten Abgleich + Summe der Spielbeträge seitdem
+/// erwartet = Stand nach dem letzten Abgleich + Summe der Spielbeträge im Fenster
+///
+/// Das Fenster reicht von der Grundlage des letzten Abgleichs bis zum Zeitpunkt des gelesenen
+/// Spielstands (`saved_at`), siehe [`crate::reconcile`].
 ///
 /// Fehlt Geld, bucht die Firma die Differenz als Betriebskosten (Tanken, Reparaturen und was
 /// das Spiel sonst abzieht). Ist mehr da, wird nichts gutgeschrieben, sondern ein ungeklärter
@@ -1152,43 +1194,45 @@ async fn sync(
     let mut conn = db.lock().unwrap();
     let tx = conn.transaction()?;
     role_in(&tx, company_id, user.id)?;
-    let last: Option<(i64, i64, bool, i64)> = tx
-        .query_row(
-            "SELECT ingame_money, write_money, written, last_ledger_id FROM sync_points
-             WHERE company_id = ?1 AND user_id = ?2 ORDER BY id DESC LIMIT 1",
-            [company_id, user.id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-        )
-        .optional()?;
-    let max_id: i64 = tx.query_row("SELECT COALESCE(MAX(id), 0) FROM ledger", [], |r| r.get(0))?;
+    let last = last_point(&tx, company_id, user.id)?;
+    // Nie vor der Grundlage des vorigen Abgleichs: Kommen Abgleiche mit verschiedenen Uhren
+    // (Launcher und Dashboard), überlappten sonst die Fenster und Ereignisse zählten doppelt.
+    let mut cutoff = plausible_time(b.saved_at, t);
+    if let Some(last) = &last {
+        cutoff = cutoff.max(last.base());
+    }
 
     let mut booked = Vec::new();
     let mut expected = None;
+    let mut diff = None;
+    let mut costs = 0;
     let mut surplus = 0;
     let mut events = 0;
-    if let Some((ingame, write, written, last_id)) = last {
-        let baseline = if written { write } else { ingame };
-        let (sum, n): (i64, i64) = tx.query_row(
-            "SELECT COALESCE(SUM(game_amount), 0), COUNT(*) FROM ledger
-             WHERE company_id = ?1 AND user_id = ?2 AND game_amount IS NOT NULL
-               AND event_id IS NOT NULL AND id > ?3 AND id <= ?4",
-            params![company_id, user.id, last_id, max_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+    if let Some(last) = &last {
+        let (sum, n) = window_sum(
+            &tx,
+            company_id,
+            user.id,
+            last.base(),
+            cutoff,
+            last.last_ledger_id,
         )?;
         events = n;
-        let exp = baseline + sum;
+        let exp = last.baseline() + sum;
         expected = Some(exp);
-        let diff = b.ingame_money - exp;
-        if diff < 0 {
+        let d = b.ingame_money - exp;
+        diff = Some(d);
+        if d < 0 {
+            costs = -d;
             let note = format!("Abgleich: erwartet {exp} €, im Spiel {} €", b.ingame_money);
             tx.execute(
                 "INSERT INTO ledger (company_id, account, user_id, kind, amount, note, created_at)
                  VALUES (?1, 'firma', ?2, 'betriebskosten', ?3, ?4, ?5)",
-                params![company_id, user.id, diff, note, t],
+                params![company_id, user.id, d, note, t],
             )?;
-            booked.push(json!({ "account": "firma", "kind": "betriebskosten", "amount": diff }));
+            booked.push(json!({ "account": "firma", "kind": "betriebskosten", "amount": d }));
         } else {
-            surplus = diff;
+            surplus = d;
         }
     }
 
@@ -1203,8 +1247,9 @@ async fn sync(
         tx.query_row("SELECT COALESCE(MAX(id), 0) FROM ledger", [], |r| r.get(0))?;
     tx.execute(
         "INSERT INTO sync_points (company_id, user_id, ingame_money, xp, expected, write_money,
-                                  last_ledger_id, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                                  last_ledger_id, created_at, cutoff, diff, costs_booked,
+                                  unexplained_attributed)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![
             company_id,
             user.id,
@@ -1213,7 +1258,11 @@ async fn sync(
             expected,
             write_money,
             last_ledger_id,
-            t
+            t,
+            cutoff,
+            diff,
+            costs,
+            surplus
         ],
     )?;
     let sync_id = tx.last_insert_rowid();
@@ -1232,18 +1281,30 @@ async fn sync(
     Ok(Json(json!({
         "sync_id": sync_id, "first": last.is_none(), "ingame_money": b.ingame_money,
         "expected": expected, "events": events, "booked": booked, "unexplained": unexplained,
+        "saved_at": cutoff,
         "wallet": my_wallet, "advance": advance, "write_money": write_money,
         "xp": s.xp, "game_level": s.game_level, "stage": s.stage.map(|w| w.position)
     })))
 }
 
+#[derive(Deserialize, Default)]
+struct WrittenReq {
+    /// Wann der Launcher den neuen Spielstand geschrieben hat, Unix-Sekunden. Fehlt er, gilt
+    /// der Empfangszeitpunkt.
+    #[serde(default)]
+    written_at: Option<i64>,
+}
+
 /// Der Launcher hat den Betrag aus dem Abgleich in den Spielstand geschrieben. Ab jetzt ist
-/// das die Grundlage für den nächsten Abgleich.
+/// das die Grundlage für den nächsten Abgleich, und dessen Fenster beginnt bei `written_at`.
 async fn sync_written(
     State(db): State<Db>,
+    State(clock): State<Clock>,
     user: AuthUser,
     Path((company_id, sync_id)): Path<(i64, i64)>,
+    body: Option<Json<WrittenReq>>,
 ) -> ApiResult<Json<Value>> {
+    let req = body.map(|Json(b)| b).unwrap_or_default();
     let conn = db.lock().unwrap();
     role_in(&conn, company_id, user.id)?;
     let latest: Option<i64> = conn.query_row(
@@ -1268,11 +1329,20 @@ async fn sync_written(
     if latest != Some(sync_id) {
         return Err(ApiError::conflict("Es gibt schon einen neueren Abgleich"));
     }
-    conn.execute(
-        "UPDATE sync_points SET written = 1 WHERE id = ?1",
+    // Nie vor dem gelesenen Spielstand: Sonst zählten Ereignisse dazwischen doppelt.
+    let cutoff: i64 = conn.query_row(
+        "SELECT COALESCE(cutoff, created_at) FROM sync_points WHERE id = ?1",
         [sync_id],
+        |r| r.get(0),
     )?;
-    Ok(Json(json!({ "sync_id": sync_id, "written": true })))
+    let written_at = plausible_time(req.written_at, clock.now()).max(cutoff);
+    conn.execute(
+        "UPDATE sync_points SET written = 1, written_at = ?1 WHERE id = ?2",
+        params![written_at, sync_id],
+    )?;
+    Ok(Json(
+        json!({ "sync_id": sync_id, "written": true, "written_at": written_at }),
+    ))
 }
 
 #[derive(Deserialize)]

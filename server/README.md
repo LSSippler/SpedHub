@@ -105,13 +105,13 @@ Alle Anfragen und Antworten sind JSON. Außer bei `register`, `login` und `healt
 | `POST /api/trucks/{id}/checkout` | Mitglied | Ausleihen. Liefert Bauplan und Zustand. 409, wenn schon verliehen |
 | `GET /api/trucks/{id}/lease` | Ausleiher oder Chef | Die laufende Leihe noch einmal: `lease_id`, `user_id`, `taken_at` und `truck` wie beim Ausleihen, mit Bauplan, Zustand und Kennzeichen. 403 für alle anderen, 409, wenn der Lkw nicht verliehen ist |
 | `POST /api/trucks/{id}/checkin` | Ausleiher oder Chef | Zurückgeben: `odometer_km`, optional `state` und `plate`. Mit `plate` bekommt der Lkw ein neues Kennzeichen, das alte kommt in `old_plates`. 409, wenn ein anderer Lkw der Firma das Kennzeichen gerade hat |
-| `POST /api/companies/{id}/events` | Mitglied | Ereignis aus dem Spiel buchen: `event_id`, `type`, `amount`, optional `distance_km` und `note` |
-| `GET /api/companies/{id}/ledger` | Mitglied | Die letzten Buchungen, `?limit=50`. Jede mit `game_amount` (Betrag im Spiel), `distance_km` und `payroll_id` |
+| `POST /api/companies/{id}/events` | Mitglied | Ereignis aus dem Spiel buchen: `event_id`, `type`, `amount`, optional `distance_km`, `note` und `occurred_at` (wann es im Spiel passiert ist, Unix-Sekunden). War es vor einem schon abgeglichenen Spielstand passiert, korrigiert der Server diesen Abgleich, die Antwort sagt das unter `late`. Die Antwort enthält `occurred_at`, leer ohne plausiblen Zeitpunkt |
+| `GET /api/companies/{id}/ledger` | Mitglied | Die letzten Buchungen, `?limit=50`. Jede mit `game_amount` (Betrag im Spiel), `distance_km`, `payroll_id`, `event_id` und `occurred_at` (leer, wenn der Client keinen plausiblen Zeitpunkt geschickt hat) |
 | `POST /api/companies/{id}/transfer` | Chef | Geld verschieben: `user_id`, `amount`, optional `note`. Positiv geht aus der Kasse an den Fahrer, negativ zurück |
 | `GET /api/companies/{id}/payrolls` | Mitglied | Die letzten Lohnabrechnungen mit einer Zeile je Fahrer, `?limit=30` |
 | `POST /api/companies/{id}/payrolls/run` | Chef | Lohn sofort abrechnen: erst fällige Tage, dann alles seit der letzten Abrechnung |
-| `POST /api/companies/{id}/sync` | Mitglied | Geldabgleich: `ingame_money`, optional `xp`. Liefert unter anderem `sync_id`, `expected`, `booked`, `unexplained` und `write_money` |
-| `POST /api/companies/{id}/sync/{sync_id}/written` | wer abgeglichen hat | Der Betrag aus dem Abgleich steht jetzt im Spielstand. Nur für den neuesten eigenen Abgleich |
+| `POST /api/companies/{id}/sync` | Mitglied | Geldabgleich: `ingame_money`, optional `xp` und `saved_at` (Änderungszeit des gelesenen Spielstands, Unix-Sekunden). Liefert unter anderem `sync_id`, `expected`, `booked`, `unexplained`, `write_money` und `saved_at` |
+| `POST /api/companies/{id}/sync/{sync_id}/written` | wer abgeglichen hat | Der Betrag aus dem Abgleich steht jetzt im Spielstand. Optional `written_at`: wann der Launcher geschrieben hat, Unix-Sekunden. Nur für den neuesten eigenen Abgleich |
 | `GET /api/companies/{id}/unexplained` | Chef | Offene ungeklärte Beträge, mit `?all=true` auch die geschlossenen |
 | `POST /api/companies/{id}/unexplained/{eid}/close` | Chef | Ungeklärten Betrag schließen, optional mit `note`. Gebucht wird nichts |
 
@@ -130,7 +130,14 @@ Beträge sind ganze Euro. `amount` ist immer positiv, das Vorzeichen ergibt sich
 | `fined` | minus Betrag | | minus Betrag |
 | `tollgate`, `ferry`, `train` | | minus Betrag | minus Betrag |
 
-Jede Buchung merkt sich in `game_amount` den vollen Betrag aus dem Spiel, mit dem Vorzeichen, mit dem er den Kontostand im Spiel verändert hat. Der Erlösfaktor wirkt nur auf die Firmenkasse. Bei `job_delivered` zählt `distance_km` als Firmenkilometer des Fahrers.
+Jede Buchung merkt sich in `game_amount` den vollen Betrag aus dem Spiel, mit dem Vorzeichen, mit dem er den Kontostand im Spiel verändert hat, und in `occurred_at`, wann das Ereignis im Spiel passiert ist. Der Erlösfaktor wirkt nur auf die Firmenkasse. Bei `job_delivered` zählt `distance_km` als Firmenkilometer des Fahrers. Die Lohnabrechnung zählt Aufträge nach dem Empfang beim Server (`created_at`), damit abgeschlossene Abrechnungen unberührt bleiben.
+
+Dazu kommen Buchungen aus dem Geldabgleich, alle auf die Firmenkasse und mit dem Fahrer als `user_id`:
+
+| `kind` | Betrag | Wann |
+|---|---|---|
+| `betriebskosten` | negativ | Im Spiel fehlt Geld, das die gemeldeten Ereignisse nicht erklären |
+| `betriebskosten_korrektur` | positiv | Ein spät gemeldetes Ereignis zeigt, dass ein Abgleich zu viel Betriebskosten gebucht hat. Im Kassenbuch "Betriebskosten, Korrektur" |
 
 Die Typen entsprechen den Gameplay-Events aus dem Telemetrie-SDK. Jede `event_id` wird pro Firma nur einmal gebucht. Schickt der Client ein Ereignis doppelt, kommt `duplicate: true` zurück und es passiert nichts.
 
@@ -165,15 +172,25 @@ Das Level rechnet der Server aus den Erfahrungspunkten, die der Launcher beim Ge
 
 ## Geldabgleich
 
-Im Spiel hat der Fahrer sein Lohnkonto plus den Betriebsvorschuss (Standard 2000 Euro). Davon zahlt er im Spiel Tanken, Reparaturen und was sonst anfällt. Beim Abgleich meldet der Launcher den Kontostand aus dem neuesten Spielstand, und der Server rechnet:
+Im Spiel hat der Fahrer sein Lohnkonto plus den Betriebsvorschuss (Standard 2000 Euro). Davon zahlt er im Spiel Tanken, Reparaturen und was sonst anfällt. Beim Abgleich meldet der Launcher den Kontostand aus dem neuesten Spielstand und dessen Änderungszeit (`saved_at`), und der Server rechnet:
 
-    erwartet = Stand nach dem letzten Abgleich + Summe game_amount seitdem
+    erwartet = Stand nach dem letzten Abgleich + Summe game_amount im Fenster
+
+Das Fenster reicht vom letzten Abgleich bis `saved_at`: Es zählen die Ereignisse dieses Fahrers, deren `occurred_at` dazwischen liegt. Wo der letzte Abgleich beginnt, steht unten. Ereignisse ohne `occurred_at` zählen im ersten Abgleich, der nach ihnen beim Server ankommt.
 
 - Fehlt Geld, bucht die Firma die Differenz als Betriebskosten.
 - Ist mehr da, wird nichts gutgeschrieben. Es entsteht ein ungeklärter Betrag, den der Chef sieht und schließt.
 - Der erste Abgleich eines Fahrers bucht nichts und setzt nur den Stand.
 
-Die Antwort sagt in `write_money`, was in den Spielstand kommt: Lohnkonto plus Vorschuss, nie unter 0. Hat der Launcher das geschrieben, meldet er es über `.../written`. Ab dann rechnet der nächste Abgleich von diesem Betrag. Kam keine Meldung, etwa weil das Spiel inzwischen lief, rechnet er vom vorgefundenen Kontostand weiter.
+Die Antwort sagt in `write_money`, was in den Spielstand kommt: Lohnkonto plus Vorschuss, nie unter 0. Hat der Launcher das geschrieben, meldet er es über `.../written`, mit `written_at`. Ab dann rechnet der nächste Abgleich von diesem Betrag, und sein Fenster beginnt bei `written_at`. Kam keine Meldung, etwa weil das Spiel inzwischen lief, rechnet er vom vorgefundenen Kontostand weiter, und das Fenster beginnt bei `saved_at`.
+
+Zeitpunkte: `occurred_at`, `saved_at` und `written_at` kommen alle von der Uhr des Fahrer-PCs. Liegt einer vor 2020 oder mehr als einen Tag nach der Serveruhr, wird er nicht abgelehnt, sondern behandelt, als fehlte er. Fehlt `saved_at` oder `written_at`, gilt der Empfang beim Server. `saved_at` gilt nie früher als der Beginn des Fensters, damit sich Fenster nicht überlappen, wenn Abgleiche mit verschiedenen Uhren kommen (Launcher und Dashboard). Fehlt `occurred_at`, zählt das Ereignis nach der Reihenfolge des Empfangs im nächsten Abgleich und korrigiert nie einen alten.
+
+Spät gemeldete Ereignisse: Kommt ein Ereignis erst an, nachdem sein Fenster schon abgeglichen ist, etwa weil das Plugin den Server nicht erreichte, steckte sein Betrag schon im damaligen Kontostand. Der Server bucht es normal und rechnet den Abgleich neu, ohne alte Buchungen zu ändern:
+
+- Waren dadurch zu viel Betriebskosten gebucht, gibt es eine Gutschrift `betriebskosten_korrektur`. Waren es zu wenig, etwa weil ein später Auftrag Tanken verdeckt hat, weitere `betriebskosten`.
+- Ein offener ungeklärter Betrag wird kleiner oder geschlossen (ohne Namen, Notiz "Durch spät gemeldete Ereignisse erklärt"). Was der Chef schon geschlossen hat, bleibt geschlossen. Bleibt mehr übrig, als er hingenommen hat, kommt ein neuer offener Eintrag dazu.
+- Ereignisse vor dem ersten Abgleich stecken im Anfangsstand, Ereignisse zwischen gelesenem und neu geschriebenem Spielstand zählen nirgends. Dort wird nichts korrigiert.
 
 ## Was noch fehlt
 
@@ -188,6 +205,7 @@ Die Antwort sagt in `write_money`, was in den Spielstand kommt: Lohnkonto plus V
 |---|---|
 | `src/main.rs` | Start, Einstellungen |
 | `src/api.rs` | Alle Endpunkte, Buchungsregeln und Geldabgleich |
+| `src/reconcile.rs` | Abgleichfenster, Zeitpunkte und Korrektur bei spät gemeldeten Ereignissen |
 | `src/payroll.rs` | Tägliche Lohnabrechnung |
 | `src/levels.rs` | Level aus Erfahrungspunkten, Lohnstufen |
 | `src/clock.rs` | Uhr, in Tests stellbar, und Kalendertage in Europe/Berlin |

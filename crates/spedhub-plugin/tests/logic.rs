@@ -128,10 +128,20 @@ fn notizen_ohne_zusatzwerte_und_grenzfaelle() {
     let b = translate(&d).unwrap().unwrap().with_id("a-2".into());
     let json = serde_json::to_string(&b).unwrap();
     assert!(!json.contains("distance_km"), "{json}");
+    assert!(!json.contains("occurred_at"), "{json}");
     let old: Booking =
         serde_json::from_str(r#"{"event_id":"a-3","type":"tollgate","amount":5,"note":"Maut"}"#)
             .unwrap();
     assert_eq!(old.distance_km, None);
+    assert_eq!(old.occurred_at, None);
+    // Mit Zeitpunkt geht er als Unix-Sekunden mit
+    let b = translate(&d)
+        .unwrap()
+        .unwrap()
+        .with_id_at("a-4".into(), 1_795_000_000);
+    assert_eq!(b.occurred_at, Some(1_795_000_000));
+    let json = serde_json::to_string(&b).unwrap();
+    assert!(json.contains(r#""occurred_at":1795000000"#), "{json}");
     // Unbekannte Strafe bleibt mit Originaltext, fehlende Strafe ist schlicht "Strafe"
     let f = GameplayData {
         fine_amount: Some(10),
@@ -369,6 +379,7 @@ fn postausgang_ueberlebt_kaputte_zeilen() {
             amount: 10,
             distance_km: None,
             note: "Maut".into(),
+            occurred_at: Some(1_795_000_000 + i64::from(n)),
         },
     };
     let (mut outbox, notes) = Outbox::open(paths.outbox(), paths.rejected());
@@ -392,5 +403,51 @@ fn postausgang_ueberlebt_kaputte_zeilen() {
 
     outbox.remove_first(1).unwrap();
     assert_eq!(read_entries(&paths.outbox()), vec![entry(2)]);
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn zeitpunkt_wird_beim_annehmen_gesetzt_und_bleibt_im_postausgang() {
+    let dir = temp_dir("zeitpunkt");
+    let paths = Paths::new(&dir);
+    // Ein Server, der nie erreichbar ist: alles bleibt im Postausgang
+    write_config(&paths, "http://127.0.0.1:1", "token", 7);
+    // Eine Zeile von einem älteren Plugin ohne Zeitpunkt liegt schon im Postausgang
+    fs::write(
+        paths.outbox(),
+        r#"{"company_id":7,"booking":{"event_id":"alt-1-1","type":"tollgate","amount":5,"note":"Maut"}}"#
+            .to_string()
+            + "\n",
+    )
+    .unwrap();
+
+    let before = spedhub_plugin::event::unix_now();
+    let agent = Agent::start(&paths, fast()).unwrap();
+    let toll = GameplayData {
+        pay_amount: Some(40),
+        ..data("player.tollgate.paid")
+    };
+    let id = match agent.submit(&toll) {
+        spedhub_plugin::Submitted::Queued(id) => id,
+        other => panic!("{other:?}"),
+    };
+    let after = spedhub_plugin::event::unix_now();
+    wait_until("Event im Postausgang", || {
+        read_entries(&paths.outbox()).len() == 2
+    });
+    agent.shutdown();
+
+    // Neustart des Spiels: der Zeitpunkt ist noch da, die alte Zeile liest sich weiter
+    let (outbox, _) = Outbox::open(paths.outbox(), paths.rejected());
+    let entries = outbox.entries();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].booking.event_id, "alt-1-1");
+    assert_eq!(entries[0].booking.occurred_at, None);
+    assert_eq!(entries[1].booking.event_id, id);
+    let at = entries[1].booking.occurred_at.expect("Zeitpunkt fehlt");
+    assert!(
+        (before..=after).contains(&at),
+        "{at} nicht in {before}..={after}"
+    );
     let _ = fs::remove_dir_all(dir);
 }

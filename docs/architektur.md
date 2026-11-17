@@ -100,15 +100,27 @@ Abrechnungen, Zeilen je Fahrer, offene Forderungen und bezahlte Pauschaltage lie
 
 Das Konto im Spiel ist nur eine Anzeige: Lohnkonto plus Betriebsvorschuss (je Firma, Standard 2000 Euro). Vom Vorschuss zahlt der Fahrer im Spiel Tanken und Reparaturen. Bei jedem Abgleich:
 
-1. Der Launcher liest Kontostand und Erfahrungspunkte aus dem neuesten Spielstand und schickt sie an `POST /api/companies/{id}/sync`.
-2. Erwarteter Stand = Stand nach dem letzten Abgleich plus `game_amount` aller seitdem gemeldeten Ereignisse dieses Fahrers. Der Erlösfaktor zählt hier nicht, im Spiel kam ja der gemeldete Betrag an.
+1. Der Launcher liest Kontostand, Erfahrungspunkte und die Änderungszeit von `game.sii` aus dem neuesten Spielstand und schickt sie an `POST /api/companies/{id}/sync`.
+2. Erwarteter Stand = Stand nach dem letzten Abgleich plus `game_amount` aller Ereignisse dieses Fahrers im Fenster des Abgleichs (siehe unten). Der Erlösfaktor zählt hier nicht, im Spiel kam ja der gemeldete Betrag an.
 3. Fehlt Geld, bucht die Firma die Differenz als Betriebskosten.
 4. Ist mehr Geld da als erklärbar, wird nichts gutgeschrieben. Es entsteht ein ungeklärter Betrag, den der Chef im Dashboard sieht und schließt.
 5. Der Server antwortet mit dem neuen Kontostand: Lohnkonto plus Vorschuss, nie unter 0. Der Launcher schreibt ihn in `bank.money_account` und `info_money_account` eines neuen Speicherplatzes, abgesichert wie beim Einsetzen, und meldet danach, dass er geschrieben hat.
 
 Der erste Abgleich eines Fahrers bucht nichts und setzt nur den Stand. Strafen und Abbrüche zahlt der Fahrer aus dem Lohnkonto, Maut, Fähre und Zug die Firma.
 
-Die Abgleichpunkte liegen in `sync_points`: was im Spielstand stand, was geschrieben werden sollte und ob der Launcher das bestätigt hat. Ohne Bestätigung, etwa weil das Spiel zwischendurch gestartet wurde, rechnet der nächste Abgleich vom vorgefundenen Stand. Bekannte Lücke: Meldet das Plugin ein Ereignis erst nach dem Abgleich, obwohl es im Spiel vorher geschah, erscheint der Betrag einmal als ungeklärt und beim nächsten Abgleich als Betriebskosten.
+Die Abgleichpunkte liegen in `sync_points`: was im Spielstand stand, was geschrieben werden sollte und ob der Launcher das bestätigt hat. Ohne Bestätigung, etwa weil das Spiel zwischendurch gestartet wurde, rechnet der nächste Abgleich vom vorgefundenen Stand.
+
+Welche Ereignisse zu welchem Abgleich gehören, entscheidet der Zeitpunkt, zu dem sie im Spiel passiert sind, nicht wann sie beim Server ankommen. Alle Zeitpunkte kommen dafür von derselben Uhr, der des Fahrer-PCs:
+
+- `occurred_at` eines Ereignisses: Systemzeit, zu der das Plugin es angenommen hat. Sie bleibt im Postausgang erhalten.
+- `cutoff` eines Abgleichs: Änderungszeit von `game.sii` des gelesenen Spielstands. Der Kontostand darin enthält genau die Ereignisse bis hier.
+- `written_at`: wann der Launcher den neuen Spielstand geschrieben hat, mit der Bestätigung gemeldet.
+
+Fehlt `cutoff` oder `written_at` (älterer Launcher, Dashboard) oder ist er unplausibel, gilt der Empfang beim Server. Ein `cutoff` liegt nie vor dem Beginn seines Fensters, so überlappen sich Fenster auch dann nicht, wenn Abgleiche mit verschiedenen Uhren kommen. Jeder Abgleich k beginnt das nächste Fenster bei `written_at`, wenn bestätigt, sonst bei `cutoff`. Das Fenster von Abgleich k reicht von dort bis `cutoff` von k. Zwischen `cutoff` und `written_at` war das Spiel zu, Ereignisse mit Zeitpunkt dort zählen in keinem Fenster.
+
+Kommt ein Ereignis an, dessen Zeitpunkt in einem schon abgeglichenen Fenster liegt, steckte sein Spielbetrag schon im damaligen Kontostand. Der Server bucht es wie jedes andere und korrigiert dazu diesen Abgleich: Er rechnet die Differenz neu und bucht nur den Unterschied, als `betriebskosten_korrektur` (Gutschrift) oder weitere `betriebskosten`. Ein offener ungeklärter Betrag wird kleiner oder geschlossen. Alte Buchungen bleiben unverändert. Ereignisse vor dem ersten Abgleich stecken im Anfangsstand und ändern nichts. Je Abgleich merkt sich der Server dafür die aktuelle Differenz, die gebuchten Betriebskosten und den ungeklärten Betrag. Die Lohnabrechnung zählt weiter nach dem Empfang beim Server, damit abgeschlossene Abrechnungen bleiben, wie sie sind.
+
+Ein Ereignis ohne plausiblen eigenen Zeitpunkt (älteres Plugin, Dashboard) zählt nach dem Empfang: im ersten Abgleich, der nach ihm beim Server ankommt. Der Server vergleicht dafür nur die Reihenfolge des Empfangs, nie seine Uhr mit der des Fahrer-PCs, und ein solches Ereignis korrigiert nie einen alten Abgleich.
 
 ## Das Lkw-Paket
 

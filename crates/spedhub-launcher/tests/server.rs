@@ -14,7 +14,10 @@ use spedhub_launcher::settings::AppPaths;
 use spedhub_save::{
     Save, info_money, info_name, money, set_money, set_truck_state, truck_state, write_save,
 };
-use std::{fs, time::SystemTime};
+use std::{
+    fs,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 #[test]
 fn anmelden_und_fehler_im_klartext() {
@@ -317,8 +320,8 @@ fn slot_count(profile: &std::path::Path) -> usize {
     fs::read_dir(profile.join("save")).unwrap().count()
 }
 
-/// Wie das Spiel einen Speicherplatz neu schreibt: Kontostand ändern, Änderungszeit jetzt.
-fn play(slot_dir: &std::path::Path, money_now: i64) {
+/// Wie das Spiel einen Speicherplatz neu schreibt: Kontostand ändern, Änderungszeit `at`.
+fn play(slot_dir: &std::path::Path, money_now: i64, at: SystemTime) {
     let path = slot_dir.join("game.sii");
     let (mut save, _) = Save::read(&path).unwrap();
     set_money(&mut save, money_now).unwrap();
@@ -327,8 +330,19 @@ fn play(slot_dir: &std::path::Path, money_now: i64) {
         .write(true)
         .open(&path)
         .unwrap()
-        .set_modified(SystemTime::now())
+        .set_modified(at)
         .unwrap();
+}
+
+/// `t` als Unix-Sekunden, wie das Plugin den Zeitpunkt eines Events schickt.
+fn unix(t: SystemTime) -> i64 {
+    t.duration_since(UNIX_EPOCH).unwrap().as_secs() as i64
+}
+
+/// Sekunden vor jetzt. Die Tests legen ihre Zeitpunkte in die jüngste Vergangenheit und mit
+/// Abstand zueinander, damit sie nicht davon abhängen, wie schnell die Sekunde umspringt.
+fn ago(start: SystemTime, secs: u64) -> SystemTime {
+    start - Duration::from_secs(secs)
 }
 
 #[test]
@@ -346,6 +360,11 @@ fn geld_abgleichen_mit_neuem_speicherplatz() {
         json!({ "advance": 3000 }),
     );
 
+    // Zeitpunkte: Der Spielstand "autosave" ist 60 Sekunden alt. Der Launcher schreibt den
+    // ersten Abgleich vor 50 Sekunden, das Spiel liefert den Auftrag vor 45 und speichert
+    // vor 40, der zweite Abgleich schreibt vor 30 Sekunden.
+    let start = SystemTime::now();
+
     // Erster Abgleich: nichts gebucht, neuer Speicherplatz mit 0 + 3000
     let before = slot_count(&docs.nordfracht);
     let o = sync_and_write(
@@ -355,7 +374,7 @@ fn geld_abgleichen_mit_neuem_speicherplatz() {
         None,
         &backups,
         &FakeGame::closed(),
-        SystemTime::now(),
+        ago(start, 50),
     )
     .unwrap();
     assert!(o.sync.first);
@@ -377,12 +396,14 @@ fn geld_abgleichen_mit_neuem_speicherplatz() {
     let mine = m.members.iter().find(|x| x.user_id == me.user_id).unwrap();
     assert_eq!((mine.game_level, mine.stage), (0, Some(1)));
 
-    // Im Spiel: Auftrag über 1500 €, 200 € fürs Tanken. Das Plugin meldet den Auftrag.
-    play(&o.deployed.slot_dir, 3000 + 1500 - 200);
+    // Im Spiel: Auftrag über 1500 €, 200 € fürs Tanken. Das Plugin meldet den Auftrag mit
+    // dem Zeitpunkt, zu dem er passiert ist.
+    play(&o.deployed.slot_dir, 3000 + 1500 - 200, ago(start, 40));
     post_raw(
         &format!("{url}/api/companies/{}/events", s.company),
         s.fahrer.token().unwrap(),
-        json!({ "event_id": "job-1", "type": "job_delivered", "amount": 1500, "distance_km": 400 }),
+        json!({ "event_id": "job-1", "type": "job_delivered", "amount": 1500, "distance_km": 400,
+                "occurred_at": unix(ago(start, 45)) }),
     );
     let o = sync_and_write(
         &s.fahrer,
@@ -391,10 +412,12 @@ fn geld_abgleichen_mit_neuem_speicherplatz() {
         None,
         &backups,
         &FakeGame::closed(),
-        SystemTime::now(),
+        ago(start, 30),
     )
     .unwrap();
     assert!(!o.sync.first);
+    // Der Server hat die Speicherzeit des gelesenen Spielstands bekommen
+    assert_eq!(o.sync.saved_at, Some(unix(ago(start, 40))));
     assert_eq!(o.sync.expected, Some(4500));
     assert_eq!(o.sync.booked.len(), 1);
     assert_eq!(
@@ -448,6 +471,92 @@ fn geld_abgleichen_mit_neuem_speicherplatz() {
     assert!(o.sync.booked.is_empty());
     assert!(o.sync.unexplained.is_none());
     assert!(describe(&o.sync).contains("Kontostand passt"));
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn spaet_gemeldeter_auftrag_nach_dem_abgleich() {
+    let dir = temp_dir("spaet");
+    let s = setup(&dir);
+    let url = s.server.url();
+    let docs = documents("spaet-docs");
+    let backups = dir.join("backups");
+    let start = SystemTime::now();
+    let sync = |now: SystemTime| {
+        sync_and_write(
+            &s.fahrer,
+            s.company,
+            &docs.nordfracht,
+            None,
+            &backups,
+            &FakeGame::closed(),
+            now,
+        )
+        .unwrap()
+    };
+
+    // Erster Abgleich, geschrieben vor 50 Sekunden: 0 + 2000
+    let o = sync(ago(start, 50));
+    assert!(o.sync.first && o.confirmed);
+    assert_eq!(o.sync.write_money, 2000);
+
+    // Im Spiel ein Auftrag über 1000 € vor 45 Sekunden, gespeichert vor 40. Das Plugin
+    // erreicht den Server erst nach dem nächsten Abgleich.
+    play(&o.deployed.slot_dir, 3000, ago(start, 40));
+    let o = sync(ago(start, 30));
+    assert!(o.confirmed);
+    assert_eq!(o.sync.expected, Some(2000));
+    assert!(o.sync.booked.is_empty());
+    let entry = o.sync.unexplained.clone().unwrap();
+    assert_eq!(entry.amount, 1000);
+    assert!(describe(&o.sync).contains("1000 € mehr im Spiel als erklärt"));
+
+    let events = format!("{url}/api/companies/{}/events", s.company);
+    let r = post_raw(
+        &events,
+        s.fahrer.token().unwrap(),
+        json!({ "event_id": "job-1", "type": "job_delivered", "amount": 1000, "distance_km": 300,
+                "occurred_at": unix(ago(start, 45)) }),
+    );
+    // Der Auftrag erklärt den Betrag: ungeklärt ist geschlossen, Betriebskosten gibt es keine
+    assert_eq!(r["late"]["sync_id"], o.sync.sync_id);
+    assert_eq!(r["late"]["booked"], json!([]));
+    assert_eq!(r["late"]["unexplained"]["id"], entry.id);
+    assert_eq!(r["late"]["unexplained"]["closed"], true);
+    let u = send_raw(
+        "GET",
+        &format!("{url}/api/companies/{}/unexplained?all=true", s.company),
+        &s.chef_token,
+        json!({}),
+    );
+    assert_eq!(
+        u["entries"][0]["note"],
+        "Durch spät gemeldete Ereignisse erklärt"
+    );
+    assert!(u["entries"][0]["closed_at"].is_i64());
+
+    // Der nächste Abgleich ohne Fahrt zählt den Auftrag nicht noch einmal
+    let o = sync(SystemTime::now());
+    assert_eq!(o.sync.expected, Some(2000));
+    assert!(o.sync.booked.is_empty());
+    assert!(o.sync.unexplained.is_none());
+    assert!(describe(&o.sync).contains("Kontostand passt"));
+
+    // Die Firma hat den ganzen Erlös, nirgends Betriebskosten
+    assert_eq!(s.chef.company(s.company).unwrap().balance, 1000);
+    let l = send_raw(
+        "GET",
+        &format!("{url}/api/companies/{}/ledger", s.company),
+        &s.chef_token,
+        json!({}),
+    );
+    let kinds: Vec<&str> = l["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, vec!["auftrag"]);
     let _ = fs::remove_dir_all(dir);
 }
 

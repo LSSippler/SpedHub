@@ -81,10 +81,12 @@ fn alle_events_kommen_beim_server_an() {
     write_config(&paths, &server.url(), &token, company);
 
     let agent = Agent::start(&paths, fast()).unwrap();
+    let before = spedhub_plugin::event::unix_now();
     let mut ids = Vec::new();
     for e in all_events() {
         ids.push(queued(agent.submit(&e)));
     }
+    let after = spedhub_plugin::event::unix_now();
     // Ein Event, das SpedHub nicht bucht, und eins ohne Betrag
     let other = GameplayData {
         id: "player.use.helicopter".into(),
@@ -127,6 +129,11 @@ fn alle_events_kommen_beim_server_an() {
             .filter(|e| e["kind"] != "auftrag")
             .all(|e| e["distance_km"].is_null())
     );
+    // Jedes Event kommt mit dem Zeitpunkt an, zu dem das Plugin es angenommen hat
+    for e in &l {
+        let at = e["occurred_at"].as_i64().unwrap();
+        assert!((before..=after).contains(&at), "{e}");
+    }
     let notes: Vec<&str> = l.iter().map(|e| e["note"].as_str().unwrap()).collect();
     assert!(notes.contains(&"Auftrag abgeliefert, 412 km, Frachtschaden 3,1 %"));
     assert!(notes.contains(&"Strafe: Zu schnell"));
@@ -208,6 +215,23 @@ fn postausgang_ueberlebt_einen_neustart_des_spiels() {
         read_entries(&paths.outbox()).len() == 3
     });
     first.shutdown();
+    // Der Zeitpunkt aus der ersten Sitzung steht im Postausgang
+    let before = spedhub_plugin::event::unix_now();
+    let mut waiting = read_entries(&paths.outbox());
+    assert_eq!(waiting.len(), 3);
+    for e in &waiting {
+        let at = e.booking.occurred_at.unwrap();
+        assert!(before - at < 60, "{e:?}");
+    }
+    // Die erste Sitzung liegt eine Stunde zurück. So kann am Server nicht zufällig der
+    // Empfang passen, ankommen muss genau der Zeitpunkt aus dem Postausgang.
+    let mut text = String::new();
+    for e in &mut waiting {
+        e.booking.occurred_at = Some(e.booking.occurred_at.unwrap() - 3600);
+        text.push_str(&serde_json::to_string(e).unwrap());
+        text.push('\n');
+    }
+    fs::write(paths.outbox(), text).unwrap();
 
     // Zweite Sitzung mit Server: alter Postausgang und neue Events gehen raus
     let server = TestServer::start_on(addr, &db);
@@ -227,6 +251,19 @@ fn postausgang_ueberlebt_einen_neustart_des_spiels() {
         );
     }
     assert!(read_entries(&paths.outbox()).is_empty());
+    // Am Server zählt der Zeitpunkt aus der ersten Sitzung, nicht der Empfang
+    let l = ledger(&url, &token, company);
+    for w in &waiting {
+        let id = w.booking.event_id.as_str();
+        let e = l.iter().find(|e| e["event_id"] == id).unwrap();
+        assert_eq!(e["occurred_at"].as_i64(), w.booking.occurred_at, "{e}");
+        assert!(e["created_at"].as_i64().unwrap() >= before, "{e}");
+    }
+    // Die Events der zweiten Sitzung haben ihren eigenen Zeitpunkt
+    for id in &second_ids {
+        let e = l.iter().find(|e| e["event_id"] == id.as_str()).unwrap();
+        assert!(e["occurred_at"].as_i64().unwrap() >= before, "{e}");
+    }
     drop(server);
     let _ = fs::remove_dir_all(dir);
 }
@@ -257,6 +294,7 @@ fn erneutes_senden_bucht_nicht_doppelt_und_abgelehntes_bleibt_liegen() {
             amount: 40,
             distance_km: None,
             note: "Maut".into(),
+            occurred_at: None,
         },
     };
     let bogus = Entry {
@@ -267,6 +305,7 @@ fn erneutes_senden_bucht_nicht_doppelt_und_abgelehntes_bleibt_liegen() {
             amount: 5,
             distance_km: None,
             note: String::new(),
+            occurred_at: None,
         },
     };
     let lines: Vec<String> = [&again, &bogus]

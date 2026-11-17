@@ -135,7 +135,8 @@ CREATE TABLE IF NOT EXISTS wage_claims (
 );
 -- Abgleichpunkte: was der Launcher im Spielstand vorgefunden hat und was er schreiben sollte.
 -- Grundlage für den nächsten Abgleich ist write_money, wenn written = 1, sonst ingame_money.
--- last_ledger_id: Ereignisse mit größerer id kamen danach.
+-- last_ledger_id: größte Buchung beim Abgleich. Ereignisse mit Zeitpunkt wählt seit November
+-- 2026 der Zeitpunkt (siehe COLUMNS), Ereignisse ohne zählen, wenn sie danach ankamen.
 CREATE TABLE IF NOT EXISTS sync_points (
     id              INTEGER PRIMARY KEY,
     company_id      INTEGER NOT NULL REFERENCES companies(id),
@@ -188,6 +189,25 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("ledger", "distance_km", "INTEGER"),
     // Gehört zu dieser Lohnabrechnung
     ("ledger", "payroll_id", "INTEGER"),
+    // Wann das Ereignis im Spiel passiert ist (Uhr des Fahrer-PCs, Unix-Sekunden). Leer, wenn
+    // der Client keinen plausiblen Zeitpunkt geschickt hat, und bei alten Buchungen. Dann
+    // zählt das Ereignis im ersten Abgleich, der nach ihm ankommt (siehe last_ledger_id).
+    ("ledger", "occurred_at", "INTEGER"),
+    // Abgleich: Zeitpunkt des gelesenen Spielstands. Der Kontostand darin enthält die
+    // Ereignisse bis hier.
+    ("sync_points", "cutoff", "INTEGER"),
+    // Wann der Launcher den neuen Spielstand geschrieben hat, gesetzt mit der Bestätigung
+    ("sync_points", "written_at", "INTEGER"),
+    // Kontostand im Spiel minus erwarteter Stand, mit spät gemeldeten Ereignissen korrigiert
+    ("sync_points", "diff", "INTEGER"),
+    // Für dieses Fenster gebuchte Betriebskosten (positiv), abzüglich Korrekturen
+    ("sync_points", "costs_booked", "INTEGER NOT NULL DEFAULT 0"),
+    // Diesem Fenster zugerechneter ungeklärter Betrag
+    (
+        "sync_points",
+        "unexplained_attributed",
+        "INTEGER NOT NULL DEFAULT 0",
+    ),
 ];
 
 /// Fünf Lohnstufen von 40 bis 80 Cent je Kilometer: (Level im Spiel, Firmenkilometer, Cent je km).
@@ -210,6 +230,15 @@ fn migrate(conn: &Connection, now: i64) -> rusqlite::Result<()> {
             conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"))?;
         }
     }
+    // Abgleichpunkte von vor den Abgleichfenstern: Zeitpunkt ist der Empfang beim Server,
+    // Differenz und Aufteilung so, wie der Abgleich damals gebucht hat
+    conn.execute_batch(
+        "UPDATE sync_points SET cutoff = created_at WHERE cutoff IS NULL;
+         UPDATE sync_points SET diff = ingame_money - expected,
+                                costs_booked = MAX(0, expected - ingame_money),
+                                unexplained_attributed = MAX(0, ingame_money - expected)
+         WHERE diff IS NULL AND expected IS NOT NULL;",
+    )?;
     // Firmen aus der Zeit des Lohnanteils werden ab jetzt abgerechnet, nicht rückwirkend
     conn.execute(
         "UPDATE companies SET payroll_from = ?1 WHERE payroll_from IS NULL",

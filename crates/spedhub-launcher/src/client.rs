@@ -142,6 +142,10 @@ pub struct SyncResult {
     pub game_level: i64,
     #[serde(default)]
     pub stage: Option<i64>,
+    /// Bis hier zählt der Server Ereignisse zu diesem Abgleich: die gemeldete Speicherzeit,
+    /// oder seine Empfangszeit, wenn sie fehlte oder unplausibel war
+    #[serde(default)]
+    pub saved_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -302,20 +306,42 @@ impl Client {
         self.get(&format!("/api/trucks/{truck_id}/lease"))
     }
 
-    /// Geldabgleich: Kontostand und Erfahrungspunkte aus dem Spielstand melden.
-    pub fn sync(&self, company_id: i64, ingame_money: i64, xp: Option<u64>) -> Result<SyncResult> {
+    /// Geldabgleich: Kontostand und Erfahrungspunkte aus dem Spielstand melden, dazu mit
+    /// `saved_at` die Änderungszeit des gelesenen Spielstands (Unix-Sekunden). Der Server
+    /// zählt dann nur Ereignisse bis zu diesem Zeitpunkt.
+    pub fn sync(
+        &self,
+        company_id: i64,
+        ingame_money: i64,
+        xp: Option<u64>,
+        saved_at: Option<i64>,
+    ) -> Result<SyncResult> {
         let mut body = json!({ "ingame_money": ingame_money });
         if let Some(xp) = xp {
             body["xp"] = json!(xp);
         }
+        if let Some(t) = saved_at {
+            body["saved_at"] = json!(t);
+        }
         self.post(&format!("/api/companies/{company_id}/sync"), &body)
     }
 
-    /// Meldet, dass der Betrag aus dem Abgleich im Spielstand steht.
-    pub fn sync_written(&self, company_id: i64, sync_id: i64) -> Result<()> {
+    /// Meldet, dass der Betrag aus dem Abgleich im Spielstand steht. `written_at` ist der
+    /// Zeitpunkt, zu dem der neue Speicherplatz geschrieben wurde (Unix-Sekunden), ab da
+    /// zählt der nächste Abgleich.
+    pub fn sync_written(
+        &self,
+        company_id: i64,
+        sync_id: i64,
+        written_at: Option<i64>,
+    ) -> Result<()> {
+        let body = match written_at {
+            Some(t) => json!({ "written_at": t }),
+            None => json!({}),
+        };
         let _: Value = self.post(
             &format!("/api/companies/{company_id}/sync/{sync_id}/written"),
-            &json!({}),
+            &body,
         )?;
         Ok(())
     }

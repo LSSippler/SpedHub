@@ -38,10 +38,12 @@ Läuft das Spiel, schreibt der Launcher nichts in den Spielstand und sagt das au
 Im Spiel hast du dein Lohnkonto plus den Betriebsvorschuss der Firma. Davon bezahlst du im Spiel Tanken und Reparaturen. Beim Abgleich:
 
 1. Prüfen, ob das Spiel läuft. Wenn ja: abbrechen, der Server erfährt nichts.
-2. Den neuesten Speicherplatz lesen: Kontostand aus `game.sii`, Erfahrungspunkte aus `info.sii`. Beim Ausleihen wird hier auch der Lkw eingesetzt.
-3. Kontostand und Erfahrung an den Server. Der vergleicht mit dem, was die gemeldeten Ereignisse erklären: Fehlt Geld, zahlt die Firma es als Betriebskosten. Ist mehr da, schreibt er nichts gut und zeigt es dem Chef. Der erste Abgleich bucht nichts.
+2. Den neuesten Speicherplatz lesen: Kontostand aus `game.sii`, Erfahrungspunkte aus `info.sii`, dazu die Änderungszeit von `game.sii`. Beim Ausleihen wird hier auch der Lkw eingesetzt.
+3. Kontostand, Erfahrung und die Änderungszeit als `saved_at` (Unix-Sekunden) an den Server. Der vergleicht mit dem, was die gemeldeten Ereignisse bis zu diesem Zeitpunkt erklären: Fehlt Geld, zahlt die Firma es als Betriebskosten. Ist mehr da, schreibt er nichts gut und zeigt es dem Chef. Der erste Abgleich bucht nichts.
 4. Den Betrag vom Server in `game.sii` und `info.sii` setzen und den neuen Speicherplatz schreiben, genauso abgesichert wie beim Einsetzen (siehe unten).
-5. Dem Server melden, dass der Betrag im Spielstand steht.
+5. Dem Server melden, dass der Betrag im Spielstand steht, mit `written_at`: derselben Zeit, die als `file_time` in `info.sii` steht. Ab da zählen Ereignisse zum nächsten Abgleich.
+
+Beide Zeitpunkte kommen von der Uhr dieses Rechners, genau wie die Zeitpunkte, die das Plugin zu jedem Ereignis mitschickt. So ordnet der Server auch ein Ereignis richtig zu, das erst nach dem Abgleich ankommt. Details in `docs/architektur.md`, Abschnitt Geldabgleich.
 
 Startet das Spiel zwischen Schritt 3 und 4, wird nichts geschrieben. Der Server rechnet beim nächsten Abgleich dann vom gelesenen Kontostand weiter.
 

@@ -17,6 +17,8 @@ Wichtig: Ob ETS2 die DLL lädt und ob die Events im Spiel wirklich ankommen, ist
 
 Wer was zahlt, regelt der Server, siehe `server/README.md`, Abschnitt Buchungsregeln.
 
+Zu jedem Event geht außerdem `occurred_at` mit: wann es im Spiel passiert ist, als Systemzeit dieses Rechners in Unix-Sekunden (UTC). Das Plugin hält den Zeitpunkt fest, sobald das Spiel das Event meldet, nicht erst beim Senden, und er bleibt im Postausgang erhalten. Damit ordnet der Server ein Event dem richtigen Geldabgleich zu, auch wenn es wegen eines Ausfalls erst Stunden später ankommt. Zeilen im Postausgang von älteren Fassungen haben das Feld nicht. Sie zählen beim Server im ersten Geldabgleich nach ihrem Empfang.
+
 ## Installation
 
 Voraussetzung ist ETS2 in der 64-Bit-Fassung ab Version 1.35 (Telemetry SDK mit Gameplay-Events).
@@ -76,7 +78,7 @@ Der Token steht nur in `plugin.json`, nie im Log.
 
 ## Wie es arbeitet
 
-- Das Spiel ruft das Plugin auf seinem Haupt-Thread auf. Dort wird das Event nur übersetzt, bekommt eine `event_id` und wandert in eine Warteschlange. Kein Dateizugriff, kein Netz.
+- Das Spiel ruft das Plugin auf seinem Haupt-Thread auf. Dort wird das Event nur übersetzt, bekommt eine `event_id` und den Zeitpunkt `occurred_at` und wandert in eine Warteschlange. Kein Dateizugriff, kein Netz.
 - Ein eigener Thread schreibt jedes Event zuerst in den Postausgang und schickt es dann an `POST /api/companies/{id}/events`.
 - Ist der Server nicht erreichbar, bleibt das Event im Postausgang. Der Thread versucht es nach 5 Sekunden wieder, dann mit wachsender Pause bis zu 5 Minuten, und beim nächsten Spielstart sowieso. Doppelt senden schadet nicht, der Server bucht jede `event_id` nur einmal.
 - Antwortet der Server mit 400, ist das Event kaputt. Es wandert nach `plugin-rejected.jsonl` und wird nicht wieder gesendet. Bei allen anderen Fehlern, auch bei abgelaufener Anmeldung, bleibt es im Postausgang.

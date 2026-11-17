@@ -42,6 +42,19 @@ pub struct Booking {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub distance_km: Option<i64>,
     pub note: String,
+    /// Wann das Event im Spiel passiert ist: Systemzeit dieses Rechners, Unix-Sekunden UTC.
+    /// Der Server ordnet das Event damit dem richtigen Geldabgleich zu, auch wenn es erst
+    /// später ankommt. Ältere Zeilen im Postausgang haben das Feld nicht.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurred_at: Option<i64>,
+}
+
+/// Jetzt als Unix-Sekunden UTC, nach der Systemuhr.
+pub fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 /// Eine Buchung ohne `event_id`. Die vergibt der Aufrufer.
@@ -54,6 +67,7 @@ pub struct Draft {
 }
 
 impl Draft {
+    /// Die Buchung mit `event_id`, ohne Zeitpunkt.
     pub fn with_id(self, event_id: String) -> Booking {
         Booking {
             event_id,
@@ -61,6 +75,15 @@ impl Draft {
             amount: self.amount,
             distance_km: self.distance_km,
             note: self.note,
+            occurred_at: None,
+        }
+    }
+
+    /// Die Buchung mit `event_id` und dem Zeitpunkt im Spiel (Unix-Sekunden UTC).
+    pub fn with_id_at(self, event_id: String, occurred_at: i64) -> Booking {
+        Booking {
+            occurred_at: Some(occurred_at),
+            ..self.with_id(event_id)
         }
     }
 }

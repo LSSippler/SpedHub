@@ -1,7 +1,8 @@
 //! Warteschlange und Sender-Thread.
 //!
 //! Der Spiel-Thread ruft nur [`Agent::submit`] auf. Das übersetzt das Event, vergibt die
-//! `event_id` und legt es in einen Kanal, der nie blockiert. Kein Dateizugriff, kein Netz.
+//! `event_id`, merkt sich den Zeitpunkt (`occurred_at`, Systemzeit) und legt es in einen
+//! Kanal, der nie blockiert. Kein Dateizugriff, kein Netz.
 //!
 //! Der Sender-Thread schreibt jedes Event zuerst in den Postausgang und schickt dann alles,
 //! was dort liegt, der Reihe nach an den Server. Ist der Server nicht erreichbar, wartet er
@@ -9,7 +10,7 @@
 //! Start des Spiels geht es mit dem Postausgang weiter.
 
 use crate::config::{Config, ConfigError, Paths};
-use crate::event::{GameplayData, translate};
+use crate::event::{GameplayData, translate, unix_now};
 use crate::ids::{IdGenerator, StartNote};
 use crate::log::Logger;
 use crate::outbox::{Entry, Outbox};
@@ -138,10 +139,12 @@ impl Agent {
     pub fn submit(&self, data: &GameplayData) -> Submitted {
         match translate(data) {
             Ok(Some(draft)) => {
+                // Der Zeitpunkt wird hier festgehalten, nicht beim Senden: Das Event kann lange
+                // im Postausgang liegen.
                 let event_id = self.ids.next();
                 let entry = Entry {
                     company_id: self.company_id,
-                    booking: draft.with_id(event_id.clone()),
+                    booking: draft.with_id_at(event_id.clone(), unix_now()),
                 };
                 let _ = self.tx.send(Message::Entry(entry));
                 Submitted::Queued(event_id)

@@ -234,7 +234,8 @@ const modellName = (m) => m.split(/[._]/).filter(Boolean)
   .map((w) => (w.length <= 3 ? w.toUpperCase() : w[0].toUpperCase() + w.slice(1))).join(" ");
 
 const ARTEN = { lohn: "Lohnanteil (altes Modell)", auftrag: "Auftrag", strafe: "Strafe", maut: "Maut", faehre: "Fähre", zug: "Zug",
-                auftrag_abgebrochen: "Auftrag abgebrochen", ueberweisung: "Überweisung", betriebskosten: "Betriebskosten" };
+                auftrag_abgebrochen: "Auftrag abgebrochen", ueberweisung: "Überweisung", betriebskosten: "Betriebskosten",
+                betriebskosten_korrektur: "Betriebskosten, Korrektur" };
 /** "2026-11-16" wird zu "16.11.2026". */
 const tag = (d) => d.split("-").reverse().join(".");
 const cent = (n) => new Intl.NumberFormat("de-DE").format(n) + "\u00a0ct";
@@ -710,11 +711,11 @@ function baueTestbuchung() {
         const ereignis = "hand-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
         const daten = { event_id: ereignis, type: art.value, amount: Number(betrag.value), note: notiz.value };
         if (art.value === "job_delivered" && strecke.value !== "") daten.distance_km = Number(strecke.value);
-        await api("POST", "/api/companies/" + id + "/events", daten);
+        const r = await api("POST", "/api/companies/" + id + "/events", daten);
         f.reset();
         streckeFeld.hidden = false;
         await auffrischen();
-        melde("Gebucht.");
+        melde(r.late ? "Gebucht. Das Ereignis lag vor deinem letzten Abgleich, der Abgleich wurde korrigiert." : "Gebucht.");
       },
       h("div", { class: "zeile" }, feld("Was ist passiert", art, "breit"), feld("Betrag in Euro", betrag), streckeFeld, feld("Notiz", notiz), h("button", {}, "Buchen"))),
     h("h3", { style: "margin-top: 1.5rem" }, "Geldabgleich testen"),

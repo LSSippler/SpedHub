@@ -451,7 +451,9 @@ async fn dashboard_wird_ausgeliefert() {
             .starts_with("text/html")
     );
     let body = res.into_body().collect().await.unwrap().to_bytes();
-    assert!(std::str::from_utf8(&body).unwrap().contains("Kassenbuch"));
+    let html = std::str::from_utf8(&body).unwrap();
+    assert!(html.contains("Kassenbuch"));
+    assert!(html.contains(r#"betriebskosten_korrektur: "Betriebskosten, Korrektur""#));
 }
 
 #[tokio::test]
@@ -708,9 +710,25 @@ impl Firma {
         amount: i64,
         km: Option<f64>,
     ) -> Value {
+        self.event_at(token, event_id, kind, amount, km, None).await
+    }
+
+    /// Ereignis mit Zeitpunkt im Spiel, wie es das Plugin schickt
+    async fn event_at(
+        &self,
+        token: &str,
+        event_id: &str,
+        kind: &str,
+        amount: i64,
+        km: Option<f64>,
+        occurred_at: Option<i64>,
+    ) -> Value {
         let mut body = json!({ "event_id": event_id, "type": kind, "amount": amount });
         if let Some(km) = km {
             body["distance_km"] = json!(km);
+        }
+        if let Some(t) = occurred_at {
+            body["occurred_at"] = json!(t);
         }
         let (s, r) = self
             .post(token, &format!("/api/companies/{}/events", self.id), body)
@@ -745,9 +763,23 @@ impl Firma {
     }
 
     async fn sync(&self, token: &str, money: i64, xp: Option<i64>) -> Value {
+        self.sync_at(token, money, xp, None).await
+    }
+
+    /// Abgleich mit Änderungszeit des gelesenen Spielstands, wie ihn der Launcher schickt
+    async fn sync_at(
+        &self,
+        token: &str,
+        money: i64,
+        xp: Option<i64>,
+        saved_at: Option<i64>,
+    ) -> Value {
         let mut body = json!({ "ingame_money": money });
         if let Some(xp) = xp {
             body["xp"] = json!(xp);
+        }
+        if let Some(t) = saved_at {
+            body["saved_at"] = json!(t);
         }
         let (s, r) = self
             .post(token, &format!("/api/companies/{}/sync", self.id), body)
@@ -757,15 +789,57 @@ impl Firma {
     }
 
     async fn written(&self, token: &str, sync: &Value) -> (StatusCode, Value) {
+        self.written_at(token, sync, None).await
+    }
+
+    /// Bestätigung mit dem Zeitpunkt, zu dem der Launcher geschrieben hat
+    async fn written_at(&self, token: &str, sync: &Value, at: Option<i64>) -> (StatusCode, Value) {
+        let body = match at {
+            Some(t) => json!({ "written_at": t }),
+            None => json!({}),
+        };
         self.post(
             token,
             &format!(
                 "/api/companies/{}/sync/{}/written",
                 self.id, sync["sync_id"]
             ),
-            json!({}),
+            body,
         )
         .await
+    }
+
+    async fn ledger(&self) -> Vec<Value> {
+        let (s, l) = self
+            .get(
+                &self.chef,
+                &format!("/api/companies/{}/ledger?limit=500", self.id),
+            )
+            .await;
+        assert_eq!(s, StatusCode::OK, "{l}");
+        l["entries"].as_array().unwrap().clone()
+    }
+
+    /// Summe aller Buchungen der Arten `betriebskosten` und `betriebskosten_korrektur`
+    async fn costs(&self) -> i64 {
+        self.ledger()
+            .await
+            .iter()
+            .filter(|e| e["kind"] == "betriebskosten" || e["kind"] == "betriebskosten_korrektur")
+            .map(|e| e["amount"].as_i64().unwrap())
+            .sum()
+    }
+
+    /// Alle ungeklärten Beträge, auch die geschlossenen, neueste zuerst
+    async fn unexplained(&self) -> Vec<Value> {
+        let (s, u) = self
+            .get(
+                &self.chef,
+                &format!("/api/companies/{}/unexplained?all=true", self.id),
+            )
+            .await;
+        assert_eq!(s, StatusCode::OK, "{u}");
+        u["entries"].as_array().unwrap().clone()
     }
 
     fn at(&self, d: i64, h: i64, mi: i64) {
@@ -1325,7 +1399,8 @@ async fn geldabgleich() {
     assert_eq!(r["unexplained"], Value::Null);
     f.written(&f.fahrer, &r).await;
 
-    // Im Spiel: Auftrag +1500, Strafe -100, Maut -30, Abbruch -70, und 200 € fürs Tanken
+    // Im Spiel: Auftrag +1500, Strafe -100, Maut -30, Abbruch -70, und 200 € fürs Tanken.
+    // Die Uhr steht dabei still: Ohne Zeitpunkt zählt die Reihenfolge des Empfangs.
     f.event(&f.fahrer, "job-1", "job_delivered", 1500, Some(300.0))
         .await;
     f.event(&f.fahrer, "fine-1", "fined", 100, None).await;
@@ -1487,4 +1562,763 @@ async fn alte_datenbank_mit_lohnanteil_wird_uebernommen() {
     assert_eq!(n, 5);
     drop(conn);
     let _ = std::fs::remove_file(&path);
+}
+
+// ------------------------------------------------------------ Spät gemeldete Ereignisse
+
+/// Montag, 16.11.2026, 10:00 in Berlin plus `m` Minuten. Alle Zeitpunkte in diesen Tests
+/// stehen für die Uhr des Fahrer-PCs, die Serveruhr wird passend mitgestellt.
+fn t(m: i64) -> i64 {
+    berlin(2026, 11, 16, 10, 0) + m * 60
+}
+
+fn n(v: &Value) -> i64 {
+    v.as_i64().unwrap_or_else(|| panic!("keine Zahl: {v}"))
+}
+
+/// Erster Abgleich um 10:00: Spielstand von 9:59 mit 2000 €, der Launcher schreibt um 10:00
+/// Lohnkonto (0) plus Vorschuss (2000) und bestätigt.
+async fn first_sync(f: &Firma) {
+    f.clock.set(t(0));
+    let r = f.sync_at(&f.fahrer, 2000, None, Some(t(-1))).await;
+    assert_eq!(r["first"], true);
+    assert_eq!(n(&r["saved_at"]), t(-1));
+    let (s, w) = f.written_at(&f.fahrer, &r, Some(t(0))).await;
+    assert_eq!(s, StatusCode::OK, "{w}");
+    assert_eq!(n(&w["written_at"]), t(0));
+}
+
+/// Abgleich um `m` + 1 Minuten mit einem Spielstand von Minute `m`, bestätigt.
+async fn sync_written_at(f: &Firma, money: i64, m: i64) -> Value {
+    f.clock.set(t(m + 1));
+    let r = f.sync_at(&f.fahrer, money, None, Some(t(m))).await;
+    let (s, w) = f.written_at(&f.fahrer, &r, Some(t(m + 1))).await;
+    assert_eq!(s, StatusCode::OK, "{w}");
+    r
+}
+
+#[tokio::test]
+async fn spaet_gemeldeter_auftrag_mit_erloesfaktor_1() {
+    let f = Firma::new().await;
+    first_sync(&f).await;
+
+    // Im Spiel um 10:30 ein Auftrag über 1000 €, gespeichert um 11:00. Das Plugin meldet ihn
+    // erst nach dem Abgleich, etwa weil der Server kurz weg war.
+    let r = sync_written_at(&f, 3000, 60).await;
+    assert_eq!((n(&r["expected"]), n(&r["events"])), (2000, 0));
+    assert_eq!(r["booked"], json!([]));
+    assert_eq!(r["unexplained"]["amount"], 1000);
+    assert_eq!(f.company(&f.chef).await["open_unexplained"], 1);
+
+    f.clock.set(t(70));
+    let e = f
+        .event_at(
+            &f.fahrer,
+            "job-1",
+            "job_delivered",
+            1000,
+            Some(300.0),
+            Some(t(30)),
+        )
+        .await;
+    // Gebucht wird wie immer, dazu die Korrektur des Abgleichs
+    assert_eq!(e["booked"][0]["amount"], 1000);
+    assert_eq!(n(&e["occurred_at"]), t(30));
+    let late = &e["late"];
+    assert_eq!(late["sync_id"], r["sync_id"]);
+    assert_eq!((n(&late["diff_before"]), n(&late["diff"])), (1000, 0));
+    assert_eq!(late["booked"], json!([]));
+    assert_eq!(late["unexplained"]["closed"], true);
+    let u = f.unexplained().await;
+    assert_eq!(u.len(), 1);
+    assert!(u[0]["closed_at"].is_i64());
+    assert_eq!(u[0]["closed_by"], Value::Null);
+    assert_eq!(u[0]["note"], "Durch spät gemeldete Ereignisse erklärt");
+    assert_eq!(f.company(&f.chef).await["open_unexplained"], 0);
+    // Der Zeitpunkt steht im Kassenbuch
+    let job = f
+        .ledger()
+        .await
+        .into_iter()
+        .find(|e| e["event_id"] == "job-1")
+        .unwrap();
+    assert_eq!(n(&job["occurred_at"]), t(30));
+    assert_eq!(n(&job["created_at"]), t(70));
+
+    // Noch einmal geschickt: nichts passiert, auch keine zweite Korrektur
+    let e = f
+        .event_at(
+            &f.fahrer,
+            "job-1",
+            "job_delivered",
+            1000,
+            Some(300.0),
+            Some(t(30)),
+        )
+        .await;
+    assert_eq!(e["duplicate"], true);
+    assert!(e.get("late").is_none());
+
+    // Nächster Abgleich ohne Fahrt: Der Auftrag zählt nicht noch einmal
+    let r = sync_written_at(&f, 2000, 119).await;
+    assert_eq!((n(&r["expected"]), n(&r["events"])), (2000, 0));
+    assert_eq!(r["booked"], json!([]));
+    assert_eq!(r["unexplained"], Value::Null);
+
+    // Die Firma hat den ganzen Erlös, Betriebskosten gab es keine
+    assert_eq!(f.balance().await, 1000);
+    assert_eq!(f.costs().await, 0);
+    assert_eq!(f.member(f.fahrer_id).await["company_km"], 300);
+}
+
+#[tokio::test]
+async fn spaet_gemeldete_auftraege_mit_erloesfaktor_100() {
+    let f = Firma::new().await;
+    let (s, _) = f.patch(&f.chef, json!({ "revenue_factor": 100 })).await;
+    assert_eq!(s, StatusCode::OK);
+    first_sync(&f).await;
+
+    // Die Mod zahlt im Spiel 1 Prozent: 10 € statt 1000 €
+    let r = sync_written_at(&f, 2010, 60).await;
+    assert_eq!(r["unexplained"]["amount"], 10);
+    f.clock.set(t(65));
+    let e = f
+        .event_at(&f.fahrer, "job-1", "job_delivered", 10, None, Some(t(30)))
+        .await;
+    assert_eq!(e["booked"][0]["amount"], 1000);
+    assert_eq!(e["booked"][0]["game_amount"], 10);
+    assert_eq!(n(&e["late"]["diff"]), 0);
+    assert_eq!(e["late"]["booked"], json!([]));
+    assert_eq!(e["late"]["unexplained"]["closed"], true);
+
+    // Zweites Fenster: wieder ein Auftrag über 10 € und 200 € fürs Tanken. Der Abgleich bucht
+    // erst 190 € Betriebskosten, die Korrektur rechnet mit 10 €, nicht mit dem Kassenerlös.
+    let r = sync_written_at(&f, 2000 + 10 - 200, 120).await;
+    assert_eq!(
+        r["booked"],
+        json!([{ "account": "firma", "kind": "betriebskosten", "amount": -190 }])
+    );
+    f.clock.set(t(125));
+    let e = f
+        .event_at(&f.fahrer, "job-2", "job_delivered", 10, None, Some(t(90)))
+        .await;
+    assert_eq!(e["booked"][0]["amount"], 1000);
+    assert_eq!(
+        (n(&e["late"]["diff_before"]), n(&e["late"]["diff"])),
+        (-190, -200)
+    );
+    assert_eq!(
+        e["late"]["booked"],
+        json!([{ "account": "firma", "kind": "betriebskosten", "amount": -10 }])
+    );
+    assert_eq!(e["late"]["unexplained"], Value::Null);
+
+    assert_eq!(f.balance().await, 1000 + 1000 - 200);
+    assert_eq!(f.costs().await, -200, "nur das Tanken");
+    assert!(
+        f.unexplained()
+            .await
+            .iter()
+            .all(|u| u["closed_at"].is_i64())
+    );
+}
+
+#[tokio::test]
+async fn spaeter_auftrag_deckt_tanken_auf() {
+    // Fall a: Tanken 200 €, Auftrag 1000 € kommt spät. Beim Abgleich sieht es nach 800 €
+    // zu viel aus, nach der Korrektur sind es 200 € Betriebskosten.
+    let f = Firma::new().await;
+    first_sync(&f).await;
+    let r = sync_written_at(&f, 2000 + 1000 - 200, 60).await;
+    assert_eq!(r["booked"], json!([]));
+    assert_eq!(r["unexplained"]["amount"], 800);
+    assert_eq!(f.costs().await, 0);
+
+    f.clock.set(t(70));
+    let e = f
+        .event_at(&f.fahrer, "job-1", "job_delivered", 1000, None, Some(t(20)))
+        .await;
+    let late = &e["late"];
+    assert_eq!((n(&late["diff_before"]), n(&late["diff"])), (800, -200));
+    assert_eq!(
+        late["booked"],
+        json!([{ "account": "firma", "kind": "betriebskosten", "amount": -200 }])
+    );
+    assert_eq!(late["unexplained"]["closed"], true);
+    let kosten = f
+        .ledger()
+        .await
+        .into_iter()
+        .find(|e| e["kind"] == "betriebskosten")
+        .unwrap();
+    assert_eq!(
+        kosten["note"],
+        "Spät gemeldet: Auftrag, Abgleich vom 16.11.2026 11:01"
+    );
+    assert_eq!(kosten["user_id"], f.fahrer_id);
+    assert_eq!(f.balance().await, 800);
+    assert_eq!(f.costs().await, -200);
+    assert_eq!(f.company(&f.chef).await["open_unexplained"], 0);
+}
+
+#[tokio::test]
+async fn mehrere_spaete_ereignisse_fuer_dasselbe_fenster() {
+    // Fall d: Im Spiel zwei Aufträge (600 € und 400 €), Maut 50 €, Strafe 100 € und 200 €
+    // fürs Tanken. Gemeldet wird alles erst nach dem Abgleich, nacheinander.
+    let f = Firma::new().await;
+    first_sync(&f).await;
+    let r = sync_written_at(&f, 2000 + 600 + 400 - 50 - 100 - 200, 60).await;
+    assert_eq!(r["unexplained"]["amount"], 650);
+    let entry = r["unexplained"]["id"].clone();
+
+    let late = |id: &'static str, kind: &'static str, amount: i64, m: i64| {
+        let f = &f;
+        async move {
+            f.event_at(&f.fahrer, id, kind, amount, None, Some(t(m)))
+                .await["late"]
+                .clone()
+        }
+    };
+    f.clock.set(t(70));
+    // Auftrag 600: ungeklärt sinkt auf 50
+    let l = late("job-1", "job_delivered", 600, 10).await;
+    assert_eq!(n(&l["diff"]), 50);
+    assert_eq!(l["booked"], json!([]));
+    assert_eq!(
+        l["unexplained"],
+        json!({ "id": entry, "amount": 50, "closed": false })
+    );
+    // Maut 50: der Fahrer hatte noch weniger, ungeklärt steigt auf 100
+    let l = late("toll-1", "tollgate", 50, 15).await;
+    assert_eq!(n(&l["diff"]), 100);
+    assert_eq!(l["unexplained"]["amount"], 100);
+    let u = f.unexplained().await;
+    assert_eq!((u.len(), n(&u[0]["amount"])), (1, 100));
+    assert!(u[0]["closed_at"].is_null());
+    // Auftrag 400: jetzt fehlen 300, Betriebskosten, ungeklärt ist erledigt
+    let l = late("job-2", "job_delivered", 400, 20).await;
+    assert_eq!(n(&l["diff"]), -300);
+    assert_eq!(
+        l["booked"],
+        json!([{ "account": "firma", "kind": "betriebskosten", "amount": -300 }])
+    );
+    assert_eq!(l["unexplained"]["closed"], true);
+    // Strafe 100: die zahlt der Fahrer, also 100 € Betriebskosten zurück
+    let l = late("fine-1", "fined", 100, 25).await;
+    assert_eq!(n(&l["diff"]), -200);
+    assert_eq!(
+        l["booked"],
+        json!([{ "account": "firma", "kind": "betriebskosten_korrektur", "amount": 100 }])
+    );
+    assert_eq!(l["unexplained"], Value::Null);
+    // Ein spätes Ereignis der Chefin ändert am Fenster des Fahrers nichts
+    f.clock.set(t(75));
+    let e = f
+        .event_at(&f.chef, "toll-c", "tollgate", 5, None, Some(t(30)))
+        .await;
+    assert!(e.get("late").is_none());
+
+    assert_eq!(f.costs().await, -200, "nur das Tanken");
+    assert_eq!(f.balance().await, 600 + 400 - 50 - 5 - 300 + 100);
+    assert_eq!(f.wallet(f.fahrer_id).await, -100);
+    assert_eq!(f.company(&f.chef).await["open_unexplained"], 0);
+    assert_eq!(f.unexplained().await.len(), 1, "kein neuer Eintrag");
+
+    // Der nächste Abgleich ohne Fahrt sieht keines der Ereignisse noch einmal
+    let r = sync_written_at(&f, 2000, 120).await;
+    assert_eq!((n(&r["expected"]), n(&r["events"])), (2000, 0));
+    assert_eq!(r["booked"], json!([]));
+    assert_eq!(r["unexplained"], Value::Null);
+    // Geschrieben wird jetzt das Lohnkonto nach der Strafe plus Vorschuss
+    assert_eq!(r["write_money"], 1900);
+    assert_eq!(f.costs().await, -200);
+}
+
+#[tokio::test]
+async fn spaete_strafe_gibt_betriebskosten_zurueck() {
+    // Fall c: Strafe 100 € und Tanken 200 €. Ohne die Strafe sieht der Abgleich 300 €
+    // Betriebskosten. Kommt sie spät, gibt es 100 € zurück, die Strafe trägt der Fahrer.
+    let f = Firma::new().await;
+    first_sync(&f).await;
+    let r = sync_written_at(&f, 2000 - 100 - 200, 60).await;
+    assert_eq!(
+        r["booked"],
+        json!([{ "account": "firma", "kind": "betriebskosten", "amount": -300 }])
+    );
+    assert_eq!(f.balance().await, -300);
+
+    f.clock.set(t(80));
+    let e = f
+        .event_at(&f.fahrer, "fine-1", "fined", 100, None, Some(t(45)))
+        .await;
+    assert_eq!(
+        e["booked"],
+        json!([{ "account": "fahrer", "kind": "strafe", "amount": -100, "game_amount": -100, "distance_km": null }])
+    );
+    assert_eq!(
+        e["late"]["booked"],
+        json!([{ "account": "firma", "kind": "betriebskosten_korrektur", "amount": 100 }])
+    );
+    let korrektur = f
+        .ledger()
+        .await
+        .into_iter()
+        .find(|e| e["kind"] == "betriebskosten_korrektur")
+        .unwrap();
+    assert_eq!(
+        korrektur["note"],
+        "Spät gemeldet: Strafe, Abgleich vom 16.11.2026 11:01"
+    );
+    assert_eq!(korrektur["account"], "firma");
+    assert_eq!(korrektur["user_id"], f.fahrer_id);
+    assert_eq!(f.costs().await, -200);
+    assert_eq!(f.balance().await, -200);
+    assert_eq!(f.wallet(f.fahrer_id).await, -100);
+    assert!(f.unexplained().await.is_empty());
+}
+
+#[tokio::test]
+async fn ereignis_ohne_zeitpunkt_gilt_beim_empfang() {
+    let f = Firma::new().await;
+    first_sync(&f).await;
+
+    // Älteres Plugin, Dashboard: ohne Zeitpunkt zählt der Empfang beim Server. Im Kassenbuch
+    // bleibt occurred_at leer, created_at ist der Empfang.
+    f.clock.set(t(10));
+    let e = f.event(&f.fahrer, "toll-1", "tollgate", 30, None).await;
+    assert_eq!(e["occurred_at"], Value::Null);
+    assert!(e.get("late").is_none());
+    // Unplausible Zeitpunkte werden nicht abgelehnt, sondern behandelt, als fehlten sie.
+    // 1000 wäre sonst ein Zeitpunkt vor dem ersten Abgleich.
+    f.clock.set(t(11));
+    let e = f
+        .event_at(&f.fahrer, "toll-2", "tollgate", 20, None, Some(1000))
+        .await;
+    assert_eq!(e["occurred_at"], Value::Null);
+    f.clock.set(t(12));
+    let e = f
+        .event_at(
+            &f.fahrer,
+            "toll-3",
+            "tollgate",
+            10,
+            None,
+            Some(t(12) + 2 * 86_400),
+        )
+        .await;
+    assert_eq!(e["occurred_at"], Value::Null);
+    let l = f.ledger().await;
+    let entry = |id: &str| l.iter().find(|e| e["event_id"] == id).unwrap().clone();
+    for (id, m) in [("toll-1", 10), ("toll-2", 11), ("toll-3", 12)] {
+        let e = entry(id);
+        assert_eq!(e["occurred_at"], Value::Null, "{id}");
+        assert_eq!(n(&e["created_at"]), t(m), "{id}");
+    }
+
+    // Abgleich ohne saved_at (Dashboard): Spielstand gilt als jetzt gelesen, alle drei zählen
+    f.clock.set(t(20));
+    let r = f.sync(&f.fahrer, 2000 - 60 - 200, None).await;
+    assert_eq!(n(&r["saved_at"]), t(20));
+    assert_eq!((n(&r["expected"]), n(&r["events"])), (1940, 3));
+    assert_eq!(
+        r["booked"],
+        json!([{ "account": "firma", "kind": "betriebskosten", "amount": -200 }])
+    );
+    // Bestätigung ohne written_at: es gilt der Empfang
+    f.clock.set(t(21));
+    let (_, w) = f.written(&f.fahrer, &r).await;
+    assert_eq!(n(&w["written_at"]), t(21));
+
+    // Danach ohne Zeitpunkt: landet im nächsten Fenster wie bisher
+    f.clock.set(t(30));
+    let e = f.event(&f.fahrer, "toll-4", "tollgate", 40, None).await;
+    assert!(e.get("late").is_none());
+    f.clock.set(t(40));
+    let r = f.sync(&f.fahrer, 2000 - 40, None).await;
+    assert_eq!((n(&r["expected"]), n(&r["events"])), (1960, 1));
+    assert_eq!(r["booked"], json!([]));
+    assert_eq!(r["unexplained"], Value::Null);
+    assert_eq!(f.costs().await, -200);
+}
+
+#[tokio::test]
+async fn ereignis_zwischen_gelesenem_und_geschriebenem_spielstand() {
+    let f = Firma::new().await;
+    first_sync(&f).await;
+    // Gelesen wird der Spielstand von 11:00, geschrieben um 11:05
+    f.clock.set(t(66));
+    let r = f.sync_at(&f.fahrer, 2000, None, Some(t(60))).await;
+    let (_, w) = f.written_at(&f.fahrer, &r, Some(t(65))).await;
+    assert_eq!(n(&w["written_at"]), t(65));
+
+    // Ein Ereignis mit Zeitpunkt dazwischen (da war das Spiel zu, also eine falsch gehende
+    // Uhr): keine Korrektur, und es zählt auch im nächsten Fenster nicht
+    f.clock.set(t(70));
+    let e = f
+        .event_at(&f.fahrer, "toll-1", "tollgate", 30, None, Some(t(62)))
+        .await;
+    assert!(e.get("late").is_none());
+    assert_eq!(e["booked"][0]["amount"], -30);
+    let r = sync_written_at(&f, 2000, 120).await;
+    assert_eq!((n(&r["expected"]), n(&r["events"])), (2000, 0));
+    assert_eq!(r["booked"], json!([]));
+    assert_eq!(r["unexplained"], Value::Null);
+
+    // Eine Bestätigung mit einem Zeitpunkt vor dem gelesenen Spielstand wird auf diesen
+    // angehoben, sonst zählten Ereignisse dazwischen doppelt
+    f.clock.set(t(181));
+    let r = f.sync_at(&f.fahrer, 2000, None, Some(t(180))).await;
+    let (_, w) = f.written_at(&f.fahrer, &r, Some(t(170))).await;
+    assert_eq!(n(&w["written_at"]), t(180));
+
+    // Unbestätigter Abgleich: das nächste Fenster beginnt direkt beim gelesenen Spielstand
+    f.clock.set(t(241));
+    let r = f.sync_at(&f.fahrer, 2000, None, Some(t(240))).await;
+    assert_eq!(r["booked"], json!([]));
+    f.clock.set(t(250));
+    let e = f
+        .event_at(&f.fahrer, "toll-2", "tollgate", 25, None, Some(t(242)))
+        .await;
+    assert!(e.get("late").is_none());
+    let r = f.sync_at(&f.fahrer, 2000 - 25, None, Some(t(260))).await;
+    assert_eq!((n(&r["expected"]), n(&r["events"])), (1975, 1));
+    assert_eq!(r["booked"], json!([]));
+    assert_eq!(f.costs().await, 0);
+}
+
+#[tokio::test]
+async fn ereignis_vor_dem_ersten_abgleich() {
+    let f = Firma::new().await;
+    first_sync(&f).await;
+    // Passiert um 9:30, vor dem Spielstand des ersten Abgleichs, gemeldet um 10:10: Der
+    // Betrag steckt im Anfangsstand. Gebucht wird normal, korrigiert wird nichts.
+    f.clock.set(t(10));
+    let e = f
+        .event_at(&f.fahrer, "job-1", "job_delivered", 500, None, Some(t(-30)))
+        .await;
+    assert!(e.get("late").is_none());
+    assert_eq!(f.balance().await, 500);
+    // Auch der nächste Abgleich zählt es nicht
+    let r = sync_written_at(&f, 2000, 60).await;
+    assert_eq!((n(&r["expected"]), n(&r["events"])), (2000, 0));
+    assert_eq!(r["booked"], json!([]));
+    assert_eq!(r["unexplained"], Value::Null);
+    // Ebenso nach dem zweiten Abgleich: vor dem ersten bleibt vor dem ersten
+    f.clock.set(t(70));
+    let e = f
+        .event_at(&f.fahrer, "toll-1", "tollgate", 10, None, Some(t(-20)))
+        .await;
+    assert!(e.get("late").is_none());
+    assert_eq!(f.costs().await, 0);
+    assert!(f.unexplained().await.is_empty());
+}
+
+#[tokio::test]
+async fn geschlossener_ungeklaerter_eintrag_bleibt_geschlossen() {
+    let f = Firma::new().await;
+    first_sync(&f).await;
+    // Ein Auftrag über 1000 € kommt spät, im Spielstand sind nur 800 € mehr. Die Chefin
+    // schließt die 800 € vorher.
+    let r = sync_written_at(&f, 2000 + 1000 - 200, 60).await;
+    let list = format!("/api/companies/{}/unexplained", f.id);
+    let (s, _) = f
+        .post(
+            &f.chef,
+            &format!("{list}/{}/close", r["unexplained"]["id"]),
+            json!({ "note": "Geschenk im Spiel" }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK);
+
+    f.clock.set(t(70));
+    let e = f
+        .event_at(&f.fahrer, "job-1", "job_delivered", 1000, None, Some(t(20)))
+        .await;
+    // Die Betriebskosten werden nachgebucht, ungeklärt bleibt, wie die Chefin es hinterließ
+    assert_eq!(
+        e["late"]["booked"],
+        json!([{ "account": "firma", "kind": "betriebskosten", "amount": -200 }])
+    );
+    assert_eq!(e["late"]["unexplained"], Value::Null);
+    let u = f.unexplained().await;
+    assert_eq!(u.len(), 1);
+    assert_eq!(
+        (
+            u[0]["amount"].as_i64(),
+            u[0]["closed_by"].as_str(),
+            u[0]["note"].as_str()
+        ),
+        (Some(800), Some("Chefin"), Some("Geschenk im Spiel"))
+    );
+
+    // Eine späte Maut von 900 € steckte auch schon im Spielstand. Dann fehlt nichts, sondern
+    // es sind 700 € zu viel da. Die Chefin hat 800 € hingenommen, das deckt es.
+    f.clock.set(t(75));
+    let e = f
+        .event_at(&f.fahrer, "toll-1", "tollgate", 900, None, Some(t(25)))
+        .await;
+    assert_eq!(n(&e["late"]["diff"]), 700);
+    assert_eq!(
+        e["late"]["booked"],
+        json!([{ "account": "firma", "kind": "betriebskosten_korrektur", "amount": 200 }])
+    );
+    assert_eq!(e["late"]["unexplained"], Value::Null);
+    assert_eq!(f.unexplained().await.len(), 1);
+    // Noch eine späte Maut: 1000 € zu viel, 200 € mehr als hingenommen, neuer offener Eintrag
+    let e = f
+        .event_at(&f.fahrer, "toll-2", "tollgate", 300, None, Some(t(26)))
+        .await;
+    assert_eq!(n(&e["late"]["diff"]), 1000);
+    assert_eq!(e["late"]["booked"], json!([]));
+    assert_eq!(e["late"]["unexplained"]["amount"], 200);
+    assert_eq!(e["late"]["unexplained"]["closed"], false);
+    let u = f.unexplained().await;
+    assert_eq!(u.len(), 2);
+    assert!(u[0]["closed_at"].is_null());
+    assert_eq!(f.company(&f.chef).await["open_unexplained"], 1);
+    // Im Spiel ausgegeben wurde hier nichts außer dem Gemeldeten
+    assert_eq!(f.costs().await, 0);
+}
+
+#[tokio::test]
+async fn alte_abgleichpunkte_bekommen_ein_fenster() {
+    // Abgleichpunkte aus der Zeit vor den Fenstern: ohne cutoff, diff und Aufteilung
+    let path = std::env::temp_dir().join(format!("spedhub-fenster-{}.db", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let f = Firma::with_db(spedhub_server::db::open(path.to_str().unwrap()).unwrap()).await;
+    first_sync(&f).await;
+    let r = sync_written_at(&f, 2000 + 1000 - 200, 60).await;
+    assert_eq!(r["unexplained"]["amount"], 800);
+    f.db.lock()
+        .unwrap()
+        .execute_batch(
+            "UPDATE sync_points SET cutoff = NULL, written_at = NULL, diff = NULL,
+                                    costs_booked = 0, unexplained_attributed = 0",
+        )
+        .unwrap();
+
+    // Neustart des Servers: die Spalten werden aus dem befüllt, was damals galt
+    let db = spedhub_server::db::open(path.to_str().unwrap()).unwrap();
+    type Row = (i64, i64, Option<i64>, i64, i64);
+    let rows: Vec<Row> = db
+        .lock()
+        .unwrap()
+        .prepare(
+            "SELECT cutoff, created_at, diff, costs_booked, unexplained_attributed
+             FROM sync_points ORDER BY id",
+        )
+        .unwrap()
+        .query_map([], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        rows,
+        vec![(t(0), t(0), None, 0, 0), (t(61), t(61), Some(800), 0, 800)]
+    );
+    let f = Firma {
+        app: spedhub_server::api::router_with(db.clone(), f.clock.clone()),
+        db,
+        ..f
+    };
+
+    // Ein spätes Ereignis korrigiert auch so einen Abgleich
+    f.clock.set(t(70));
+    let e = f
+        .event_at(&f.fahrer, "job-1", "job_delivered", 1000, None, Some(t(30)))
+        .await;
+    assert_eq!(n(&e["late"]["diff"]), -200);
+    assert_eq!(e["late"]["unexplained"]["closed"], true);
+    assert_eq!(f.costs().await, -200);
+    drop(f);
+    for end in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{}{end}", path.display()));
+    }
+}
+
+#[tokio::test]
+async fn ereignis_ohne_zeitpunkt_in_derselben_sekunde_wie_der_abgleich() {
+    let f = Firma::new().await;
+    first_sync(&f).await;
+    // Abgleich wie aus dem Dashboard, ohne saved_at und ohne written_at: cutoff und Grundlage
+    // sind der Empfang um 10:10
+    f.clock.set(t(10));
+    let r = f.sync(&f.fahrer, 2000, None).await;
+    assert_eq!(n(&r["saved_at"]), t(10));
+    let (_, w) = f.written(&f.fahrer, &r).await;
+    assert_eq!(n(&w["written_at"]), t(10));
+
+    // In derselben Sekunde ein Auftrag und eine Maut ohne Zeitpunkt. Sie kamen nach dem
+    // Abgleich an, also korrigieren sie ihn nicht, sondern zählen im nächsten.
+    let e = f
+        .event(&f.fahrer, "job-1", "job_delivered", 1000, Some(100.0))
+        .await;
+    assert!(e.get("late").is_none(), "{e}");
+    let e = f.event(&f.fahrer, "toll-1", "tollgate", 30, None).await;
+    assert!(e.get("late").is_none(), "{e}");
+    assert_eq!(f.costs().await, 0);
+
+    // Auch der nächste Abgleich in derselben Sekunde sieht beide
+    let r = f.sync(&f.fahrer, 2000 + 1000 - 30, None).await;
+    assert_eq!((n(&r["expected"]), n(&r["events"])), (2970, 2));
+    assert_eq!(r["booked"], json!([]));
+    assert_eq!(r["unexplained"], Value::Null);
+    f.written(&f.fahrer, &r).await;
+
+    // Und danach zählen sie nicht noch einmal
+    f.clock.set(t(20));
+    let r = f.sync(&f.fahrer, 2000, None).await;
+    assert_eq!((n(&r["expected"]), n(&r["events"])), (2000, 0));
+    assert_eq!(r["booked"], json!([]));
+    assert_eq!(r["unexplained"], Value::Null);
+    assert_eq!(f.costs().await, 0, "im Spiel wurde nichts ausgegeben");
+    assert_eq!(f.balance().await, 1000 - 30);
+    assert!(f.unexplained().await.is_empty());
+}
+
+/// Die Uhr des Fahrer-PCs geht um `offset` Minuten anders als die des Servers. Launcher und
+/// Plugin melden Zeitpunkte in PC-Zeit, dazu kommen Ereignisse ohne Zeitpunkt (älteres
+/// Plugin, alte Zeilen im Postausgang, Dashboard) und ein Abgleich wie aus dem Dashboard.
+async fn fremde_uhr(offset: i64) {
+    let f = Firma::new().await;
+    // Serverzeit zur PC-Minute m
+    let server = |m: i64| f.clock.set(t(m - offset));
+    let sync = |money: i64, m: i64| {
+        let f = &f;
+        async move {
+            server(m + 1);
+            let r = f.sync_at(&f.fahrer, money, None, Some(t(m))).await;
+            let (s, w) = f.written_at(&f.fahrer, &r, Some(t(m + 1))).await;
+            assert_eq!(s, StatusCode::OK, "{w}");
+            r
+        }
+    };
+    let r = sync(2000, 0).await;
+    assert_eq!(r["first"], true);
+
+    // Fenster 1: Tanken 200 €, eine Maut mit Zeitpunkt, alles pünktlich
+    server(30);
+    let e = f
+        .event_at(&f.fahrer, "toll-1", "tollgate", 50, None, Some(t(30)))
+        .await;
+    assert!(e.get("late").is_none(), "{e}");
+    let r = sync(2000 - 50 - 200, 60).await;
+    assert_eq!((n(&r["expected"]), n(&r["events"])), (1950, 1));
+    assert_eq!(
+        r["booked"],
+        json!([{ "account": "firma", "kind": "betriebskosten", "amount": -200 }])
+    );
+
+    // Gleich nach dem Abgleich, noch vor dem Spielstart, kommen ein Auftrag und eine Maut ohne
+    // Zeitpunkt an, etwa aus dem Postausgang eines älteren Plugins. Sie gehören ins nächste
+    // Fenster, egal wie die Uhren stehen.
+    server(62);
+    let e = f
+        .event(&f.fahrer, "job-1", "job_delivered", 1000, Some(100.0))
+        .await;
+    assert!(e.get("late").is_none(), "{e}");
+    let e = f.event(&f.fahrer, "toll-2", "tollgate", 30, None).await;
+    assert!(e.get("late").is_none(), "{e}");
+    assert_eq!(f.costs().await, -200);
+
+    // Fenster 2: dazu ein Auftrag mit Zeitpunkt
+    server(90);
+    let e = f
+        .event_at(&f.fahrer, "job-2", "job_delivered", 500, None, Some(t(90)))
+        .await;
+    assert!(e.get("late").is_none(), "{e}");
+    let r = sync(2000 + 1000 - 30 + 500, 120).await;
+    assert_eq!((n(&r["expected"]), n(&r["events"])), (3470, 3));
+    assert_eq!(r["booked"], json!([]));
+    assert_eq!(r["unexplained"], Value::Null);
+
+    // Ein Abgleich wie aus dem Dashboard mit der Serverzeit, dazwischen ein Ereignis ohne
+    // Zeitpunkt
+    server(150);
+    let e = f.event(&f.fahrer, "toll-3", "tollgate", 20, None).await;
+    assert!(e.get("late").is_none(), "{e}");
+    server(151);
+    let r = f.sync(&f.fahrer, 2000 - 20, None).await;
+    assert_eq!((n(&r["expected"]), n(&r["events"])), (1980, 1));
+    assert_eq!(r["booked"], json!([]));
+    assert_eq!(r["unexplained"], Value::Null);
+    f.written(&f.fahrer, &r).await;
+
+    // Danach wieder der Launcher, im Spiel ist nichts passiert
+    let r = sync(2000, 200).await;
+    assert_eq!((n(&r["expected"]), n(&r["events"])), (2000, 0));
+    assert_eq!(r["booked"], json!([]));
+    assert_eq!(r["unexplained"], Value::Null);
+
+    assert_eq!(f.costs().await, -200, "nur das Tanken");
+    assert_eq!(f.balance().await, -50 - 200 + 1000 - 30 + 500 - 20);
+    assert!(f.unexplained().await.is_empty());
+}
+
+#[tokio::test]
+async fn pc_uhr_geht_vor() {
+    fremde_uhr(30).await;
+}
+
+#[tokio::test]
+async fn pc_uhr_geht_nach() {
+    fremde_uhr(-30).await;
+}
+
+#[tokio::test]
+async fn fenster_ueberlappen_nicht() {
+    // Die PC-Uhr geht 10 Minuten vor. Abgleiche kommen vom Launcher (PC-Zeit) und vom
+    // Dashboard (Serverzeit).
+    let f = Firma::new().await;
+    first_sync(&f).await;
+    // Auftrag 1000 € um 10:50 PC-Zeit, sofort gemeldet
+    f.clock.set(t(40));
+    f.event_at(&f.fahrer, "job-1", "job_delivered", 1000, None, Some(t(50)))
+        .await;
+    // Abgleich 2 über den Launcher: Spielstand von 11:00, geschrieben um 11:01 PC-Zeit
+    f.clock.set(t(51));
+    let r = f.sync_at(&f.fahrer, 3000, None, Some(t(60))).await;
+    assert_eq!((n(&r["expected"]), n(&r["events"])), (3000, 1));
+    let (_, w) = f.written_at(&f.fahrer, &r, Some(t(61))).await;
+    assert_eq!(n(&w["written_at"]), t(61));
+
+    // Abgleich 3 aus dem Dashboard um 10:52 Serverzeit, also vor der Grundlage von Abgleich 2.
+    // Sein cutoff wird auf diese Grundlage angehoben, sein Fenster ist leer.
+    f.clock.set(t(52));
+    let r = f.sync(&f.fahrer, 2000, None).await;
+    assert_eq!(n(&r["saved_at"]), t(61));
+    assert_eq!((n(&r["expected"]), n(&r["events"])), (2000, 0));
+    let (_, w) = f.written(&f.fahrer, &r).await;
+    assert_eq!(n(&w["written_at"]), t(61));
+
+    // Abgleich 4 über den Launcher, im Spiel ist nichts passiert: Der Auftrag zählt nicht
+    // noch einmal
+    f.clock.set(t(60));
+    let r = f.sync_at(&f.fahrer, 2000, None, Some(t(70))).await;
+    assert_eq!((n(&r["expected"]), n(&r["events"])), (2000, 0));
+    assert_eq!(r["booked"], json!([]));
+    f.written_at(&f.fahrer, &r, Some(t(71))).await;
+
+    // Ein Launcher-Spielstand, der älter ist als der zuletzt geschriebene: auch hier keine
+    // Überlappung, der Auftrag zählt nicht ein drittes Mal
+    f.clock.set(t(61));
+    let r = f.sync_at(&f.fahrer, 2000, None, Some(t(55))).await;
+    assert_eq!(n(&r["saved_at"]), t(71));
+    assert_eq!((n(&r["expected"]), n(&r["events"])), (2000, 0));
+    assert_eq!(r["booked"], json!([]));
+    // Ein spätes Ereignis mit Zeitpunkt in Fenster 2 korrigiert nur Abgleich 2. Die Maut
+    // steckte schon in den 3000 €, also waren 40 € mehr da als erklärt.
+    f.clock.set(t(62));
+    let e = f
+        .event_at(&f.fahrer, "toll-1", "tollgate", 40, None, Some(t(55)))
+        .await;
+    assert_eq!(e["late"]["sync_id"], json!(2));
+    assert_eq!(e["late"]["booked"], json!([]));
+    assert_eq!(e["late"]["unexplained"]["amount"], 40);
+
+    assert_eq!(f.costs().await, 0, "im Spiel wurde nichts ausgegeben");
+    assert_eq!(f.balance().await, 1000 - 40);
+    assert_eq!(f.unexplained().await.len(), 1);
 }

@@ -107,6 +107,9 @@ pub struct PreparedSlot {
     pub ingame_money: i64,
     /// Erfahrungspunkte aus `info.sii`, `None`, wenn das Feld fehlt oder unlesbar ist
     pub xp: Option<u64>,
+    /// Änderungszeit von `game.sii` des Ausgangs-Speicherplatzes, Unix-Sekunden. Der
+    /// Kontostand darin enthält alle Ereignisse bis zu diesem Zeitpunkt.
+    pub saved_at: i64,
 }
 
 impl PreparedSlot {
@@ -123,8 +126,8 @@ impl PreparedSlot {
     }
 }
 
-/// Erster Schritt: Spiel prüfen, neuesten Speicherplatz lesen, Kontostand und Erfahrung
-/// auslesen und, mit `package`, den Lkw einsetzen. Geschrieben wird nichts.
+/// Erster Schritt: Spiel prüfen, neuesten Speicherplatz lesen, Kontostand, Erfahrung und
+/// Speicherzeit auslesen und, mit `package`, den Lkw einsetzen. Geschrieben wird nichts.
 pub fn prepare_slot(
     profile_dir: &Path,
     package: Option<&TruckPackage>,
@@ -154,6 +157,7 @@ pub fn prepare_slot(
             format!("{SLOT_NAME_PREFIX}{}", plate_text(&package.license_plate))
         }
     };
+    let saved_at = unix_seconds(source.modified) as i64;
     Ok(PreparedSlot {
         source,
         game: save,
@@ -161,6 +165,7 @@ pub fn prepare_slot(
         name,
         ingame_money,
         xp,
+        saved_at,
     })
 }
 
@@ -330,7 +335,8 @@ fn backup_slot(
     Ok(dir)
 }
 
-fn unix_seconds(t: SystemTime) -> u64 {
+/// Unix-Sekunden, so wie sie als `file_time` in `info.sii` stehen.
+pub fn unix_seconds(t: SystemTime) -> u64 {
     t.duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)

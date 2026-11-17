@@ -5,7 +5,7 @@
 
 use crate::client::{Client, SyncResult};
 use crate::error::{Error, Result};
-use crate::savegame::{Deployed, package_from_checkout, prepare_slot, write_slot};
+use crate::savegame::{Deployed, package_from_checkout, prepare_slot, unix_seconds, write_slot};
 use crate::settings::AppPaths;
 use crate::system::GameCheck;
 use spedhub_save::TruckPackage;
@@ -53,11 +53,13 @@ pub struct SyncOutcome {
 ///
 /// 1. Spiel prüfen, neuesten Speicherplatz lesen, Kontostand und Erfahrung auslesen, den Lkw
 ///    einsetzen (alles im Speicher). Geht hier etwas schief, hat der Server nichts erfahren.
-/// 2. Abgleich beim Server: bucht Betriebskosten oder legt einen ungeklärten Betrag an und
-///    sagt, welcher Kontostand in den Spielstand kommt.
+/// 2. Abgleich beim Server, mit der Änderungszeit des gelesenen Spielstands (`saved_at`):
+///    bucht Betriebskosten oder legt einen ungeklärten Betrag an und sagt, welcher Kontostand
+///    in den Spielstand kommt.
 /// 3. Diesen Betrag in `game.sii` und `info.sii` setzen und den neuen Speicherplatz schreiben,
 ///    abgesichert wie beim Einsetzen. Läuft das Spiel inzwischen, wird nichts geschrieben.
-/// 4. Dem Server melden, dass der Betrag im Spielstand steht.
+/// 4. Dem Server melden, dass der Betrag im Spielstand steht, mit `now` als `written_at`
+///    (dieselbe Zeit, die als `file_time` in `info.sii` steht).
 pub fn sync_and_write(
     client: &Client,
     company_id: i64,
@@ -68,7 +70,12 @@ pub fn sync_and_write(
     now: SystemTime,
 ) -> Result<SyncOutcome> {
     let mut prepared = prepare_slot(profile_dir, package, game)?;
-    let sync = client.sync(company_id, prepared.ingame_money, prepared.xp)?;
+    let sync = client.sync(
+        company_id,
+        prepared.ingame_money,
+        prepared.xp,
+        Some(prepared.saved_at),
+    )?;
     prepared.set_money(sync.write_money)?;
     let deployed = match write_slot(prepared, profile_dir, backup_root, game, now) {
         Ok(d) => d,
@@ -79,7 +86,10 @@ pub fn sync_and_write(
             )));
         }
     };
-    let confirmed = client.sync_written(company_id, sync.sync_id).is_ok();
+    let written_at = unix_seconds(now) as i64;
+    let confirmed = client
+        .sync_written(company_id, sync.sync_id, Some(written_at))
+        .is_ok();
     Ok(SyncOutcome {
         deployed,
         sync,
