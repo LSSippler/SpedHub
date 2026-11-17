@@ -26,7 +26,7 @@ Unter http://127.0.0.1:8787 liegt die Weboberfläche. Dort kannst du:
 - den Fuhrpark sehen, Lkw ausleihen und zurückgeben
 - die Lohnkonten der Fahrer und das Kassenbuch sehen
 - als Chef: Lkw anlegen, den Lohnanteil ändern, Geld zwischen Kasse und Fahrern überweisen
-- Ereignisse von Hand buchen, solange es das Spiel-Plugin noch nicht gibt
+- Ereignisse von Hand buchen, zum Beispiel zum Ausprobieren ohne Spiel. Im Spiel meldet sie das Plugin aus `crates/spedhub-plugin`
 
 Die Seite holt sich alle 5 Sekunden den neuen Stand. Sie steckt als eine einzelne Datei in `server/web/index.html` und wird beim Bauen fest in die .exe eingebaut. Nach einer Änderung an der Datei also neu starten:
 
@@ -126,7 +126,7 @@ Die Kasse ist ein Journal. Kassenstand und Lohnkonten sind immer die Summe der B
 - Lkw-Kauf für die Firma
 - Online-Status der Fahrer
 - Ablauf von Tokens, Passwort ändern
-- Launcher, Save-Bibliothek und Spiel-Plugin, die diese Schnittstelle benutzen
+- Der Launcher, der diese Schnittstelle benutzt. Save-Bibliothek und Spiel-Plugin gibt es in einer ersten Fassung
 
 ## Aufbau
 

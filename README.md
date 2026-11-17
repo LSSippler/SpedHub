@@ -12,7 +12,7 @@ Das Projekt steht am Anfang. Was schon läuft und was noch fehlt:
 | Web-Dashboard | läuft, wird vom Server ausgeliefert |
 | Save-Bibliothek mit Kommandozeile | erste Fassung, siehe `crates/spedhub-save` und `tools/README.md` |
 | Launcher | geplant |
-| Spiel-Plugin für Telemetrie | geplant |
+| Spiel-Plugin für Telemetrie | erste Fassung, meldet Gameplay-Events, siehe `crates/spedhub-plugin` |
 
 Wichtig: Dass das Spiel einen von SpedHub bearbeiteten Spielstand fehlerfrei lädt, ist noch nicht im Spiel bestätigt. Bis dahin sind alle Aussagen zum Spielstand-Format vorläufig.
 
@@ -35,6 +35,7 @@ Danach liegt das Dashboard unter http://127.0.0.1:8787.
 |---|---|
 | `server/` | Backend und Dashboard, Details in `server/README.md` |
 | `crates/spedhub-save/` | Save-Bibliothek: Spielstand lesen, prüfen, schreiben, Lkw exportieren und einsetzen |
+| `crates/spedhub-plugin/` | Plugin für ETS2: meldet Aufträge, Strafen, Maut, Fähre und Zug an den Server |
 | `tools/` | Bedienung von `spedhub-save` und die Python-Referenz, Details in `tools/README.md` |
 | `testdata/` | Kleine Test-Spielstände mit echtem Aufbau |
 | `docs/` | Architektur und Notizen zum Spielstand-Format |

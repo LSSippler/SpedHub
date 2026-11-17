@@ -1,0 +1,25 @@
+[package]
+name = "spedhub-plugin"
+version = "0.1.0"
+edition = "2024"
+description = "Telemetrie-Plugin für ETS2: meldet Gameplay-Events an den SpedHub-Server"
+
+[lib]
+name = "spedhub_plugin"
+# cdylib ist die DLL für das Spiel, rlib braucht die Tests.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Anbindung an das SCS Telemetry SDK, MIT oder Apache-2.0. Exakt festgelegt, weil die
+# Crates jung sind und sich zwischen Versionen ändern können.
+scs-sdk-plugin = "=0.1.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+# Blockierender HTTP-Client für den Sender-Thread, mit TLS über rustls.
+ureq = { version = "~3.4.3", default-features = false, features = ["rustls", "json"] }
+
+[dev-dependencies]
+# Die Tests starten einen echten Server.
+spedhub-server = { path = "../../server" }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "net"] }
+axum = "0.8.9"

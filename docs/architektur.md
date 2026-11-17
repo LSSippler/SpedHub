@@ -29,7 +29,7 @@ Nicht Teil des Projekts: ein eigener Multiplayer, Eingriffe in den Arbeitsspeich
 | Dashboard (`server/web/`) | Weboberfläche für Chef und Fahrer | läuft |
 | Save-Bibliothek (`crates/spedhub-save`) | Spielstand lesen und schreiben, Lkw exportieren, einsetzen, entfernen, Kontostand setzen | erste Fassung, im Spiel noch nicht geprüft |
 | Launcher | Anmelden, Abgleich, Spielstand vorbereiten, Spiel starten, Abgleich beim Beenden | offen |
-| Spiel-Plugin | Telemetrie-Ereignisse melden, Quicksave und Quickload auslösen (Telemetry SDK und Input SDK) | offen |
+| Spiel-Plugin (`crates/spedhub-plugin`) | Telemetrie-Ereignisse melden, Quicksave und Quickload auslösen (Telemetry SDK und Input SDK) | Gameplay-Events: erste Fassung, im Spiel noch nicht geprüft. Quicksave und Quickload: offen |
 | Overlay | Kasse und Fuhrpark im Spiel | offen |
 | Convoy Dedicated Server | Die gemeinsame Session, offizieller Server von SCS | offen |
 
@@ -40,6 +40,8 @@ Spiel (ETS2)  <->  Plugin  <->  Launcher  <->  Server
      |
 Convoy Dedicated Server (nur gemeinsames Fahren, kennt weder Geld noch Fuhrpark)
 ```
+
+In der ersten Fassung schickt das Plugin Gameplay-Events direkt an den Server, über `POST /api/companies/{id}/events`. Server, Token und Firma liest es aus `%LOCALAPPDATA%\SpedHub\plugin.json`, die später der Launcher schreibt. Ist der Server nicht erreichbar, sammelt das Plugin die Events in einem Postausgang und schickt sie nach. Details in `crates/spedhub-plugin/README.md`.
 
 ## Abläufe
 
@@ -121,7 +123,7 @@ Solange der erste Test offen ist, sind alle Angaben zum Einsetzen vorläufig.
 | Projekt | Wofür | Lizenz |
 |---|---|---|
 | `decrypt_truck` | Spielstände entschlüsseln | MIT, direkt nutzbar |
-| `scs-sdk-crates` | Telemetry und Input SDK in Rust | MIT/Apache-2.0, Basis fürs Plugin |
+| `scs-sdk-crates` | Telemetry und Input SDK in Rust | MIT/Apache-2.0, im Plugin als `scs-sdk-plugin` 0.1.1 genutzt |
 | TS SE Tool | Aufbau der Save-Units nachlesen | Apache-2.0 |
 | truck-tools | Schema seit 1.60 nachlesen | GPL-3.0, kein Code übernehmen |
 | NMC-SCS-LAUNCHER | Logik für den Lkw-Wechsel nachlesen | ohne Lizenz, kein Code übernehmen |
