@@ -1,9 +1,10 @@
 use crate::{
     clock::{Clock, format_minute, parse_minute},
-    db::{Db, insert_default_wage_levels, now},
+    db::{Db, insert_default_wage_levels},
     error::{ApiError, ApiResult},
     levels::{WageLevel, standing, wage_levels},
     payroll,
+    presence::{self, HeartbeatReq},
     reconcile::{client_time, correct_late, kind_label, last_point, plausible_time, window_sum},
 };
 use argon2::{
@@ -56,6 +57,7 @@ pub fn router_with(db: Db, clock: Clock) -> Router {
         .route("/api/login", post(login))
         .route("/api/logout", post(logout))
         .route("/api/me", get(me))
+        .route("/api/me/password", post(change_password))
         .route("/api/companies", post(create_company))
         .route("/api/companies/join", post(join_company))
         .route(
@@ -68,6 +70,7 @@ pub fn router_with(db: Db, clock: Clock) -> Router {
         )
         .route("/api/companies/{id}/wage-levels", put(set_wage_levels))
         .route("/api/companies/{id}/events", post(post_event))
+        .route("/api/companies/{id}/heartbeat", post(heartbeat))
         .route("/api/companies/{id}/ledger", get(get_ledger))
         .route("/api/companies/{id}/transfer", post(transfer))
         .route("/api/companies/{id}/payrolls", get(list_payrolls))
@@ -163,28 +166,61 @@ fn bearer(headers: &HeaderMap) -> Option<&str> {
         .strip_prefix("Bearer ")
 }
 
+/// Nach so vielen Sekunden ohne Benutzung läuft ein Token ab: 30 Tage.
+pub const TOKEN_MAX_IDLE: i64 = 30 * 86_400;
+
+/// `last_used` wird höchstens einmal je so vielen Sekunden geschrieben.
+const TOKEN_TOUCH_SECS: i64 = 60;
+
 pub struct AuthUser {
     pub id: i64,
     pub name: String,
+    /// Hash des benutzten Tokens, zum Abmelden und Passwortwechsel
+    pub token_hash: String,
 }
 
 impl<S: Send + Sync> FromRequestParts<S> for AuthUser
 where
     Db: FromRef<S>,
+    Clock: FromRef<S>,
 {
     type Rejection = ApiError;
 
+    /// Prüft den Token. War er länger als [`TOKEN_MAX_IDLE`] nicht in Benutzung, wird er
+    /// gelöscht und die Anfrage mit 401 abgelehnt. Sonst zählt diese Anfrage als Benutzung.
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let token = bearer(&parts.headers).ok_or_else(ApiError::unauthorized)?;
+        let token_hash = hash_token(token);
+        let now = Clock::from_ref(state).now();
         let db = Db::from_ref(state);
         let conn = db.lock().unwrap();
-        conn.query_row(
-            "SELECT u.id, u.name FROM tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ?1",
-            [hash_token(token)],
-            |r| Ok(AuthUser { id: r.get(0)?, name: r.get(1)? }),
-        )
-        .optional()?
-        .ok_or_else(ApiError::unauthorized)
+        let (id, name, last_used): (i64, String, i64) = conn
+            .query_row(
+                "SELECT u.id, u.name, COALESCE(t.last_used, t.created_at)
+                 FROM tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ?1",
+                [&token_hash],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?
+            .ok_or_else(ApiError::unauthorized)?;
+        if now - last_used > TOKEN_MAX_IDLE {
+            conn.execute("DELETE FROM tokens WHERE token_hash = ?1", [&token_hash])?;
+            return Err(ApiError(
+                axum::http::StatusCode::UNAUTHORIZED,
+                "Die Anmeldung ist abgelaufen, bitte neu anmelden".into(),
+            ));
+        }
+        if now - last_used >= TOKEN_TOUCH_SECS {
+            conn.execute(
+                "UPDATE tokens SET last_used = ?1 WHERE token_hash = ?2",
+                params![now, token_hash],
+            )?;
+        }
+        Ok(AuthUser {
+            id,
+            name,
+            token_hash,
+        })
     }
 }
 
@@ -194,16 +230,27 @@ struct Credentials {
     password: String,
 }
 
-fn issue_token(conn: &Connection, user_id: i64) -> rusqlite::Result<String> {
+fn issue_token(conn: &Connection, user_id: i64, now: i64) -> rusqlite::Result<String> {
     let token = random_hex(32);
     conn.execute(
-        "INSERT INTO tokens (token_hash, user_id, created_at) VALUES (?1, ?2, ?3)",
-        params![hash_token(&token), user_id, now()],
+        "INSERT INTO tokens (token_hash, user_id, created_at, last_used) VALUES (?1, ?2, ?3, ?3)",
+        params![hash_token(&token), user_id, now],
     )?;
     Ok(token)
 }
 
-async fn register(State(db): State<Db>, Json(c): Json<Credentials>) -> ApiResult<Json<Value>> {
+fn hash_password(password: &str) -> ApiResult<String> {
+    Ok(Argon2::default()
+        .hash_password(password.as_bytes())
+        .map_err(|_| ApiError::bad("Das Passwort konnte nicht verarbeitet werden"))?
+        .to_string())
+}
+
+async fn register(
+    State(db): State<Db>,
+    State(clock): State<Clock>,
+    Json(c): Json<Credentials>,
+) -> ApiResult<Json<Value>> {
     let name = c.name.trim();
     if name.len() < 3 || name.len() > 32 {
         return Err(ApiError::bad("Der Name braucht 3 bis 32 Zeichen"));
@@ -211,15 +258,12 @@ async fn register(State(db): State<Db>, Json(c): Json<Credentials>) -> ApiResult
     if c.password.len() < 8 {
         return Err(ApiError::bad("Das Passwort braucht mindestens 8 Zeichen"));
     }
-    let pw_hash = Argon2::default()
-        .hash_password(c.password.as_bytes())
-        .map_err(|_| ApiError::bad("Das Passwort konnte nicht verarbeitet werden"))?
-        .to_string();
-
+    let pw_hash = hash_password(&c.password)?;
+    let now = clock.now();
     let conn = db.lock().unwrap();
     match conn.execute(
         "INSERT INTO users (name, pw_hash, created_at) VALUES (?1, ?2, ?3)",
-        params![name, pw_hash, now()],
+        params![name, pw_hash, now],
     ) {
         Ok(_) => {}
         Err(e) if is_unique_violation(&e) => {
@@ -228,13 +272,17 @@ async fn register(State(db): State<Db>, Json(c): Json<Credentials>) -> ApiResult
         Err(e) => return Err(e.into()),
     }
     let user_id = conn.last_insert_rowid();
-    let token = issue_token(&conn, user_id)?;
+    let token = issue_token(&conn, user_id, now)?;
     Ok(Json(
         json!({ "user_id": user_id, "name": name, "token": token }),
     ))
 }
 
-async fn login(State(db): State<Db>, Json(c): Json<Credentials>) -> ApiResult<Json<Value>> {
+async fn login(
+    State(db): State<Db>,
+    State(clock): State<Clock>,
+    Json(c): Json<Credentials>,
+) -> ApiResult<Json<Value>> {
     let wrong = || {
         ApiError(
             axum::http::StatusCode::UNAUTHORIZED,
@@ -253,25 +301,69 @@ async fn login(State(db): State<Db>, Json(c): Json<Credentials>) -> ApiResult<Js
     Argon2::default()
         .verify_password(c.password.as_bytes(), pw_hash.as_str())
         .map_err(|_| wrong())?;
-    let token = issue_token(&conn, user_id)?;
+    let token = issue_token(&conn, user_id, clock.now())?;
     Ok(Json(
         json!({ "user_id": user_id, "name": name, "token": token }),
     ))
 }
 
 /// Abmelden: Der benutzte Token wird ungültig.
-async fn logout(
-    State(db): State<Db>,
-    _user: AuthUser,
-    headers: HeaderMap,
-) -> ApiResult<Json<Value>> {
-    let token = bearer(&headers).ok_or_else(ApiError::unauthorized)?;
+async fn logout(State(db): State<Db>, user: AuthUser) -> ApiResult<Json<Value>> {
     let conn = db.lock().unwrap();
     conn.execute(
         "DELETE FROM tokens WHERE token_hash = ?1",
-        [hash_token(token)],
+        [&user.token_hash],
     )?;
     Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+struct PasswordReq {
+    old_password: String,
+    new_password: String,
+}
+
+/// Passwort ändern. Alle anderen Tokens des Nutzers werden ungültig, der benutzte bleibt.
+/// Ein falsches altes Passwort gibt 403, nicht 401: Die Anmeldung selbst ist ja gültig.
+async fn change_password(
+    State(db): State<Db>,
+    user: AuthUser,
+    Json(b): Json<PasswordReq>,
+) -> ApiResult<Json<Value>> {
+    if b.new_password.len() < 8 {
+        return Err(ApiError::bad(
+            "Das neue Passwort braucht mindestens 8 Zeichen",
+        ));
+    }
+    let pw_hash: String = {
+        let conn = db.lock().unwrap();
+        conn.query_row("SELECT pw_hash FROM users WHERE id = ?1", [user.id], |r| {
+            r.get(0)
+        })?
+    };
+    // Argon2 dauert, deshalb ohne gesperrte Datenbank
+    Argon2::default()
+        .verify_password(b.old_password.as_bytes(), pw_hash.as_str())
+        .map_err(|_| ApiError::forbidden("Das alte Passwort stimmt nicht"))?;
+    let new_hash = hash_password(&b.new_password)?;
+    let mut conn = db.lock().unwrap();
+    let tx = conn.transaction()?;
+    // Hat sich das Passwort inzwischen geändert, gilt die Prüfung oben nicht mehr
+    let changed = tx.execute(
+        "UPDATE users SET pw_hash = ?1 WHERE id = ?2 AND pw_hash = ?3",
+        params![new_hash, user.id, pw_hash],
+    )?;
+    if changed == 0 {
+        return Err(ApiError::conflict(
+            "Das Passwort wurde gerade schon geändert, bitte noch einmal versuchen",
+        ));
+    }
+    let removed = tx.execute(
+        "DELETE FROM tokens WHERE user_id = ?1 AND token_hash != ?2",
+        params![user.id, user.token_hash],
+    )?;
+    tx.commit()?;
+    Ok(Json(json!({ "ok": true, "other_tokens_removed": removed })))
 }
 
 async fn me(State(db): State<Db>, user: AuthUser) -> ApiResult<Json<Value>> {
@@ -378,9 +470,11 @@ fn wage_levels_json(levels: &[WageLevel]) -> Value {
 
 async fn get_company(
     State(db): State<Db>,
+    State(clock): State<Clock>,
     user: AuthUser,
     Path(id): Path<i64>,
 ) -> ApiResult<Json<Value>> {
+    let now = clock.now();
     let conn = db.lock().unwrap();
     let role = role_in(&conn, id, user.id)?;
     let (name, invite, factor, flat, minute, advance): (String, String, f64, i64, i64, i64) = conn
@@ -407,16 +501,41 @@ async fn get_company(
         )?
         .query_map([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
         .collect::<Result<_, _>>()?;
+    let seen = presence::all(&conn, id)?;
     let mut members = Vec::new();
     for (uid, uname, urole) in people {
         let s = standing(&conn, &levels, id, uid)?;
-        members.push(json!({
+        let mut m = json!({
             "user_id": uid, "name": uname, "role": urole,
             "wallet": wallet(&conn, id, uid)?,
             "open_claim": payroll::open_claim(&conn, id, uid)?,
             "xp": s.xp, "game_level": s.game_level, "company_km": s.company_km,
-            "stage": s.stage.map(|w| w.position), "cents_per_km": s.cents_per_km()
-        }));
+            "stage": s.stage.map(|w| w.position), "cents_per_km": s.cents_per_km(),
+            "online": false, "last_seen": Value::Null
+        });
+        if let Some(p) = seen.get(&uid) {
+            m["last_seen"] = json!(p.last_seen);
+            if p.online(now) {
+                m["online"] = json!(true);
+                m["plate"] = json!(p.plate);
+                m["near_city"] = p.near_city();
+                m["speed_kmh"] = p.speed_kmh();
+                m["job"] = p.job();
+                // Der eigene geliehene Lkw. Einen fremden Firmen-Lkw sieht nur der Chef.
+                m["truck_id"] = json!(p.truck_id.filter(|_| p.own_lease));
+                if role == "chef"
+                    && !p.own_lease
+                    && let Some(tid) = p.truck_id
+                {
+                    let plate: String =
+                        conn.query_row("SELECT plate FROM trucks WHERE id = ?1", [tid], |r| {
+                            r.get(0)
+                        })?;
+                    m["foreign_truck"] = json!({ "id": tid, "plate": plate });
+                }
+            }
+        }
+        members.push(m);
     }
     let mut out = json!({
         "id": id, "name": name, "your_role": role,
@@ -630,13 +749,25 @@ async fn add_truck(
 
 async fn list_trucks(
     State(db): State<Db>,
+    State(clock): State<Clock>,
     user: AuthUser,
     Path(company_id): Path<i64>,
 ) -> ApiResult<Json<Value>> {
+    let now = clock.now();
     let conn = db.lock().unwrap();
-    role_in(&conn, company_id, user.id)?;
+    let role = role_in(&conn, company_id, user.id)?;
+    // Wer gerade online ist und welchen Firmen-Lkw er meldet
+    let seen = presence::all(&conn, company_id)?;
+    let names: std::collections::HashMap<i64, String> = conn
+        .prepare(
+            "SELECT u.id, u.name FROM memberships m JOIN users u ON u.id = m.user_id
+             WHERE m.company_id = ?1",
+        )?
+        .query_map([company_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<_, _>>()?;
     let mut stmt = conn.prepare(
-        "SELECT t.id, t.plate, t.model, t.odometer_km, t.rev, u.id, u.name, l.taken_at
+        "SELECT t.id, t.plate, t.model, t.odometer_km, t.rev, u.id, u.name, l.taken_at,
+                t.last_seen_at, t.last_odometer_km
          FROM trucks t
          LEFT JOIN leases l ON l.truck_id = t.id AND l.returned_at IS NULL
          LEFT JOIN users u ON u.id = l.user_id
@@ -658,7 +789,12 @@ async fn list_trucks(
         .query_map([company_id], |r| {
             let holder: Option<i64> = r.get(5)?;
             let id: i64 = r.get(0)?;
-            Ok(json!({
+            let last_seen_at: Option<i64> = r.get(8)?;
+            // Der Ausleiher ist online und meldet genau diesen Lkw
+            let driving = holder
+                .and_then(|h| seen.get(&h))
+                .filter(|p| p.online(now) && p.own_lease && p.truck_id == Some(id));
+            let mut t = json!({
                 "id": id, "plate": r.get::<_, String>(1)?, "model": r.get::<_, String>(2)?,
                 "old_plates": old.get(&id).cloned().unwrap_or_default(),
                 "odometer_km": r.get::<_, i64>(3)?, "rev": r.get::<_, i64>(4)?,
@@ -666,8 +802,32 @@ async fn list_trucks(
                     "user_id": id,
                     "name": r.get::<_, String>(6).unwrap_or_default(),
                     "since": r.get::<_, i64>(7).unwrap_or_default()
+                })),
+                "driving": driving.is_some(),
+                "last_known": last_seen_at.map(|at| json!({
+                    "at": at, "odometer_km": r.get::<_, Option<i64>>(9).ok().flatten()
                 }))
-            }))
+            });
+            if let Some(p) = driving {
+                t["speed_kmh"] = p.speed_kmh();
+                t["near_city"] = p.near_city();
+            }
+            // Wer den Lkw fährt, ohne ihn geliehen zu haben, sieht nur der Chef
+            if role == "chef" {
+                let others: Vec<Value> = seen
+                    .values()
+                    .filter(|p| p.online(now) && !p.own_lease && p.truck_id == Some(id))
+                    .map(|p| {
+                        json!({
+                            "user_id": p.user_id,
+                            "name": names.get(&p.user_id).cloned().unwrap_or_default(),
+                            "speed_kmh": p.speed_kmh()
+                        })
+                    })
+                    .collect();
+                t["foreign_drivers"] = json!(others);
+            }
+            Ok(t)
         })?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Json(json!({ "trucks": trucks })))
@@ -769,7 +929,9 @@ async fn get_lease(
 
 #[derive(Deserialize)]
 struct CheckinReq {
-    odometer_km: i64,
+    /// Fehlt er, nimmt der Chef den Lkw mit dem letzten bekannten Zustand zurück
+    #[serde(default)]
+    odometer_km: Option<i64>,
     state: Option<Value>,
     /// Aktuelles Kennzeichen im Spielstand, falls das Spiel es ersetzt hat
     #[serde(default)]
@@ -778,6 +940,10 @@ struct CheckinReq {
 
 /// Lkw zurückgeben. Der Zustand aus dem Spielstand wird übernommen, die Revision steigt.
 /// Mit `plate` bekommt der Lkw ein neues Kennzeichen, das alte kommt in `truck_plates`.
+///
+/// Ohne `odometer_km` (Fahrer abgestürzt, kein Spielstand) darf nur der Chef zurücknehmen.
+/// Dann gilt der letzte bekannte Zustand aus dem Herzschlag. Gibt es keinen, 409. Nach jeder
+/// Rückgabe ist der letzte bekannte Zustand geleert, damit er nicht beim nächsten Fahrer gilt.
 async fn checkin(
     State(db): State<Db>,
     State(clock): State<Clock>,
@@ -787,11 +953,22 @@ async fn checkin(
 ) -> ApiResult<Json<Value>> {
     let mut conn = db.lock().unwrap();
     let tx = conn.transaction()?;
-    let (company_id, odometer, current_plate): (i64, i64, String) = tx
+    type TruckRow = (i64, i64, String, Option<i64>, Option<i64>, Option<String>);
+    let (company_id, odometer, current_plate, last_seen_at, last_km, last_state): TruckRow = tx
         .query_row(
-            "SELECT company_id, odometer_km, plate FROM trucks WHERE id = ?1",
+            "SELECT company_id, odometer_km, plate, last_seen_at, last_odometer_km, last_state
+             FROM trucks WHERE id = ?1",
             [truck_id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
+            },
         )
         .optional()?
         .ok_or_else(|| ApiError::not_found("Diesen Lkw gibt es nicht"))?;
@@ -810,11 +987,33 @@ async fn checkin(
             "Den Lkw hat jemand anderes ausgeliehen",
         ));
     }
-    if b.odometer_km < odometer {
-        return Err(ApiError::bad(
-            "Der Kilometerstand kann nicht kleiner werden",
-        ));
-    }
+    // Ohne Kilometerstand: letzter bekannter Zustand aus dem Herzschlag
+    let (new_odometer, state, from_last) = match b.odometer_km {
+        Some(km) => {
+            if km < odometer {
+                return Err(ApiError::bad(
+                    "Der Kilometerstand kann nicht kleiner werden",
+                ));
+            }
+            (km, b.state.clone(), None)
+        }
+        None if role != "chef" => {
+            return Err(ApiError::bad(
+                "Der Kilometerstand fehlt. Ohne ihn kann nur der Chef einen Lkw zurücknehmen",
+            ));
+        }
+        None => {
+            let at = last_seen_at.ok_or_else(|| {
+                ApiError::conflict(
+                    "Für diesen Lkw gibt es keinen letzten bekannten Zustand. Bitte den Kilometerstand angeben",
+                )
+            })?;
+            let state = last_state
+                .as_deref()
+                .and_then(|s| serde_json::from_str::<Value>(s).ok());
+            (last_km.unwrap_or(odometer).max(odometer), state, Some(at))
+        }
+    };
     let new_plate = match b.plate.as_deref().map(str::trim) {
         None => None,
         Some("") => return Err(ApiError::bad("Das Kennzeichen darf nicht leer sein")),
@@ -844,16 +1043,22 @@ async fn checkin(
             params![truck_id, current_plate, clock.now()],
         )?;
     }
-    match &b.state {
+    match &state {
         Some(s) => tx.execute(
             "UPDATE trucks SET odometer_km = ?1, state = ?2, rev = rev + 1 WHERE id = ?3",
-            params![b.odometer_km, s.to_string(), truck_id],
+            params![new_odometer, s.to_string(), truck_id],
         )?,
         None => tx.execute(
             "UPDATE trucks SET odometer_km = ?1, rev = rev + 1 WHERE id = ?2",
-            params![b.odometer_km, truck_id],
+            params![new_odometer, truck_id],
         )?,
     };
+    // Der letzte bekannte Zustand gehört zu dieser Leihe
+    tx.execute(
+        "UPDATE trucks SET last_seen_at = NULL, last_odometer_km = NULL, last_state = NULL
+         WHERE id = ?1",
+        [truck_id],
+    )?;
     tx.execute(
         "UPDATE leases SET returned_at = ?1 WHERE id = ?2",
         params![clock.now(), lease_id],
@@ -864,8 +1069,36 @@ async fn checkin(
     tx.commit()?;
     let plate = new_plate.unwrap_or(current_plate);
     Ok(Json(json!({
-        "id": truck_id, "plate": plate, "odometer_km": b.odometer_km, "rev": rev,
-        "driven_km": b.odometer_km - odometer
+        "id": truck_id, "plate": plate, "odometer_km": new_odometer, "rev": rev,
+        "driven_km": new_odometer - odometer,
+        // Gesetzt, wenn der letzte bekannte Zustand übernommen wurde: von wann er ist
+        "from_last_known": from_last.map(|at| json!({ "at": at }))
+    })))
+}
+
+// ---------------------------------------------------------------- Herzschlag
+
+/// Herzschlag aus dem Spiel, alle 10 Sekunden, solange das Spiel läuft und nicht pausiert ist.
+/// Speichert, wer mit welchem Lkw wo fährt, und beim eigenen geliehenen Lkw den letzten
+/// bekannten Zustand. Siehe [`crate::presence`].
+async fn heartbeat(
+    State(db): State<Db>,
+    State(clock): State<Clock>,
+    user: AuthUser,
+    Path(company_id): Path<i64>,
+    Json(b): Json<HeartbeatReq>,
+) -> ApiResult<Json<Value>> {
+    let hb = b.validate().map_err(|e| ApiError::bad(&e))?;
+    let now = clock.now();
+    let mut conn = db.lock().unwrap();
+    let tx = conn.transaction()?;
+    role_in(&tx, company_id, user.id)?;
+    let rec = presence::record(&tx, company_id, user.id, &hb, now)?;
+    tx.commit()?;
+    // Nur der eigene geliehene Lkw kommt zurück. Einen fremden sieht nur der Chef.
+    Ok(Json(json!({
+        "ok": true, "last_seen": now,
+        "leased_truck_id": rec.truck_id.filter(|_| rec.own_lease)
     })))
 }
 
@@ -889,6 +1122,13 @@ struct EventReq {
     /// Fehlt er oder ist er unplausibel, gilt der Empfangszeitpunkt.
     #[serde(default)]
     occurred_at: Option<i64>,
+    /// Fracht, Start- und Zielstadt, nur bei job_delivered. Aus der Job-Konfiguration des SDK.
+    #[serde(default)]
+    cargo: Option<String>,
+    #[serde(default)]
+    source_city: Option<String>,
+    #[serde(default)]
+    target_city: Option<String>,
 }
 
 /// Ereignis aus dem Spiel buchen. Die Regeln:
@@ -963,6 +1203,14 @@ async fn post_event(
     };
     let (account, kind, amount, game_amount) = booking;
     let distance = if kind == "auftrag" { distance } else { None };
+    // Fracht und Städte nur beim Auftrag, als Text gekürzt und ohne Steuerzeichen
+    let text = |v: &Option<String>| {
+        (kind == "auftrag")
+            .then(|| presence::clean_text(v.as_deref(), presence::TEXT_MAX))
+            .flatten()
+    };
+    let (cargo, source_city, target_city) =
+        (text(&b.cargo), text(&b.source_city), text(&b.target_city));
     let now = clock.now();
     // Nur ein Zeitpunkt vom Client kann einen alten Abgleich korrigieren. Ohne ihn ist das
     // Ereignis nach jedem bisherigen Abgleich angekommen und zählt im nächsten Fenster.
@@ -981,8 +1229,8 @@ async fn post_event(
     };
     tx.execute(
         "INSERT INTO ledger (company_id, account, user_id, kind, amount, event_id, note, created_at,
-                             game_amount, distance_km, occurred_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                             game_amount, distance_km, occurred_at, cargo, source_city, target_city)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         params![
             company_id,
             account,
@@ -994,7 +1242,10 @@ async fn post_event(
             now,
             game_amount,
             distance,
-            reported_at
+            reported_at,
+            cargo,
+            source_city,
+            target_city
         ],
     )?;
     let balance = company_balance(&tx, company_id)?;
@@ -1079,7 +1330,8 @@ async fn get_ledger(
     role_in(&conn, company_id, user.id)?;
     let mut stmt = conn.prepare(
         "SELECT l.id, l.account, u.name, l.kind, l.amount, l.note, l.created_at, l.user_id,
-                l.game_amount, l.distance_km, l.payroll_id, l.occurred_at, l.event_id
+                l.game_amount, l.distance_km, l.payroll_id, l.occurred_at, l.event_id,
+                l.cargo, l.source_city, l.target_city
          FROM ledger l LEFT JOIN users u ON u.id = l.user_id
          WHERE l.company_id = ?1 ORDER BY l.id DESC LIMIT ?2",
     )?;
@@ -1094,7 +1346,10 @@ async fn get_ledger(
                 "distance_km": r.get::<_, Option<i64>>(9)?,
                 "payroll_id": r.get::<_, Option<i64>>(10)?,
                 "occurred_at": r.get::<_, Option<i64>>(11)?,
-                "event_id": r.get::<_, Option<String>>(12)?
+                "event_id": r.get::<_, Option<String>>(12)?,
+                "cargo": r.get::<_, Option<String>>(13)?,
+                "source_city": r.get::<_, Option<String>>(14)?,
+                "target_city": r.get::<_, Option<String>>(15)?
             }))
         })?
         .collect::<Result<Vec<_>, _>>()?;

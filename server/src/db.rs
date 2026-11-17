@@ -163,6 +163,20 @@ CREATE TABLE IF NOT EXISTS unexplained (
     closed_by   INTEGER REFERENCES users(id),
     close_note  TEXT NOT NULL DEFAULT ''
 );
+-- Wer gerade fährt: der letzte Herzschlag je Fahrer und Firma. Das ist Zustand, kein Journal,
+-- jede Meldung überschreibt die vorige. `data` hält alle gemeldeten Werte als JSON. `truck_id`
+-- ist der Firmen-Lkw, zu dem das Kennzeichen passt, `own_lease` = 1, wenn der Fahrer ihn
+-- gerade geliehen hat.
+CREATE TABLE IF NOT EXISTS presence (
+    company_id  INTEGER NOT NULL REFERENCES companies(id),
+    user_id     INTEGER NOT NULL REFERENCES users(id),
+    last_seen   INTEGER NOT NULL,
+    plate       TEXT NOT NULL,
+    data        TEXT NOT NULL DEFAULT '{}',
+    truck_id    INTEGER REFERENCES trucks(id),
+    own_lease   INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (company_id, user_id)
+);
 "#;
 
 /// Spalten, die nach der ersten Fassung dazukamen. `CREATE TABLE IF NOT EXISTS` legt sie in einer
@@ -183,6 +197,13 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("companies", "advance", "INTEGER NOT NULL DEFAULT 2000"),
     // Ab hier wird abgerechnet. Davor galt der Lohnanteil.
     ("companies", "payroll_from", "INTEGER"),
+    // Letzte Benutzung eines Tokens. Nach 30 Tagen ohne Benutzung läuft er ab.
+    ("tokens", "last_used", "INTEGER"),
+    // Letzter bekannter Zustand eines verliehenen Lkw aus dem Herzschlag des Ausleihers:
+    // wann, Kilometerstand und Zustand (JSON wie `state`). Wird bei jeder Rückgabe geleert.
+    ("trucks", "last_seen_at", "INTEGER"),
+    ("trucks", "last_odometer_km", "INTEGER"),
+    ("trucks", "last_state", "TEXT"),
     // Voller Betrag aus dem Spiel mit Vorzeichen, wie er den Kontostand im Spiel verändert hat
     ("ledger", "game_amount", "INTEGER"),
     // Gefahrene Kilometer eines abgelieferten Auftrags
@@ -193,6 +214,11 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     // der Client keinen plausiblen Zeitpunkt geschickt hat, und bei alten Buchungen. Dann
     // zählt das Ereignis im ersten Abgleich, der nach ihm ankommt (siehe last_ledger_id).
     ("ledger", "occurred_at", "INTEGER"),
+    // Fracht, Start- und Zielstadt eines abgelieferten Auftrags, wie das Plugin sie aus der
+    // Job-Konfiguration des SDK kennt. Leer bei allen anderen und bei alten Buchungen.
+    ("ledger", "cargo", "TEXT"),
+    ("ledger", "source_city", "TEXT"),
+    ("ledger", "target_city", "TEXT"),
     // Abgleich: Zeitpunkt des gelesenen Spielstands. Der Kontostand darin enthält die
     // Ereignisse bis hier.
     ("sync_points", "cutoff", "INTEGER"),
@@ -238,6 +264,11 @@ fn migrate(conn: &Connection, now: i64) -> rusqlite::Result<()> {
                                 costs_booked = MAX(0, expected - ingame_money),
                                 unexplained_attributed = MAX(0, ingame_money - expected)
          WHERE diff IS NULL AND expected IS NOT NULL;",
+    )?;
+    // Tokens von vor dem Ablauf gelten ab jetzt als benutzt
+    conn.execute(
+        "UPDATE tokens SET last_used = ?1 WHERE last_used IS NULL",
+        [now],
     )?;
     // Firmen aus der Zeit des Lohnanteils werden ab jetzt abgerechnet, nicht rückwirkend
     conn.execute(

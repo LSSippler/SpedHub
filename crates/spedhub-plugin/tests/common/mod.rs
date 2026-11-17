@@ -173,6 +173,7 @@ pub fn fast() -> Settings {
         retry_initial: Duration::from_millis(100),
         retry_max: Duration::from_millis(400),
         request_timeout: Duration::from_millis(1500),
+        heartbeat_interval: Duration::from_millis(50),
     }
 }
 

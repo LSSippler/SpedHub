@@ -68,6 +68,7 @@ enum Done {
         problem: Option<String>,
     },
     SaveTrucks(Vec<SaveTruck>),
+    PasswordChanged,
     LoggedOut,
     Failed(Error),
 }
@@ -100,6 +101,11 @@ struct App {
     me: Option<Me>,
     company: Option<Company>,
     trucks: Vec<Truck>,
+
+    // Einstellungen: Passwort ändern
+    pw_old: String,
+    pw_new: String,
+    pw_repeat: String,
 
     // Lkw übernehmen
     import_slots: Vec<SaveSlot>,
@@ -136,6 +142,9 @@ impl App {
             me: None,
             company: None,
             trucks: Vec::new(),
+            pw_old: String::new(),
+            pw_new: String::new(),
+            pw_repeat: String::new(),
             import_slots: Vec::new(),
             import_slot: None,
             import_trucks: Vec::new(),
@@ -301,8 +310,17 @@ impl App {
                 self.import_plate = None;
                 self.import_trucks = trucks;
             }
+            Done::PasswordChanged => {
+                self.pw_old.clear();
+                self.pw_new.clear();
+                self.pw_repeat.clear();
+                self.info("Passwort geändert. Andere Anmeldungen mit diesem Konto sind abgemeldet, der Launcher und das Plugin bleiben angemeldet");
+            }
             Done::LoggedOut => {
                 self.token = None;
+                self.pw_old.clear();
+                self.pw_new.clear();
+                self.pw_repeat.clear();
                 self.me = None;
                 self.company = None;
                 self.trucks.clear();
@@ -504,6 +522,23 @@ impl App {
                 "{plate} ist zurückgegeben, {} km gefahren{renamed}",
                 r.driven_km
             )))
+        });
+    }
+
+    fn change_password(&mut self, ctx: &egui::Context) {
+        if self.pw_new.len() < 8 {
+            self.error("Das neue Passwort braucht mindestens 8 Zeichen");
+            return;
+        }
+        if self.pw_new != self.pw_repeat {
+            self.error("Die Wiederholung passt nicht zum neuen Passwort");
+            return;
+        }
+        let client = self.client();
+        let (old, new) = (self.pw_old.clone(), self.pw_new.clone());
+        self.run(ctx, "Passwort wird geändert", move || {
+            client.change_password(&old, &new)?;
+            Ok(Done::PasswordChanged)
         });
     }
 
@@ -733,11 +768,18 @@ impl App {
                         .leased_by
                         .as_ref()
                         .is_some_and(|l| Some(l.user_id) == my_id);
-                    match &t.leased_by {
-                        None => ui.label("frei"),
-                        Some(_) if mine => ui.label("du"),
-                        Some(l) => ui.label(&l.name),
+                    let who = match &t.leased_by {
+                        None => "frei".to_string(),
+                        Some(_) if mine => "du".to_string(),
+                        Some(l) => l.name.clone(),
                     };
+                    // Aus dem Herzschlag des Plugins: wird der Lkw gerade gefahren?
+                    let who = match (t.driving, t.speed_kmh) {
+                        (true, Some(v)) => format!("{who}, fährt gerade, {v:.0} km/h"),
+                        (true, None) => format!("{who}, fährt gerade"),
+                        _ => who,
+                    };
+                    ui.label(who);
                     ui.horizontal(|ui| {
                         let idle = self.busy.is_none();
                         if t.leased_by.is_none() {
@@ -883,6 +925,39 @@ impl App {
             });
     }
 
+    fn settings_view(&mut self, ui: &mut egui::Ui) {
+        egui::CollapsingHeader::new("Einstellungen")
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.strong("Passwort ändern");
+                ui.label("Danach sind alle anderen Anmeldungen mit diesem Konto abgemeldet, zum Beispiel im Dashboard. Der Launcher bleibt angemeldet");
+                egui::Grid::new("passwort")
+                    .num_columns(2)
+                    .spacing([12.0, 8.0])
+                    .show(ui, |ui| {
+                        ui.label("Altes Passwort");
+                        ui.add(egui::TextEdit::singleline(&mut self.pw_old).password(true));
+                        ui.end_row();
+                        ui.label("Neues Passwort, mindestens 8 Zeichen");
+                        ui.add(egui::TextEdit::singleline(&mut self.pw_new).password(true));
+                        ui.end_row();
+                        ui.label("Neues Passwort wiederholen");
+                        ui.add(egui::TextEdit::singleline(&mut self.pw_repeat).password(true));
+                        ui.end_row();
+                    });
+                let ready = !self.pw_old.is_empty()
+                    && !self.pw_new.is_empty()
+                    && !self.pw_repeat.is_empty()
+                    && self.busy.is_none();
+                if ui
+                    .add_enabled(ready, egui::Button::new("Passwort ändern"))
+                    .clicked()
+                {
+                    self.change_password(ui.ctx());
+                }
+            });
+    }
+
     fn status_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             if let Some(b) = &self.busy {
@@ -922,6 +997,8 @@ impl eframe::App for App {
                 self.fleet_view(ui);
                 ui.add_space(12.0);
                 self.import_view(ui);
+                ui.add_space(8.0);
+                self.settings_view(ui);
             });
         });
     }

@@ -2,6 +2,7 @@
 
 use crate::config::Config;
 use crate::event::Booking;
+use crate::telemetry::Heartbeat;
 use std::time::Duration;
 
 /// Was mit einem Event passiert ist.
@@ -63,6 +64,37 @@ impl Sender {
             },
             400 | 422 => Outcome::Rejected(format!("{status}: {}", server_error(&body))),
             _ => Outcome::Retry(format!("{status}: {}", server_error(&body))),
+        }
+    }
+}
+
+impl Sender {
+    /// Schickt einen Herzschlag. Ein Fehler heißt nur: Dieser Herzschlag ist verloren. Er wird
+    /// nicht wiederholt und nicht gespeichert.
+    pub fn heartbeat(
+        &self,
+        config: &Config,
+        company_id: i64,
+        heartbeat: &Heartbeat,
+    ) -> Result<(), String> {
+        let url = format!("{}/api/companies/{company_id}/heartbeat", config.server_url);
+        let mut response = self
+            .agent
+            .post(&url)
+            .header("Authorization", &format!("Bearer {}", config.token))
+            .send_json(heartbeat)
+            .map_err(|e| format!("Server nicht erreichbar: {e}"))?;
+        let status = response.status().as_u16();
+        let body = response
+            .body_mut()
+            .with_config()
+            .limit(64 * 1024)
+            .read_to_string()
+            .unwrap_or_default();
+        if (200..300).contains(&status) {
+            Ok(())
+        } else {
+            Err(format!("{status}: {}", server_error(&body)))
         }
     }
 }

@@ -12,6 +12,7 @@
 //! Beträge sind in der Spielwährung, bei ETS2 also Euro. Bei `job_delivered` geht außerdem die
 //! Strecke als `distance_km` mit, der Server schreibt sie dem Fahrer als Firmenkilometer gut.
 
+use crate::telemetry::JobInfo;
 use serde::{Deserialize, Serialize};
 
 /// Die Werte eines Gameplay-Events, so wie die FFI-Schicht sie aus dem SDK kopiert.
@@ -32,7 +33,7 @@ pub struct GameplayData {
 }
 
 /// Eine Buchung, wie sie an `POST /api/companies/{id}/events` geht.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Booking {
     pub event_id: String,
     #[serde(rename = "type")]
@@ -47,6 +48,27 @@ pub struct Booking {
     /// später ankommt. Ältere Zeilen im Postausgang haben das Feld nicht.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub occurred_at: Option<i64>,
+    /// Fracht, Start- und Zielstadt, nur bei `job_delivered`. Aus der letzten nicht leeren
+    /// Job-Konfiguration des SDK. Ältere Zeilen im Postausgang haben die Felder nicht.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cargo: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_city: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_city: Option<String>,
+}
+
+impl Booking {
+    /// Hängt Fracht und Städte eines Auftrags an.
+    pub fn with_job(self, job: Option<JobInfo>) -> Booking {
+        let job = job.unwrap_or_default();
+        Booking {
+            cargo: job.cargo,
+            source_city: job.source_city,
+            target_city: job.target_city,
+            ..self
+        }
+    }
 }
 
 /// Jetzt als Unix-Sekunden UTC, nach der Systemuhr.
@@ -76,6 +98,9 @@ impl Draft {
             distance_km: self.distance_km,
             note: self.note,
             occurred_at: None,
+            cargo: None,
+            source_city: None,
+            target_city: None,
         }
     }
 

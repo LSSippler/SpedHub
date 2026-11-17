@@ -6,4 +6,5 @@ pub mod db;
 pub mod error;
 pub mod levels;
 pub mod payroll;
+pub mod presence;
 pub mod reconcile;

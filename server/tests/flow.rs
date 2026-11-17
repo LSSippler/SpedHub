@@ -454,6 +454,7 @@ async fn dashboard_wird_ausgeliefert() {
     let html = std::str::from_utf8(&body).unwrap();
     assert!(html.contains("Kassenbuch"));
     assert!(html.contains(r#"betriebskosten_korrektur: "Betriebskosten, Korrektur""#));
+    assert!(html.contains("Herzschlag senden") && html.contains("Passwort ändern"));
 }
 
 #[tokio::test]
@@ -2321,4 +2322,726 @@ async fn fenster_ueberlappen_nicht() {
     assert_eq!(f.costs().await, 0, "im Spiel wurde nichts ausgegeben");
     assert_eq!(f.balance().await, 1000 - 40);
     assert_eq!(f.unexplained().await.len(), 1);
+}
+
+// ------------------------------------------------------------ Herzschlag, Online, Anmeldung
+
+impl Firma {
+    /// Lkw anlegen (als Chef), liefert die ID
+    async fn truck(&self, plate: &str, km: i64, state: Value) -> i64 {
+        let (s, t) = self
+            .post(
+                &self.chef,
+                &format!("/api/companies/{}/trucks", self.id),
+                json!({ "plate": plate, "model": "scania.s_2016", "odometer_km": km, "state": state }),
+            )
+            .await;
+        assert_eq!(s, StatusCode::OK, "{t}");
+        n(&t["id"])
+    }
+
+    async fn checkout(&self, token: &str, truck: i64) {
+        let (s, v) = self
+            .post(token, &format!("/api/trucks/{truck}/checkout"), json!({}))
+            .await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+    }
+
+    async fn checkin(&self, token: &str, truck: i64, body: Value) -> (StatusCode, Value) {
+        self.post(token, &format!("/api/trucks/{truck}/checkin"), body)
+            .await
+    }
+
+    async fn beat(&self, token: &str, body: Value) -> (StatusCode, Value) {
+        self.post(
+            token,
+            &format!("/api/companies/{}/heartbeat", self.id),
+            body,
+        )
+        .await
+    }
+
+    /// Ein Mitglied, so wie `token` die Firma sieht
+    async fn member_as(&self, token: &str, user_id: i64) -> Value {
+        let c = self.company(token).await;
+        c["members"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["user_id"] == user_id)
+            .unwrap()
+            .clone()
+    }
+
+    /// Ein Lkw aus der Fuhrparkliste, so wie `token` sie sieht
+    async fn truck_as(&self, token: &str, truck: i64) -> Value {
+        let (s, l) = self
+            .get(token, &format!("/api/companies/{}/trucks", self.id))
+            .await;
+        assert_eq!(s, StatusCode::OK, "{l}");
+        l["trucks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["id"] == truck)
+            .unwrap()
+            .clone()
+    }
+
+    /// Zustand eines Lkw in der Datenbank: Kilometerstand, Zustand, letzter bekannter Zustand
+    fn truck_row(&self, truck: i64) -> (i64, Value, Option<i64>, Option<i64>, Option<Value>) {
+        let conn = self.db.lock().unwrap();
+        conn.query_row(
+            "SELECT odometer_km, state, last_seen_at, last_odometer_km, last_state FROM trucks WHERE id = ?1",
+            [truck],
+            |r| {
+                let state: String = r.get(1)?;
+                let last: Option<String> = r.get(4)?;
+                Ok((
+                    r.get(0)?,
+                    serde_json::from_str(&state).unwrap(),
+                    r.get(2)?,
+                    r.get(3)?,
+                    last.map(|l| serde_json::from_str(&l).unwrap()),
+                ))
+            },
+        )
+        .unwrap()
+    }
+}
+
+/// Ein Zustand, wie ihn der Launcher aus dem Spielstand liest (Feldnamen von TruckState)
+fn full_state(km: i64) -> Value {
+    json!({
+        "odometer": km, "odometer_float_part": 0.0, "integrity_odometer": 100,
+        "integrity_odometer_float_part": 0.0, "fuel_relative": 0.8,
+        "engine_wear": 0.01, "transmission_wear": 0.02, "cabin_wear": 0.03, "chassis_wear": 0.04,
+        "engine_wear_unfixable": 0.0, "transmission_wear_unfixable": 0.0,
+        "cabin_wear_unfixable": 0.0, "chassis_wear_unfixable": 0.0,
+        "wheels_wear": [0.0, 0.0, 0.0], "wheels_wear_unfixable": [0.0, 0.0, 0.0]
+    })
+}
+
+#[tokio::test]
+async fn online_nach_herzschlag_und_offline_nach_31_sekunden() {
+    let f = Firma::new().await;
+    // Noch nie gemeldet
+    let m = f.member(f.fahrer_id).await;
+    assert_eq!(m["online"], false);
+    assert!(m["last_seen"].is_null());
+
+    let start = f.clock.now();
+    let (s, r) = f
+        .beat(
+            &f.fahrer,
+            json!({
+                "plate": "EF XU 577", "odometer_km": 12345.6, "speed_kmh": 85.4,
+                "near_city": "Berlin", "fuel_relative": 0.5,
+                "job": { "cargo": "Holz", "source_city": "Berlin", "target_city": "Hamburg" },
+                "paused": false
+            }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert!(r["leased_truck_id"].is_null(), "kein Firmen-Lkw");
+
+    // Fahrer und Chef sehen den Fahrer online, mit Lkw, Stadt und Auftrag
+    for token in [&f.chef, &f.fahrer] {
+        let m = f.member_as(token, f.fahrer_id).await;
+        assert_eq!(m["online"], true, "{m}");
+        assert_eq!(n(&m["last_seen"]), start);
+        assert_eq!(m["plate"], "EF XU 577");
+        assert_eq!(m["near_city"], "Berlin");
+        assert_eq!(m["speed_kmh"], 85.4);
+        assert_eq!(
+            m["job"],
+            json!({ "cargo": "Holz", "source_city": "Berlin", "target_city": "Hamburg" })
+        );
+        assert!(m["truck_id"].is_null());
+    }
+    // Der Chef hat sich nie gemeldet
+    assert_eq!(f.member(f.chef_id).await["online"], false);
+
+    // 30 Sekunden später noch online, nach 31 Sekunden offline, nur noch mit last_seen
+    f.clock.set(start + 30);
+    assert_eq!(f.member(f.fahrer_id).await["online"], true);
+    f.clock.set(start + 31);
+    let m = f.member(f.fahrer_id).await;
+    assert_eq!(m["online"], false);
+    assert_eq!(n(&m["last_seen"]), start);
+    assert!(m.get("plate").is_none() && m.get("job").is_none(), "{m}");
+
+    // Ein neuer Herzschlag ohne Auftrag: wieder online, Auftrag leer, Rest überschrieben
+    let (s, _) = f
+        .beat(&f.fahrer, json!({ "plate": "EF XU 577", "job": null }))
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    let m = f.member(f.fahrer_id).await;
+    assert_eq!(m["online"], true);
+    assert_eq!(n(&m["last_seen"]), start + 31);
+    assert!(m["job"].is_null() && m["near_city"].is_null() && m["speed_kmh"].is_null());
+}
+
+#[tokio::test]
+async fn herzschlag_ohne_kennzeichen_mit_unsinn_oder_von_fremden() {
+    let f = Firma::new().await;
+    for body in [
+        json!({}),
+        json!({ "plate": "" }),
+        json!({ "plate": "   " }),
+        json!({ "plate": "<img src=/a.mat>" }),
+        json!({ "plate": "X".repeat(65) }),
+        json!({ "plate": "SPED 001", "odometer_km": -1 }),
+        json!({ "plate": "SPED 001", "speed_kmh": -5 }),
+        json!({ "plate": "SPED 001", "wear": { "engine": 1.5 } }),
+        json!({ "plate": "SPED 001", "wear": { "wheels": -0.1 } }),
+        json!({ "plate": "SPED 001", "fuel_relative": 2 }),
+    ] {
+        let (s, v) = f.beat(&f.fahrer, body.clone()).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{body} {v}");
+        assert!(v["error"].is_string());
+    }
+    let (_, v) = f.beat(&f.fahrer, json!({ "plate": "" })).await;
+    assert_eq!(v["error"], "Das Kennzeichen fehlt");
+    // Nichts davon zählt als Herzschlag
+    assert!(f.member(f.fahrer_id).await["last_seen"].is_null());
+
+    // Wer nicht zur Firma gehört: 403, ohne Anmeldung 401, unbekannte Firma 404
+    let fremder = register(&f.app, "Fremder").await;
+    let (s, _) = f.beat(&fremder, json!({ "plate": "SPED 001" })).await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    let (s, _) = call(
+        &f.app,
+        "POST",
+        &format!("/api/companies/{}/heartbeat", f.id),
+        None,
+        Some(json!({ "plate": "SPED 001" })),
+    )
+    .await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+    let (s, _) = f
+        .post(
+            &f.fahrer,
+            "/api/companies/999/heartbeat",
+            json!({ "plate": "SPED 001" }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn letzter_bekannter_zustand_nur_fuer_den_eigenen_geliehenen_lkw() {
+    let f = Firma::new().await;
+    let t1 = f.truck("SPED 001", 1000, full_state(1000)).await;
+    let t2 = f.truck("SPED 002", 2000, full_state(2000)).await;
+    let hb = |plate: &str, km: f64| {
+        json!({
+            "plate": plate, "odometer_km": km, "fuel_relative": 0.4, "fuel_liters": 320.0,
+            "wear": { "engine": 0.05, "transmission": 0.06, "cabin": 0.07, "chassis": 0.08, "wheels": 0.09 }
+        })
+    };
+
+    // Nicht geliehen: kein letzter Zustand
+    let (s, r) = f.beat(&f.fahrer, hb("SPED 001", 1100.0)).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(r["leased_truck_id"].is_null());
+    assert_eq!(f.truck_row(t1).2, None);
+
+    // Geliehen: Kennzeichen mit Markup, Land und anderer Schreibweise passt auch
+    f.checkout(&f.fahrer, t1).await;
+    let leased_at = f.clock.now();
+    f.clock.advance(10);
+    let (s, r) = f
+        .beat(
+            &f.fahrer,
+            hb(
+                "<offset hshift=4 vshift=-5>sped<img src=/x.mat>  001|_germany",
+                1234.5,
+            ),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!(n(&r["leased_truck_id"]), t1);
+    let (km, state, seen, last_km, last) = f.truck_row(t1);
+    assert_eq!(
+        km, 1000,
+        "der Kilometerstand des Lkw ändert sich erst bei der Rückgabe"
+    );
+    assert_eq!(state, full_state(1000));
+    assert_eq!(seen, Some(leased_at + 10));
+    assert_eq!(last_km, Some(1234));
+    let last = last.unwrap();
+    assert_eq!(last["odometer"], 1234);
+    assert_eq!(last["odometer_float_part"], 0.5);
+    assert_eq!(last["engine_wear"], 0.05);
+    assert_eq!(last["chassis_wear"], 0.08);
+    assert_eq!(last["fuel_relative"], 0.4);
+    assert_eq!(last["wheels_wear"], json!([0.09, 0.09, 0.09]), "je Achse");
+    // Nicht gemeldet, bleibt wie beim Ausleihen
+    assert_eq!(last["integrity_odometer"], 100);
+    assert_eq!(last["wheels_wear_unfixable"], json!([0.0, 0.0, 0.0]));
+
+    // Ein späterer Herzschlag mit weniger Werten überschreibt nur, was er meldet
+    f.clock.advance(10);
+    f.beat(
+        &f.fahrer,
+        json!({ "plate": "SPED 001", "wear": { "engine": 0.06 } }),
+    )
+    .await;
+    let (_, _, seen, last_km, last) = f.truck_row(t1);
+    assert_eq!(seen, Some(leased_at + 20));
+    assert_eq!(last_km, Some(1234));
+    let last = last.unwrap();
+    assert_eq!(last["engine_wear"], 0.06);
+    assert_eq!(last["chassis_wear"], 0.08);
+    assert_eq!(last["odometer"], 1234);
+
+    // Ein Kilometerstand unter dem beim Ausleihen wird nicht übernommen
+    f.beat(&f.fahrer, hb("SPED 001", 900.0)).await;
+    let (_, _, _, last_km, last) = f.truck_row(t1);
+    assert_eq!(last_km, Some(1234));
+    assert_eq!(last.unwrap()["odometer"], 1234);
+
+    // Den anderen Lkw hat der Chef geliehen: Herzschlag des Fahrers setzt dort nichts
+    f.checkout(&f.chef, t2).await;
+    let (_, r) = f.beat(&f.fahrer, hb("SPED 002", 2500.0)).await;
+    assert!(r["leased_truck_id"].is_null());
+    assert_eq!(f.truck_row(t2).2, None);
+
+    // Über ein altes Kennzeichen: Rückgabe mit neuem Kennzeichen, wieder ausleihen
+    let (s, _) = f
+        .checkin(
+            &f.fahrer,
+            t1,
+            json!({ "odometer_km": 1300, "plate": "EF XU 577" }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(
+        f.truck_row(t1).2,
+        None,
+        "Rückgabe leert den letzten Zustand"
+    );
+    f.checkout(&f.fahrer, t1).await;
+    let (_, r) = f.beat(&f.fahrer, hb("SPED 001|germany", 1400.0)).await;
+    assert_eq!(n(&r["leased_truck_id"]), t1);
+    assert_eq!(f.truck_row(t1).3, Some(1400));
+}
+
+#[tokio::test]
+async fn altes_kennzeichen_des_eigenen_lkw_schlaegt_aktuelles_eines_anderen() {
+    let f = Firma::new().await;
+    // Lkw B fährt als "SPED 001", das Spiel ersetzt das Kennzeichen, Rückgabe mit "AB 123"
+    let b = f.truck("SPED 001", 1000, full_state(1000)).await;
+    f.checkout(&f.fahrer, b).await;
+    let (s, v) = f
+        .checkin(
+            &f.fahrer,
+            b,
+            json!({ "odometer_km": 1100, "plate": "AB 123" }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    // Der Chef gibt das frei gewordene Kennzeichen einem neuen Lkw A
+    let a = f.truck("SPED 001", 5000, full_state(5000)).await;
+
+    // Der Launcher setzt B mit dem Kennzeichen aus dem Bauplan ein, also wieder "SPED 001"
+    f.checkout(&f.fahrer, b).await;
+    f.clock.advance(10);
+    let seen = f.clock.now();
+    let (s, r) = f
+        .beat(
+            &f.fahrer,
+            json!({ "plate": "SPED 001", "odometer_km": 1200.0, "speed_kmh": 60 }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!(
+        n(&r["leased_truck_id"]),
+        b,
+        "der eigene geliehene Lkw gewinnt"
+    );
+    let (_, _, last_seen, last_km, _) = f.truck_row(b);
+    assert_eq!((last_seen, last_km), (Some(seen), Some(1200)));
+    assert_eq!(f.truck_row(a).2, None);
+
+    // Keine Fremd-Markierung, der Fuhrpark zeigt B als gefahren
+    let m = f.member_as(&f.chef, f.fahrer_id).await;
+    assert!(m.get("foreign_truck").is_none(), "{m}");
+    assert_eq!(n(&m["truck_id"]), b);
+    assert_eq!(f.truck_as(&f.chef, a).await["foreign_drivers"], json!([]));
+    assert_eq!(f.truck_as(&f.chef, b).await["driving"], true);
+
+    // Nach einem Absturz nimmt der Chef B mit dem letzten Zustand zurück
+    let (s, r) = f.checkin(&f.chef, b, json!({})).await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!(r["odometer_km"], 1200);
+
+    // Ohne eigene Leihe gilt wieder das aktuelle Kennzeichen: A, als fremder Lkw markiert
+    let (_, r) = f.beat(&f.fahrer, json!({ "plate": "SPED 001" })).await;
+    assert!(r["leased_truck_id"].is_null());
+    let m = f.member_as(&f.chef, f.fahrer_id).await;
+    assert_eq!(m["foreign_truck"], json!({ "id": a, "plate": "SPED 001" }));
+}
+
+#[tokio::test]
+async fn chef_nimmt_ohne_kilometer_zurueck_mit_dem_letzten_zustand() {
+    let f = Firma::new().await;
+    let t = f.truck("SPED 001", 1000, full_state(1000)).await;
+    f.checkout(&f.fahrer, t).await;
+
+    // Noch kein Herzschlag: ohne Kilometerstand geht es nicht, nichts ändert sich
+    let (s, v) = f.checkin(&f.chef, t, json!({})).await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    assert_eq!(
+        v["error"],
+        "Für diesen Lkw gibt es keinen letzten bekannten Zustand. Bitte den Kilometerstand angeben"
+    );
+    // Der Fahrer selbst braucht immer einen Kilometerstand
+    let (s, v) = f.checkin(&f.fahrer, t, json!({})).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    assert_eq!(
+        v["error"],
+        "Der Kilometerstand fehlt. Ohne ihn kann nur der Chef einen Lkw zurücknehmen"
+    );
+    assert_eq!(
+        f.truck_as(&f.chef, t).await["leased_by"]["user_id"],
+        f.fahrer_id
+    );
+
+    // Herzschlag beim Fahren, dann stürzt das Spiel ab
+    f.clock.advance(60);
+    let seen = f.clock.now();
+    f.beat(
+        &f.fahrer,
+        json!({ "plate": "SPED 001", "odometer_km": 1523.25, "wear": { "engine": 0.2, "wheels": 0.3 }, "fuel_relative": 0.25 }),
+    )
+    .await;
+    let l = f.truck_as(&f.chef, t).await;
+    assert_eq!(l["last_known"], json!({ "at": seen, "odometer_km": 1523 }));
+
+    // Der Fahrer kann es auch jetzt nicht ohne Kilometer
+    let (s, _) = f.checkin(&f.fahrer, t, json!({})).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+
+    // Der Chef nimmt ihn eine Stunde später ohne Kilometerstand zurück
+    f.clock.advance(3600);
+    let (s, r) = f.checkin(&f.chef, t, json!({})).await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!(r["odometer_km"], 1523);
+    assert_eq!(r["driven_km"], 523);
+    assert_eq!(r["rev"], 2);
+    assert_eq!(r["from_last_known"], json!({ "at": seen }));
+    let (km, state, last_seen, last_km, last) = f.truck_row(t);
+    assert_eq!(km, 1523);
+    assert_eq!(state["odometer"], 1523);
+    assert_eq!(state["engine_wear"], 0.2);
+    assert_eq!(state["wheels_wear"], json!([0.3, 0.3, 0.3]));
+    assert_eq!(state["fuel_relative"], 0.25);
+    assert_eq!(
+        state["cabin_wear"], 0.03,
+        "nicht gemeldet, wie beim Ausleihen"
+    );
+    assert_eq!((last_seen, last_km, last), (None, None, None), "geleert");
+    let l = f.truck_as(&f.chef, t).await;
+    assert!(l["leased_by"].is_null() && l["last_known"].is_null());
+
+    // Beim nächsten Fahrer gilt der alte Zustand nicht mehr
+    f.checkout(&f.fahrer, t).await;
+    let (s, _) = f.checkin(&f.chef, t, json!({})).await;
+    assert_eq!(s, StatusCode::CONFLICT);
+    // Mit Kilometerstand geht es wie immer, ohne Hinweis auf den letzten Zustand
+    let (s, r) = f.checkin(&f.chef, t, json!({ "odometer_km": 1600 })).await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert!(r["from_last_known"].is_null());
+    assert_eq!(f.truck_row(t).1["engine_wear"], 0.2);
+}
+
+#[tokio::test]
+async fn fremder_firmen_lkw_sieht_nur_der_chef() {
+    let f = Firma::new().await;
+    let t = f.truck("SPED 001", 1000, json!({})).await;
+
+    // Der Fahrer fährt einen Firmen-Lkw, den er nicht geliehen hat
+    f.beat(&f.fahrer, json!({ "plate": "sped 001", "speed_kmh": 70 }))
+        .await;
+    let m = f.member_as(&f.chef, f.fahrer_id).await;
+    assert_eq!(m["foreign_truck"], json!({ "id": t, "plate": "SPED 001" }));
+    assert!(m["truck_id"].is_null());
+    let l = f.truck_as(&f.chef, t).await;
+    assert_eq!(l["driving"], false, "nicht verliehen");
+    assert_eq!(
+        l["foreign_drivers"],
+        json!([{ "user_id": f.fahrer_id, "name": "Fahrer", "speed_kmh": 70.0 }])
+    );
+    // Der Fahrer sieht die Markierung nicht
+    let m = f.member_as(&f.fahrer, f.fahrer_id).await;
+    assert!(m.get("foreign_truck").is_none(), "{m}");
+    assert!(m["truck_id"].is_null());
+    assert!(
+        f.truck_as(&f.fahrer, t)
+            .await
+            .get("foreign_drivers")
+            .is_none()
+    );
+
+    // Hat der Chef den Lkw geliehen, bleibt der Fahrer markiert
+    f.checkout(&f.chef, t).await;
+    f.beat(&f.fahrer, json!({ "plate": "SPED 001" })).await;
+    let l = f.truck_as(&f.chef, t).await;
+    assert_eq!(l["driving"], false, "der Ausleiher meldet sich nicht");
+    assert_eq!(l["foreign_drivers"].as_array().unwrap().len(), 1);
+    assert_eq!(f.truck_row(t).2, None, "kein letzter Zustand vom Falschen");
+
+    // Offline: keine Markierung mehr
+    f.clock.advance(31);
+    let m = f.member_as(&f.chef, f.fahrer_id).await;
+    assert!(m.get("foreign_truck").is_none());
+    assert_eq!(f.truck_as(&f.chef, t).await["foreign_drivers"], json!([]));
+}
+
+#[tokio::test]
+async fn fuhrpark_zeigt_ob_ein_verliehener_lkw_gefahren_wird() {
+    let f = Firma::new().await;
+    let t = f.truck("SPED 001", 1000, json!({})).await;
+    let other = f.truck("SPED 002", 1000, json!({})).await;
+    f.checkout(&f.fahrer, t).await;
+    let l = f.truck_as(&f.fahrer, t).await;
+    assert_eq!(l["driving"], false);
+    assert!(l.get("speed_kmh").is_none());
+
+    // Der Ausleiher meldet einen anderen Lkw: der verliehene fährt nicht
+    f.beat(&f.fahrer, json!({ "plate": "EIGENER 1", "speed_kmh": 50 }))
+        .await;
+    assert_eq!(f.truck_as(&f.fahrer, t).await["driving"], false);
+
+    // Er meldet genau diesen: alle sehen, dass er gefahren wird
+    f.beat(
+        &f.fahrer,
+        json!({ "plate": "SPED 001", "speed_kmh": 85, "near_city": "Kassel" }),
+    )
+    .await;
+    for token in [&f.chef, &f.fahrer] {
+        let l = f.truck_as(token, t).await;
+        assert_eq!(l["driving"], true, "{l}");
+        assert_eq!(l["speed_kmh"], 85.0);
+        assert_eq!(l["near_city"], "Kassel");
+        assert_eq!(f.truck_as(token, other).await["driving"], false);
+    }
+    assert_eq!(n(&f.member(f.fahrer_id).await["truck_id"]), t);
+
+    // Nach 31 Sekunden ohne Herzschlag nicht mehr
+    f.clock.advance(31);
+    let l = f.truck_as(&f.chef, t).await;
+    assert_eq!(l["driving"], false);
+    assert!(l.get("speed_kmh").is_none());
+}
+
+#[tokio::test]
+async fn auftrag_mit_fracht_und_staedten_im_kassenbuch() {
+    let f = Firma::new().await;
+    let (s, r) = f
+        .post(
+            &f.fahrer,
+            &format!("/api/companies/{}/events", f.id),
+            json!({
+                "event_id": "job-1", "type": "job_delivered", "amount": 1000, "distance_km": 300,
+                "cargo": " Holz\nbretter ", "source_city": "Berlin",
+                "target_city": "H".repeat(100)
+            }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    // Bei anderen Ereignissen wird nichts davon gespeichert, ohne Angaben bleibt es leer
+    let (s, _) = f
+        .post(
+            &f.fahrer,
+            &format!("/api/companies/{}/events", f.id),
+            json!({ "event_id": "maut-1", "type": "tollgate", "amount": 10, "cargo": "Holz" }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    f.event(&f.fahrer, "job-2", "job_delivered", 500, Some(100.0))
+        .await;
+    let l = f.ledger().await;
+    let by = |id: &str| l.iter().find(|e| e["event_id"] == id).unwrap().clone();
+    let job = by("job-1");
+    assert_eq!(job["cargo"], "Holz bretter");
+    assert_eq!(job["source_city"], "Berlin");
+    assert_eq!(job["target_city"], "H".repeat(64));
+    for e in [by("maut-1"), by("job-2")] {
+        assert!(
+            e["cargo"].is_null() && e["source_city"].is_null() && e["target_city"].is_null(),
+            "{e}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn token_laeuft_nach_30_tagen_ohne_benutzung_ab() {
+    let f = Firma::new().await;
+    let start = f.clock.now();
+    let day = 86_400;
+
+    // 29 Tage später gilt der Token noch, und die Benutzung verlängert ihn
+    f.clock.set(start + 29 * day);
+    let (s, _) = f.get(&f.fahrer, "/api/me").await;
+    assert_eq!(s, StatusCode::OK);
+    // 58 Tage nach dem Anlegen, aber nur 29 nach der letzten Benutzung: gilt
+    f.clock.set(start + 58 * day);
+    let (s, _) = f.get(&f.fahrer, "/api/me").await;
+    assert_eq!(s, StatusCode::OK);
+    // Genau 30 Tage ohne Benutzung: gilt noch
+    f.clock.set(start + 88 * day);
+    let (s, _) = f.get(&f.fahrer, "/api/me").await;
+    assert_eq!(s, StatusCode::OK);
+
+    // Der Chef hat seinen Token seit dem Anlegen nicht benutzt: abgelaufen
+    let (s, v) = f.get(&f.chef, "/api/me").await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        v["error"],
+        "Die Anmeldung ist abgelaufen, bitte neu anmelden"
+    );
+    // Er ist gelöscht und gilt auch nicht, wenn die Uhr zurückgeht
+    f.clock.set(start);
+    let (s, v) = f.get(&f.chef, "/api/me").await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+    assert_eq!(v["error"], "Nicht angemeldet");
+
+    // 30 Tage und eine Sekunde ohne Benutzung: abgelaufen
+    f.clock.set(start + 118 * day + 1);
+    let (s, _) = f.get(&f.fahrer, "/api/me").await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+
+    // Neu anmelden geht und gibt einen frischen Token
+    let (s, v) = call(
+        &f.app,
+        "POST",
+        "/api/login",
+        None,
+        Some(json!({ "name": "Fahrer", "password": "geheim1234" })),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    f.clock.advance(30 * day);
+    let (s, _) = f.get(v["token"].as_str().unwrap(), "/api/me").await;
+    assert_eq!(s, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn passwort_aendern_macht_andere_tokens_ungueltig() {
+    let f = Firma::new().await;
+    let login = |password: &'static str| {
+        let app = f.app.clone();
+        async move {
+            call(
+                &app,
+                "POST",
+                "/api/login",
+                None,
+                Some(json!({ "name": "Fahrer", "password": password })),
+            )
+            .await
+        }
+    };
+    let (_, second) = login("geheim1234").await;
+    let second = second["token"].as_str().unwrap().to_string();
+    let change = |token: String, old: &'static str, new: &'static str| {
+        let app = f.app.clone();
+        async move {
+            call(
+                &app,
+                "POST",
+                "/api/me/password",
+                Some(&token),
+                Some(json!({ "old_password": old, "new_password": new })),
+            )
+            .await
+        }
+    };
+
+    // Falsches altes Passwort: 403, nicht 401, damit niemand abgemeldet wird
+    let (s, v) = change(f.fahrer.clone(), "falsch123", "neuesPasswort1").await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    assert_eq!(v["error"], "Das alte Passwort stimmt nicht");
+    // Zu kurz
+    let (s, v) = change(f.fahrer.clone(), "geheim1234", "kurz").await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    assert_eq!(v["error"], "Das neue Passwort braucht mindestens 8 Zeichen");
+    // Ohne Anmeldung
+    let (s, _) = call(
+        &f.app,
+        "POST",
+        "/api/me/password",
+        None,
+        Some(json!({ "old_password": "geheim1234", "new_password": "neuesPasswort1" })),
+    )
+    .await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+    // Bis hier gelten beide Tokens
+    assert_eq!(f.get(&second, "/api/me").await.0, StatusCode::OK);
+
+    // Ändern: der benutzte Token bleibt, der zweite ist ungültig, der Chef ist unberührt
+    let (s, v) = change(f.fahrer.clone(), "geheim1234", "neuesPasswort1").await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["other_tokens_removed"], 1);
+    assert_eq!(f.get(&f.fahrer, "/api/me").await.0, StatusCode::OK);
+    assert_eq!(f.get(&second, "/api/me").await.0, StatusCode::UNAUTHORIZED);
+    assert_eq!(f.get(&f.chef, "/api/me").await.0, StatusCode::OK);
+
+    // Anmelden nur noch mit dem neuen Passwort
+    assert_eq!(login("geheim1234").await.0, StatusCode::UNAUTHORIZED);
+    let (s, _) = login("neuesPasswort1").await;
+    assert_eq!(s, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn alte_tokens_gelten_ab_der_umstellung_30_tage() {
+    use sha2::{Digest, Sha256};
+    // Eine Datenbank von vor dem Ablauf der Tokens, mit einem Token von vor einem Jahr
+    let path = std::env::temp_dir().join(format!("spedhub-token-{}.db", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let token = "alter-token";
+    let hash: String = Sha256::digest(token.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    {
+        let c = rusqlite::Connection::open(&path).unwrap();
+        c.execute_batch(
+            "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                pw_hash TEXT NOT NULL, created_at INTEGER NOT NULL);
+             CREATE TABLE tokens (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL,
+                created_at INTEGER NOT NULL);
+             INSERT INTO users VALUES (1, 'Alt', 'x', 1000);",
+        )
+        .unwrap();
+        c.execute("INSERT INTO tokens VALUES (?1, 1, 1000)", [&hash])
+            .unwrap();
+    }
+    let before = spedhub_server::clock::system_now();
+    let db = spedhub_server::db::open(path.to_str().unwrap()).unwrap();
+    let after = spedhub_server::clock::system_now();
+    let last: i64 = db
+        .lock()
+        .unwrap()
+        .query_row("SELECT last_used FROM tokens", [], |r| r.get(0))
+        .unwrap();
+    assert!(
+        (before..=after).contains(&last),
+        "Umstellung zählt als Benutzung"
+    );
+
+    let clock = Clock::fixed(last + 29 * 86_400);
+    let app = spedhub_server::api::router_with(db.clone(), clock.clone());
+    let (s, me) = call(&app, "GET", "/api/me", Some(token), None).await;
+    assert_eq!(s, StatusCode::OK, "{me}");
+    assert_eq!(me["name"], "Alt");
+    clock.advance(30 * 86_400 + 1);
+    let (s, _) = call(&app, "GET", "/api/me", Some(token), None).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+    drop(app);
+    drop(db);
+    let _ = std::fs::remove_file(&path);
 }

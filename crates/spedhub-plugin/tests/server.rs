@@ -295,6 +295,7 @@ fn erneutes_senden_bucht_nicht_doppelt_und_abgelehntes_bleibt_liegen() {
             distance_km: None,
             note: "Maut".into(),
             occurred_at: None,
+            ..Default::default()
         },
     };
     let bogus = Entry {
@@ -306,6 +307,7 @@ fn erneutes_senden_bucht_nicht_doppelt_und_abgelehntes_bleibt_liegen() {
             distance_km: None,
             note: String::new(),
             occurred_at: None,
+            ..Default::default()
         },
     };
     let lines: Vec<String> = [&again, &bogus]
@@ -372,5 +374,278 @@ fn ein_haengender_server_bremst_weder_events_noch_das_beenden() {
     );
     assert_eq!(read_entries(&paths.outbox()).len(), 6, "nichts verloren");
     drop(hold);
+    let _ = fs::remove_dir_all(dir);
+}
+
+// ------------------------------------------------------------------- Herzschlag
+
+use spedhub_plugin::JobInfo;
+use std::{
+    io::Write,
+    net::TcpStream,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
+
+/// Das Spiel läuft mit einem Lkw: Kennzeichen bekannt, nicht pausiert.
+fn driving(agent: &Agent, plate: &str) {
+    agent.telemetry().update(|s| {
+        s.set_truck(Some(plate), Some(800.0));
+        s.odometer_km = Some(1234.5);
+        s.speed_ms = Some(23.0);
+        s.fuel_liters = Some(400.0);
+        s.wear_engine = Some(0.1);
+        s.paused = false;
+    });
+}
+
+fn member(url: &str, token: &str, company: i64) -> Value {
+    company_info(url, token, company)["members"][0].clone()
+}
+
+#[test]
+fn herzschlag_kommt_beim_server_an_und_zeigt_online() {
+    let dir = temp_dir("herzschlag");
+    let server = TestServer::start(&dir.join("server.db"));
+    let url = server.url();
+    let (token, company) = create_company(&url, "Emil");
+    let paths = Paths::new(dir.join("SpedHub"));
+    write_config(&paths, &url, &token, company);
+
+    let agent = Agent::start(&paths, fast()).unwrap();
+    assert_eq!(member(&url, &token, company)["online"], false);
+    driving(&agent, "EF<img src=/lp.mat> XU 577|germany");
+    agent.telemetry().update(|s| {
+        s.set_job(Some(JobInfo::new(
+            Some("Holz".into()),
+            Some("Berlin".into()),
+            Some("Hamburg".into()),
+        )))
+    });
+    wait_until("online", || member(&url, &token, company)["online"] == true);
+    let m = member(&url, &token, company);
+    assert_eq!(m["plate"], "EF XU 577");
+    let speed = m["speed_kmh"].as_f64().unwrap();
+    assert!((speed - 82.8).abs() < 0.01, "{speed}");
+    assert_eq!(
+        m["job"],
+        serde_json::json!({ "cargo": "Holz", "source_city": "Berlin", "target_city": "Hamburg" })
+    );
+    assert!(m["near_city"].is_null(), "gibt das SDK nicht her");
+    assert!(agent.heartbeat_stats().delivered >= 1);
+
+    // Herzschläge kommen nie in den Postausgang
+    assert!(read_entries(&paths.outbox()).is_empty());
+    agent.shutdown();
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn pausiert_geht_kein_herzschlag_raus() {
+    let dir = temp_dir("pause");
+    let server = TestServer::start(&dir.join("server.db"));
+    let url = server.url();
+    let (token, company) = create_company(&url, "Finn");
+    let paths = Paths::new(dir.join("SpedHub"));
+    write_config(&paths, &url, &token, company);
+
+    let agent = Agent::start(&paths, fast()).unwrap();
+    // Kennzeichen bekannt, aber das Spiel steht noch in der Pause (Anfangszustand)
+    agent
+        .telemetry()
+        .update(|s| s.set_truck(Some("SPED 001"), None));
+    wait_until("fünf Takte", || agent.heartbeat_stats().ticks >= 5);
+    assert_eq!(agent.heartbeat_stats().attempts, 0);
+    assert!(member(&url, &token, company)["last_seen"].is_null());
+
+    // Weiterfahren: Herzschläge gehen raus
+    agent.telemetry().set_paused(false);
+    wait_until("online", || member(&url, &token, company)["online"] == true);
+
+    // Wieder Pause: keine weiteren Versuche
+    agent.telemetry().set_paused(true);
+    let paused_at = agent.heartbeat_stats();
+    wait_until("fünf weitere Takte", || {
+        agent.heartbeat_stats().ticks >= paused_at.ticks + 5
+    });
+    // Ein Takt kann gerade gelaufen sein, als die Pause kam
+    assert!(agent.heartbeat_stats().attempts <= paused_at.attempts + 1);
+    agent.shutdown();
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn ohne_server_verfaellt_der_herzschlag_und_kommt_nicht_in_den_postausgang() {
+    let dir = temp_dir("herzschlag-weg");
+    let paths = Paths::new(dir.join("SpedHub"));
+    write_config(&paths, &format!("http://{}", free_addr()), "token", 1);
+    let agent = Agent::start(&paths, fast()).unwrap();
+    driving(&agent, "SPED 001");
+    wait_until("drei Versuche", || agent.heartbeat_stats().attempts >= 3);
+    assert_eq!(agent.heartbeat_stats().delivered, 0);
+    agent.shutdown();
+    assert!(read_entries(&paths.outbox()).is_empty());
+    assert!(!paths.outbox().exists(), "kein Postausgang angelegt");
+    // Nur der erste Fehler steht im Log
+    let log = read_log(&paths);
+    assert_eq!(
+        log.matches("Herzschlag nicht angekommen").count(),
+        1,
+        "{log}"
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Ein Server, der Herzschläge annimmt und nie beantwortet, Buchungen aber sofort.
+fn half_hanging_server() -> (String, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let events = Arc::new(AtomicUsize::new(0));
+    let beats = Arc::new(AtomicUsize::new(0));
+    let (e, b) = (events.clone(), beats.clone());
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(stream) = stream else { continue };
+            let (e, b) = (e.clone(), b.clone());
+            std::thread::spawn(move || serve(stream, &e, &b));
+        }
+    });
+    (url, events, beats)
+}
+
+fn serve(mut s: TcpStream, events: &AtomicUsize, beats: &AtomicUsize) {
+    loop {
+        // Kopf lesen
+        let mut head = Vec::new();
+        let mut byte = [0u8; 1];
+        while !head.ends_with(b"\r\n\r\n") {
+            match s.read(&mut byte) {
+                Ok(1) => head.push(byte[0]),
+                _ => return,
+            }
+        }
+        let head = String::from_utf8_lossy(&head).to_lowercase();
+        let len: usize = head
+            .lines()
+            .find_map(|l| l.strip_prefix("content-length:"))
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(0);
+        let mut body = vec![0u8; len];
+        if s.read_exact(&mut body).is_err() {
+            return;
+        }
+        if head.contains("/heartbeat") {
+            beats.fetch_add(1, Ordering::SeqCst);
+            // Hängt, bis der Client aufgibt
+            std::thread::sleep(Duration::from_secs(5));
+            return;
+        }
+        events.fetch_add(1, Ordering::SeqCst);
+        let answer = r#"{"duplicate":false}"#;
+        let reply = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{answer}",
+            answer.len()
+        );
+        if s.write_all(reply.as_bytes()).is_err() {
+            return;
+        }
+    }
+}
+
+#[test]
+fn haengende_herzschlaege_bremsen_keine_buchungen() {
+    let dir = temp_dir("herzschlag-haengt");
+    let (url, events, beats) = half_hanging_server();
+    let paths = Paths::new(dir.join("SpedHub"));
+    write_config(&paths, &url, "token", 1);
+    let settings = Settings {
+        request_timeout: Duration::from_millis(2000),
+        ..fast()
+    };
+    let agent = Agent::start(&paths, settings).unwrap();
+    driving(&agent, "SPED 001");
+    // Der Herzschlag-Thread hängt jetzt in einer Anfrage
+    wait_until("ein Herzschlag unterwegs", || {
+        beats.load(Ordering::SeqCst) >= 1
+    });
+    let started = Instant::now();
+    for e in all_events() {
+        queued(agent.submit(&e));
+    }
+    wait_until("sechs Buchungen beim Server", || {
+        events.load(Ordering::SeqCst) == 6
+    });
+    assert!(
+        started.elapsed() < Duration::from_millis(1500),
+        "Buchungen warteten {:?}",
+        started.elapsed()
+    );
+    wait_until("Postausgang leer", || {
+        read_entries(&paths.outbox()).is_empty()
+    });
+    assert_eq!(agent.heartbeat_stats().delivered, 0);
+    // Beenden wartet höchstens eine Anfrage lang
+    let stopping = Instant::now();
+    agent.shutdown();
+    assert!(
+        stopping.elapsed() < Duration::from_millis(3000),
+        "Beenden dauerte {:?}",
+        stopping.elapsed()
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn abgelieferter_auftrag_traegt_fracht_und_staedte() {
+    let dir = temp_dir("fracht");
+    let server = TestServer::start(&dir.join("server.db"));
+    let url = server.url();
+    let (token, company) = create_company(&url, "Gina");
+    let paths = Paths::new(dir.join("SpedHub"));
+    write_config(&paths, &url, &token, company);
+    let agent = Agent::start(&paths, fast()).unwrap();
+    let job = || {
+        Some(JobInfo::new(
+            Some("Holzbretter".into()),
+            Some("Berlin".into()),
+            Some("Hamburg".into()),
+        ))
+    };
+    let delivered = all_events().remove(0);
+    let cancelled = all_events().remove(1);
+
+    // Das SDK leert die Job-Konfiguration vor dem Event: Der letzte Auftrag gilt trotzdem
+    agent.telemetry().update(|s| s.set_job(job()));
+    agent.telemetry().update(|s| s.set_job(None));
+    let first = queued(agent.submit(&delivered));
+    // Ein zweites Event ohne neue Job-Konfiguration hat keine Fracht
+    let second = queued(agent.submit(&delivered));
+    // Abgebrochen: Der Auftrag ist erledigt, das nächste abgelieferte Event hat keine Fracht
+    agent.telemetry().update(|s| s.set_job(job()));
+    queued(agent.submit(&cancelled));
+    let third = queued(agent.submit(&delivered));
+    // Und wenn die Konfiguration erst nach dem Event geleert wird
+    agent.telemetry().update(|s| s.set_job(job()));
+    let fourth = queued(agent.submit(&delivered));
+    agent.telemetry().update(|s| s.set_job(None));
+
+    wait_until("fünf Buchungen", || {
+        ledger(&url, &token, company).len() == 5
+    });
+    agent.shutdown();
+    let l = ledger(&url, &token, company);
+    let by = |id: &str| l.iter().find(|e| e["event_id"] == id).unwrap().clone();
+    for id in [&first, &fourth] {
+        let e = by(id);
+        assert_eq!(e["cargo"], "Holzbretter", "{e}");
+        assert_eq!(e["source_city"], "Berlin");
+        assert_eq!(e["target_city"], "Hamburg");
+    }
+    for id in [&second, &third] {
+        let e = by(id);
+        assert!(e["cargo"].is_null() && e["target_city"].is_null(), "{e}");
+    }
     let _ = fs::remove_dir_all(dir);
 }

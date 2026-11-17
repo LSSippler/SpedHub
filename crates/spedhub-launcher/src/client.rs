@@ -70,7 +70,7 @@ pub struct Member {
 }
 
 /// Ein Lkw im Fuhrpark, wie die Liste ihn zeigt.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Truck {
     pub id: i64,
     pub plate: String,
@@ -81,6 +81,13 @@ pub struct Truck {
     /// Frühere Kennzeichen, älteste zuerst
     #[serde(default)]
     pub old_plates: Vec<String>,
+    /// Der Ausleiher ist gerade online und fährt genau diesen Lkw (aus dem Herzschlag des
+    /// Plugins). Ältere Server liefern das nicht.
+    #[serde(default)]
+    pub driving: bool,
+    /// Geschwindigkeit in km/h, nur solange `driving`
+    #[serde(default)]
+    pub speed_kmh: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -253,6 +260,16 @@ impl Client {
     pub fn logout(&mut self) -> Result<()> {
         let _: Value = self.post("/api/logout", &json!({}))?;
         self.token = None;
+        Ok(())
+    }
+
+    /// Passwort ändern. Alle anderen Anmeldungen dieses Kontos werden ungültig, dieser Client
+    /// behält seinen Token.
+    pub fn change_password(&self, old_password: &str, new_password: &str) -> Result<()> {
+        let _: Value = self.post(
+            "/api/me/password",
+            &json!({ "old_password": old_password, "new_password": new_password }),
+        )?;
         Ok(())
     }
 

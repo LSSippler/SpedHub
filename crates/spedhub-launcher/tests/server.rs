@@ -662,3 +662,73 @@ fn bauplan_vom_server_wenn_hier_keiner_liegt() {
     assert_eq!(back.odometer_km, 3865);
     let _ = fs::remove_dir_all(dir);
 }
+
+#[test]
+fn passwort_aendern_der_launcher_bleibt_angemeldet() {
+    let dir = temp_dir("passwort");
+    let s = setup(&dir);
+    let url = s.server.url();
+    // Eine zweite Anmeldung, zum Beispiel im Dashboard
+    let mut dashboard = Client::new(&url);
+    dashboard.login("Fahrer", "geheim1234").unwrap();
+
+    // Fehler im Klartext, ohne dass die Anmeldung als abgelaufen gilt
+    let e = s
+        .fahrer
+        .change_password("falsch123", "neuesPasswort1")
+        .unwrap_err();
+    assert_eq!(e.to_string(), "Server: Das alte Passwort stimmt nicht");
+    assert!(!e.is_unauthorized());
+    let e = s.fahrer.change_password("geheim1234", "kurz").unwrap_err();
+    assert_eq!(
+        e.to_string(),
+        "Server: Das neue Passwort braucht mindestens 8 Zeichen"
+    );
+    dashboard.me().unwrap();
+
+    // Ändern: Der Token des Launchers gilt weiter, der zweite nicht mehr
+    s.fahrer
+        .change_password("geheim1234", "neuesPasswort1")
+        .unwrap();
+    assert_eq!(s.fahrer.me().unwrap().name, "Fahrer");
+    let e = dashboard.me().unwrap_err();
+    assert!(e.is_unauthorized(), "{e:?}");
+    // Die Chefin ist unberührt, anmelden geht nur noch mit dem neuen Passwort
+    s.chef.me().unwrap();
+    assert!(
+        Client::new(&url)
+            .login("Fahrer", "geheim1234")
+            .unwrap_err()
+            .is_unauthorized()
+    );
+    Client::new(&url).login("Fahrer", "neuesPasswort1").unwrap();
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn fuhrpark_zeigt_ob_der_lkw_gerade_gefahren_wird() {
+    let dir = temp_dir("faehrt");
+    let s = setup(&dir);
+    let url = s.server.url();
+    let truck = post_raw(
+        &format!("{url}/api/companies/{}/trucks", s.company),
+        &s.chef_token,
+        json!({ "plate": "SPED 001", "model": "scania.s_2016", "odometer_km": 1000 }),
+    );
+    let id = truck["id"].as_i64().unwrap();
+    s.fahrer.checkout(id).unwrap();
+    let t = &s.fahrer.trucks(s.company).unwrap()[0];
+    assert!(!t.driving);
+    assert_eq!(t.speed_kmh, None);
+
+    // Herzschlag, wie ihn das Plugin schickt
+    post_raw(
+        &format!("{url}/api/companies/{}/heartbeat", s.company),
+        s.fahrer.token().unwrap(),
+        json!({ "plate": "SPED 001", "speed_kmh": 85.0 }),
+    );
+    let t = &s.chef.trucks(s.company).unwrap()[0];
+    assert!(t.driving);
+    assert_eq!(t.speed_kmh, Some(85.0));
+    let _ = fs::remove_dir_all(dir);
+}

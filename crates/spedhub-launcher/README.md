@@ -31,7 +31,13 @@ Im Spiel bestätigt ist, dass ETS2 einen eingesetzten Lkw lädt (siehe `docs/sav
 
 Läuft das Spiel, schreibt der Launcher nichts in den Spielstand und sagt das auch.
 
-Über dem Fuhrpark zeigt der Launcher dein Lohnkonto, offenen Lohn, Level, Firmenkilometer und Lohnstufe.
+Über dem Fuhrpark zeigt der Launcher dein Lohnkonto, offenen Lohn, Level, Firmenkilometer und Lohnstufe. Im Fuhrpark steht bei einem verliehenen Lkw "fährt gerade" mit der Geschwindigkeit, wenn das Plugin des Ausleihers gerade Herzschläge mit genau diesem Lkw schickt.
+
+## Einstellungen
+
+Unten im Fenster, zum Aufklappen. Dort lässt sich das Passwort ändern: altes Passwort, neues (mindestens 8 Zeichen) und die Wiederholung, dann "Passwort ändern". Danach sind alle anderen Anmeldungen mit diesem Konto abgemeldet, zum Beispiel das Dashboard auf einem anderen Rechner. Der Launcher behält seinen Token und bleibt angemeldet, ebenso das Plugin, das denselben Token aus `plugin.json` nimmt. Ein falsches altes Passwort meldet der Launcher im Klartext und meldet dich dabei nicht ab.
+
+Ein Token läuft nach 30 Tagen ohne Benutzung ab. Dann meldet der Launcher, dass die Anmeldung abgelaufen ist, und du meldest dich neu an.
 
 ## Geldabgleich
 

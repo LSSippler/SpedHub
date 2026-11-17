@@ -131,6 +131,20 @@
   details > summary { cursor: pointer; font-weight: 600; font-stretch: 80%; font-size: 1.125rem; }
   details[open] > summary { margin-bottom: .75rem; }
 
+  /* Online-Punkt bei den Fahrern */
+  .punkt { display: inline-block; width: .65rem; height: .65rem; border-radius: 50%; background: var(--rand);
+           margin-right: .4rem; vertical-align: baseline; }
+  .punkt.an { background: var(--frei); }
+  .fremd { color: var(--weg); font-weight: 600; }
+  .faehrt { color: var(--frei); font-weight: 600; }
+  #fahrer td { vertical-align: top; }
+  .unterwegs { min-width: 12rem; }
+  .wer-name { white-space: nowrap; }
+
+  dialog { border: 1px solid var(--rand); padding: 1.25rem; max-width: min(26rem, calc(100vw - 2rem)); background: var(--papier); color: inherit; }
+  dialog::backdrop { background: rgba(30, 42, 50, .35); }
+  dialog .fehlertext { color: var(--fehler); }
+
   #meldung { position: fixed; left: 50%; bottom: 1.25rem; transform: translateX(-50%); max-width: min(34rem, 92vw);
              padding: .7rem 1rem; background: var(--plane); color: #fff; border-radius: 3px; }
   #meldung.fehler { background: var(--fehler); }
@@ -260,7 +274,50 @@ function zeigeKopf() {
   const rolle = zustand.firma ? (zustand.firma.your_role === "chef" ? "Chef" : "Fahrer") : null;
   wer.append(h("span", {}, zustand.ich.name, rolle ? ", " + rolle : ""));
   if (zustand.firma) wer.append(h("button", { class: "leise", onclick: () => versuche(zeigeFirmenwahl) }, "Firma wechseln"));
+  wer.append(h("button", { class: "leise", onclick: zeigePasswort }, "Passwort ändern"));
   wer.append(h("button", { class: "leise", onclick: (e) => versuche(abmelden, e.target) }, "Abmelden"));
+}
+
+/** Kleiner Dialog zum Ändern des Passworts. Danach sind alle anderen Anmeldungen ungültig. */
+function zeigePasswort() {
+  const alt = h("input", { type: "password", required: true, autocomplete: "current-password" });
+  const neu = h("input", { type: "password", required: true, minlength: 8, autocomplete: "new-password" });
+  const nochmal = h("input", { type: "password", required: true, minlength: 8, autocomplete: "new-password" });
+  const fehler = h("p", { class: "fehlertext klein", role: "alert" });
+  const dialog = h("dialog", { "aria-labelledby": "pwtitel" });
+  const zu = () => { dialog.close(); dialog.remove(); };
+  const senden = async (e) => {
+    e.preventDefault();
+    fehler.textContent = "";
+    if (neu.value !== nochmal.value) { fehler.textContent = "Die Wiederholung passt nicht zum neuen Passwort."; return; }
+    const knopf = e.submitter;
+    if (knopf) knopf.disabled = true;
+    try {
+      await api("POST", "/api/me/password", { old_password: alt.value, new_password: neu.value });
+      zu();
+      melde("Passwort geändert. Alle anderen Anmeldungen mit diesem Konto sind abgemeldet, auch Launcher und Plugin. Hier bleibst du angemeldet.");
+    } catch (err) {
+      if (err instanceof ApiFehler && err.status === 401) { zu(); abmeldenLokal(); melde("Deine Anmeldung ist abgelaufen. Melde dich neu an.", true); }
+      else fehler.textContent = err.message || String(err);
+    } finally {
+      if (knopf) knopf.disabled = false;
+    }
+  };
+  dialog.append(
+    h("h2", { id: "pwtitel" }, "Passwort ändern"),
+    h("p", { class: "klein blass" }, "Danach sind alle anderen Anmeldungen mit diesem Konto abgemeldet, auch Launcher und Plugin auf diesem und anderen Rechnern. Melde dich danach im Launcher neu an und starte das Spiel neu."),
+    h("form", { onsubmit: senden },
+      feld("Altes Passwort", alt),
+      feld("Neues Passwort, mindestens 8 Zeichen", neu),
+      feld("Neues Passwort wiederholen", nochmal),
+      fehler,
+      h("div", { class: "zeile" },
+        h("button", {}, "Passwort ändern"),
+        h("button", { type: "button", class: "leise", onclick: zu }, "Abbrechen"))));
+  dialog.addEventListener("cancel", () => setTimeout(() => dialog.remove(), 0));
+  document.body.append(dialog);
+  dialog.showModal();
+  alt.focus();
 }
 
 // ---------------------------------------------------------------- Anmelden
@@ -399,6 +456,7 @@ function zeichneDaten() {
   zeichneFahrer();
   zeichneBuch();
   fuelleFahrerwahl();
+  fuelleKennzeichen();
 }
 
 // ---- Fuhrpark
@@ -426,13 +484,23 @@ function zeichneFuhrpark() {
       knopf = h("button", { class: "leise", onclick: () => { zustand.rueckgabe = t.id; zeichneFuhrpark(); } },
         meiner ? "Zurückgeben" : "Zurücknehmen");
     }
+    // Aus dem Herzschlag: der Ausleiher fährt gerade genau diesen Lkw
+    const faehrt = t.driving
+      ? h("div", { class: "klein faehrt" }, "wird gerade gefahren"
+          + (t.speed_kmh != null ? ", " + Math.round(t.speed_kmh) + " km/h" : "")
+          + (t.near_city ? ", bei " + t.near_city : ""))
+      : null;
+    // Nur der Chef sieht, wer einen Lkw fährt, ohne ihn geliehen zu haben
+    const fremd = (t.foreign_drivers || []).map((d) =>
+      h("div", { class: "klein fremd" }, d.name + " fährt diesen Lkw, ohne ihn geliehen zu haben"));
     const zeile = h("div", { class: "lkw" },
       h("div", {}, h("span", { class: "kz" }, h("span", {}, t.plate))),
       h("div", {},
         h("div", { class: "modell" }, modellName(t.model)),
         h("div", { class: "klein" }, km(t.odometer_km), ", ",
           bei ? h("span", { class: "stand weg" }, meiner ? "bei dir" : "bei " + bei.name, " seit " + wann(bei.since))
-              : h("span", { class: "stand frei" }, "frei"))),
+              : h("span", { class: "stand frei" }, "frei")),
+        faehrt, fremd),
       h("div", {}, zustand.rueckgabe === t.id ? null : knopf));
     if (zustand.rueckgabe === t.id) zeile.append(baueRueckgabe(t));
     return zeile;
@@ -440,8 +508,23 @@ function zeichneFuhrpark() {
 }
 
 function baueRueckgabe(t) {
+  const chef = zustand.firma.your_role === "chef";
+  const meiner = t.leased_by && t.leased_by.user_id === zustand.ich.user_id;
   const stand = h("input", { type: "number", min: t.odometer_km, value: t.odometer_km, required: true });
   const zu = () => { zustand.rueckgabe = null; zeichneFuhrpark(); };
+  // Ohne Kilometerstand nimmt nur der Chef zurück, mit dem letzten bekannten Zustand aus dem Herzschlag
+  const letzter = chef && !meiner && t.last_known
+    ? h("div", { style: "margin-top: .75rem" },
+        h("p", { class: "klein" }, "Letzter bekannter Zustand von " + wann(t.last_known.at)
+          + (t.last_known.odometer_km != null ? ", " + km(t.last_known.odometer_km) : "")
+          + ". Gedacht für den Fall, dass der Fahrer abgestürzt ist und keinen Spielstand mehr liefern kann."),
+        h("button", { type: "button", class: "leise", onclick: (e) => versuche(async () => {
+          const r = await api("POST", "/api/trucks/" + t.id + "/checkin", {});
+          zustand.rueckgabe = null;
+          await auffrischen();
+          melde(t.plate + " ist zurück mit dem letzten bekannten Zustand von " + wann(r.from_last_known.at) + ", " + km(r.driven_km) + " gefahren.");
+        }, e.target) }, "Mit letztem bekanntem Zustand zurücknehmen"))
+    : null;
   const form = formular(async () => {
       const r = await api("POST", "/api/trucks/" + t.id + "/checkin", { odometer_km: Number(stand.value) });
       zustand.rueckgabe = null;
@@ -453,27 +536,51 @@ function baueRueckgabe(t) {
       h("button", {}, "Rückgabe buchen"),
       h("button", { type: "button", class: "leise", onclick: zu }, "Abbrechen")));
   setTimeout(() => stand.select(), 0);
-  return h("div", { class: "rueckgabe" }, form);
+  return h("div", { class: "rueckgabe" }, form, letzter);
 }
 
 // ---- Fahrer
+
+/** Wo ein Fahrer gerade ist, aus dem letzten Herzschlag. */
+function unterwegs(m) {
+  if (!m.online) return null;
+  const teile = [];
+  if (m.plate) teile.push(h("div", {}, "Lkw " + m.plate
+    + (m.speed_kmh != null ? ", " + Math.round(m.speed_kmh) + " km/h" : "")));
+  if (m.near_city) teile.push(h("div", { class: "klein" }, "bei " + m.near_city));
+  if (m.job) {
+    const j = m.job;
+    const strecke = j.source_city && j.target_city ? j.source_city + " nach " + j.target_city
+      : j.target_city ? "nach " + j.target_city : j.source_city ? "von " + j.source_city : "";
+    teile.push(h("div", { class: "klein" }, "Auftrag: " + [j.cargo, strecke].filter(Boolean).join(", ")));
+  } else {
+    teile.push(h("div", { class: "klein blass" }, "kein Auftrag"));
+  }
+  if (m.foreign_truck) teile.push(h("div", { class: "klein fremd" }, "fährt fremden Lkw " + m.foreign_truck.plate));
+  return teile;
+}
 
 function zeichneFahrer() {
   const zahl = (inhalt, minus) => h("td", { class: "zahl" + (minus ? " minus" : "") }, inhalt);
   $("fahrer").replaceChildren(
     h("div", { style: "overflow-x: auto" }, h("table", {},
-      h("thead", {}, h("tr", {}, h("th", {}, "Name"), h("th", {}, "Rolle"), h("th", { class: "zahl" }, "Level"),
+      h("thead", {}, h("tr", {}, h("th", {}, "Name"), h("th", {}, "Rolle"), h("th", {}, "Unterwegs"),
+        h("th", { class: "zahl" }, "Level"),
         h("th", { class: "zahl" }, "Firmen-km"), h("th", {}, "Lohnstufe"), h("th", { class: "zahl" }, "Lohnkonto"),
         h("th", { class: "zahl" }, "Offener Lohn"))),
       h("tbody", {}, zustand.firma.members.map((m) => h("tr", {},
-        h("td", {}, m.name),
+        h("td", {},
+          h("div", { class: "wer-name" }, h("span", { class: "punkt" + (m.online ? " an" : ""), "aria-hidden": "true" }), m.name),
+          h("div", { class: "klein blass wer-name" }, m.online ? "online"
+            : m.last_seen != null ? "zuletzt " + wann(m.last_seen) : "noch nie im Spiel")),
         h("td", {}, m.role === "chef" ? "Chef" : "Fahrer"),
+        h("td", { class: "unterwegs" }, unterwegs(m)),
         zahl(m.xp == null ? "?" : String(m.game_level)),
         zahl(km(m.company_km)),
         h("td", {}, m.stage == null ? "keine" : "Stufe " + m.stage + ", " + cent(m.cents_per_km) + " je km"),
         zahl(euro(m.wallet), m.wallet < 0),
         zahl(m.open_claim ? euro(m.open_claim) : "", m.open_claim > 0)))))),
-    h("p", { class: "klein blass" }, "Das Level kommt mit dem Geldabgleich aus dem Spielstand. Ein Fragezeichen heißt: noch kein Abgleich."));
+    h("p", { class: "klein blass" }, "Online ist, wessen Spiel sich in den letzten 30 Sekunden gemeldet hat. Das Level kommt mit dem Geldabgleich aus dem Spielstand. Ein Fragezeichen heißt: noch kein Abgleich."));
 }
 
 // ---- Kassenbuch
@@ -535,6 +642,10 @@ function zeichneBuch() {
     if (l) return laufZeilen(l);
     const betrag = h("span", { class: e.amount < 0 ? "minus" : "" }, (e.amount > 0 ? "+" : "") + euro(e.amount));
     const zusatz = [];
+    if (e.cargo) zusatz.push(e.cargo);
+    if (e.source_city && e.target_city) zusatz.push(e.source_city + " nach " + e.target_city);
+    else if (e.target_city) zusatz.push("nach " + e.target_city);
+    else if (e.source_city) zusatz.push("von " + e.source_city);
     if (e.distance_km != null) zusatz.push(km(e.distance_km));
     if (e.game_amount != null && e.game_amount !== e.amount && e.kind === "auftrag") zusatz.push("im Spiel " + euro(e.game_amount));
     if (e.note) zusatz.push(e.note);
@@ -573,6 +684,20 @@ function fuelleFahrerwahl() {
   wahl.replaceChildren(...zustand.firma.members.map((m) => h("option", { value: m.user_id }, m.name)));
   if (vorher) wahl.value = vorher;
   wahl.dataset.stand = neu;
+}
+
+/** Vorschläge für das Kennzeichen im Testbereich: die Lkw des Fuhrparks, deiner zuerst. */
+function fuelleKennzeichen() {
+  const liste = $("kennzeichen");
+  if (!liste) return;
+  const meine = zustand.lkw.filter((t) => t.leased_by && t.leased_by.user_id === zustand.ich.user_id);
+  const rest = zustand.lkw.filter((t) => !meine.includes(t));
+  const neu = JSON.stringify(meine.concat(rest).map((t) => t.plate));
+  if (liste.dataset.stand === neu) return;
+  liste.replaceChildren(...meine.concat(rest).map((t) => h("option", { value: t.plate })));
+  liste.dataset.stand = neu;
+  const feldKz = $("herzschlag-kz");
+  if (feldKz && !feldKz.value && meine.length) feldKz.value = meine[0].plate;
 }
 
 function baueBuero() {
@@ -704,6 +829,15 @@ function baueTestbuchung() {
   const geld = h("input", { type: "number", required: true });
   const xp = h("input", { type: "number", min: 0 });
 
+  const hbKz = h("input", { required: true, maxlength: 64, list: "kennzeichen", placeholder: "SPED 001" });
+  hbKz.id = "herzschlag-kz";
+  const hbKm = h("input", { type: "number", min: 0, step: "any" });
+  const hbTempo = h("input", { type: "number", min: 0, max: 1000, step: "any", value: 85 });
+  const hbStadt = h("input", { maxlength: 64 });
+  const hbFracht = h("input", { maxlength: 64 });
+  const hbVon = h("input", { maxlength: 64 });
+  const hbNach = h("input", { maxlength: 64 });
+
   return h("details", {},
     h("summary", {}, "Ereignis von Hand buchen"),
     h("p", { class: "klein blass" }, "Zum Testen ohne Spiel. Sonst meldet das Plugin diese Ereignisse von selbst. Gebucht wird auf dich als Fahrer."),
@@ -734,6 +868,26 @@ function baueTestbuchung() {
         melde(text + " Neuer Kontostand im Spiel: " + euro(r.write_money) + ".");
       },
       h("div", { class: "zeile" }, feld("Kontostand im Spiel", geld), feld("Erfahrungspunkte", xp), h("button", {}, "Abgleichen"))),
+    h("h3", { style: "margin-top: 1.5rem" }, "Herzschlag senden"),
+    h("p", { class: "klein blass" }, "Tut so, als liefe dein Spiel: Du bist 30 Sekunden online. Ist das Kennzeichen dein geliehener Lkw, gilt der Stand als sein letzter bekannter Zustand. Sonst schickt das Plugin alle 10 Sekunden einen. Fracht, Von und Nach leer heißt: kein Auftrag."),
+    h("datalist", { id: "kennzeichen" }),
+    formular(async () => {
+        const daten = { plate: hbKz.value };
+        if (hbKm.value !== "") daten.odometer_km = Number(hbKm.value);
+        if (hbTempo.value !== "") daten.speed_kmh = Number(hbTempo.value);
+        if (hbStadt.value.trim()) daten.near_city = hbStadt.value;
+        daten.job = hbFracht.value.trim() || hbVon.value.trim() || hbNach.value.trim()
+          ? { cargo: hbFracht.value, source_city: hbVon.value, target_city: hbNach.value } : null;
+        const r = await api("POST", "/api/companies/" + id + "/heartbeat", daten);
+        await auffrischen();
+        melde(r.leased_truck_id != null
+          ? "Herzschlag gesendet. Der Stand gilt als letzter bekannter Zustand deines Lkw."
+          : "Herzschlag gesendet. Du bist jetzt 30 Sekunden online.");
+      },
+      h("div", { class: "zeile" }, feld("Kennzeichen", hbKz), feld("Kilometerstand", hbKm), feld("Geschwindigkeit in km/h", hbTempo),
+        feld("Stadt in der Nähe", hbStadt)),
+      h("div", { class: "zeile", style: "margin-top: .75rem" }, feld("Fracht", hbFracht), feld("Von", hbVon), feld("Nach", hbNach),
+        h("button", {}, "Herzschlag senden"))),
     chef ? h("div", {},
       h("h3", { style: "margin-top: 1.5rem" }, "Lohnabrechnung"),
       h("p", { class: "klein blass" }, "Rechnet sofort alles seit der letzten Abrechnung ab. Die tägliche Abrechnung macht danach dort weiter."),

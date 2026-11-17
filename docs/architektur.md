@@ -30,7 +30,7 @@ Nicht Teil des Projekts: ein eigener Multiplayer, Eingriffe in den Arbeitsspeich
 | Dashboard (`server/web/`) | Weboberfläche für Chef und Fahrer | läuft |
 | Save-Bibliothek (`crates/spedhub-save`) | Spielstand lesen und schreiben, Lkw exportieren, einsetzen, entfernen, Kontostand setzen | erste Fassung, im Spiel noch nicht geprüft |
 | Launcher (`crates/spedhub-launcher`) | Anmelden, Abgleich, Spielstand vorbereiten, Spiel starten, Abgleich beim Beenden | erste Fassung: Anmelden, Fuhrpark, Ausleihen und Zurückgeben, Lkw in den Spielstand schreiben, Geldabgleich, `plugin.json`, Spiel starten. Aufräumen des Profils: offen |
-| Spiel-Plugin (`crates/spedhub-plugin`) | Telemetrie-Ereignisse melden, Quicksave und Quickload auslösen (Telemetry SDK und Input SDK) | Gameplay-Events: erste Fassung, im Spiel noch nicht geprüft. Quicksave und Quickload: offen |
+| Spiel-Plugin (`crates/spedhub-plugin`) | Telemetrie-Ereignisse und Herzschlag melden, Quicksave und Quickload auslösen (Telemetry SDK und Input SDK) | Gameplay-Events und Herzschlag: erste Fassung, im Spiel noch nicht geprüft. Quicksave und Quickload: offen |
 | Overlay | Kasse und Fuhrpark im Spiel | offen |
 | Convoy Dedicated Server | Die gemeinsame Session, offizieller Server von SCS | offen |
 
@@ -42,7 +42,7 @@ Spiel (ETS2)  <->  Plugin  <->  Launcher  <->  Server
 Convoy Dedicated Server (nur gemeinsames Fahren, kennt weder Geld noch Fuhrpark)
 ```
 
-In der ersten Fassung schickt das Plugin Gameplay-Events direkt an den Server, über `POST /api/companies/{id}/events`. Server, Token und Firma liest es aus `%LOCALAPPDATA%\SpedHub\plugin.json`, die später der Launcher schreibt. Ist der Server nicht erreichbar, sammelt das Plugin die Events in einem Postausgang und schickt sie nach. Details in `crates/spedhub-plugin/README.md`.
+In der ersten Fassung schickt das Plugin Gameplay-Events direkt an den Server, über `POST /api/companies/{id}/events`, und alle 10 Sekunden einen Herzschlag über `POST /api/companies/{id}/heartbeat`. Server, Token und Firma liest es aus `%LOCALAPPDATA%\SpedHub\plugin.json`, die später der Launcher schreibt. Ist der Server nicht erreichbar, sammelt das Plugin die Events in einem Postausgang und schickt sie nach. Details in `crates/spedhub-plugin/README.md`.
 
 ## Abläufe
 
@@ -65,7 +65,23 @@ Den Bauplan eines geliehenen Lkw legt der Launcher in `leases\` ab. Fehlt er dor
 
 ### Rückgabe
 
-Beim Wechsel und beim Beenden liest der Launcher Kilometerstand, Verschleiß und Tank aus dem Spielstand und meldet sie dem Server. Der zählt die Revision des Lkw hoch und gibt ihn frei. Nach einem Absturz nimmt der Server den letzten Zustand aus der Telemetrie.
+Beim Wechsel und beim Beenden liest der Launcher Kilometerstand, Verschleiß und Tank aus dem Spielstand und meldet sie dem Server. Der zählt die Revision des Lkw hoch und gibt ihn frei.
+
+Nach einem Absturz gibt es keinen Spielstand mit dem letzten Stand. Dafür gibt es den letzten bekannten Zustand aus dem Herzschlag (siehe unten): Der Chef nimmt den Lkw ohne Kilometerstand zurück, der Server übernimmt Kilometerstand, Verschleiß und Tank aus dem letzten Herzschlag des Ausleihers mit diesem Lkw und sagt, von wann er ist. Gibt es keinen, muss der Kilometerstand angegeben werden. Fahrer selbst geben immer einen Kilometerstand an. Jede Rückgabe leert den letzten bekannten Zustand.
+
+### Online und Herzschlag
+
+Das Plugin schickt alle 10 Sekunden einen Herzschlag an `POST /api/companies/{id}/heartbeat`, solange das Spiel läuft und nicht pausiert ist: Kennzeichen, Kilometerstand, Verschleiß, Tank, Geschwindigkeit und den laufenden Auftrag aus der Job-Konfiguration des SDK. Eine Stadt in der Nähe liefert das SDK nicht. Herzschläge gehen nie in den Postausgang, ein verlorener wird nicht nachgeschickt.
+
+- Online ist, wer sich in den letzten 30 Sekunden gemeldet hat. Der Server hält nur den letzten Herzschlag je Fahrer und Firma (`presence`).
+- Das Kennzeichen wird ohne Markup und Land mit den aktuellen und den alten Kennzeichen des Fuhrparks verglichen. Passen mehrere Lkw, gewinnt der eigene geliehene, auch über ein altes Kennzeichen, das inzwischen ein anderer Lkw trägt.
+- Fährt der Fahrer seinen geliehenen Firmen-Lkw, wird der Herzschlag zum letzten bekannten Zustand des Lkw (`trucks.last_*`). Nur gemeldete Werte überschreiben den Zustand vom Ausleihen, ein Kilometerstand unter dem vom Ausleihen zählt nicht.
+- Fährt er einen Firmen-Lkw, den er nicht geliehen hat, sieht der Chef eine Markierung. Zurückgeschrieben wird nichts, der Spielstand bleibt Sache des Launchers.
+- Im Fuhrpark sehen alle, ob ein verliehener Lkw gerade gefahren wird.
+
+### Anmeldung
+
+Tokens laufen nach 30 Tagen ohne Benutzung ab. Wer sein Passwort ändert, meldet alle anderen Anmeldungen ab, die benutzte bleibt. Launcher und Plugin teilen sich einen Token und bleiben deshalb angemeldet, wenn das Passwort im Launcher geändert wird. Das Dashboard hat einen eigenen Token. Wird das Passwort dort geändert, sind Launcher und Plugin abgemeldet, auch auf demselben Rechner: Bis zur neuen Anmeldung im Launcher und zum nächsten Spielstart gehen keine Herzschläge durch, Buchungen warten im Postausgang.
 
 ### Kasse
 

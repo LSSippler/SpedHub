@@ -24,10 +24,12 @@ Unter http://127.0.0.1:8787 liegt die Weboberfläche. Dort kannst du:
 - ein Konto anlegen und dich anmelden
 - eine Firma gründen oder mit einem Einladungscode beitreten
 - den Fuhrpark sehen, Lkw ausleihen und zurückgeben
-- bei den Fahrern Level, Firmenkilometer, Lohnstufe, Lohnkonto und offenen Lohn sehen
+- bei den Fahrern sehen, wer gerade online ist (grüner Punkt), mit welchem Lkw, in welcher Stadt und mit welchem Auftrag, dazu Level, Firmenkilometer, Lohnstufe, Lohnkonto und offenen Lohn
+- im Fuhrpark sehen, ob ein verliehener Lkw gerade gefahren wird
+- in der Kopfzeile das Passwort ändern
 - im Kassenbuch alle Buchungen sehen, die Lohnabrechnungen als eine Zeile je Abrechnung zum Aufklappen
-- als Chef: Lkw anlegen, Tagespauschale, Uhrzeit der Abrechnung, Betriebsvorschuss, Erlösfaktor und Lohnstufen einstellen, Geld zwischen Kasse und Fahrern überweisen, ungeklärte Beträge aus dem Geldabgleich sehen und schließen
-- im Testbereich "Ereignis von Hand buchen" Ereignisse mit Strecke buchen, einen Geldabgleich durchspielen und die Lohnabrechnung sofort auslösen. Im Spiel melden die Ereignisse das Plugin aus `crates/spedhub-plugin` und den Abgleich der Launcher
+- als Chef: sehen, wer einen Firmen-Lkw fährt, ohne ihn geliehen zu haben, einen Lkw ohne Kilometerstand mit dem letzten bekannten Zustand zurücknehmen, Lkw anlegen, Tagespauschale, Uhrzeit der Abrechnung, Betriebsvorschuss, Erlösfaktor und Lohnstufen einstellen, Geld zwischen Kasse und Fahrern überweisen, ungeklärte Beträge aus dem Geldabgleich sehen und schließen
+- im Testbereich "Ereignis von Hand buchen" Ereignisse mit Strecke buchen, einen Geldabgleich durchspielen, einen Herzschlag senden und die Lohnabrechnung sofort auslösen. Im Spiel melden Ereignisse und Herzschlag das Plugin aus `crates/spedhub-plugin` und den Abgleich der Launcher
 
 Die Seite holt sich alle 5 Sekunden den neuen Stand. Sie steckt als eine einzelne Datei in `server/web/index.html` und wird beim Bauen fest in die .exe eingebaut. Nach einer Änderung an der Datei also neu starten:
 
@@ -95,18 +97,20 @@ Alle Anfragen und Antworten sind JSON. Außer bei `register`, `login` und `healt
 | `POST /api/login` | jeder | Anmelden, liefert einen neuen `token` |
 | `POST /api/logout` | angemeldet | Abmelden, der benutzte Token wird ungültig |
 | `GET /api/me` | angemeldet | Eigener Account und Firmen |
+| `POST /api/me/password` | angemeldet | Passwort ändern: `old_password`, `new_password` (mindestens 8 Zeichen). Alle anderen Tokens des Nutzers werden ungültig, der benutzte bleibt. Liefert `other_tokens_removed`. Falsches altes Passwort: 403 |
 | `POST /api/companies` | angemeldet | Firma gründen: `name`. Wer gründet, ist Chef. Die Firma bekommt die fünf Standard-Lohnstufen |
 | `POST /api/companies/join` | angemeldet | Beitreten mit `invite_code`, Rolle Fahrer |
-| `GET /api/companies/{id}` | Mitglied | Kassenstand, Einstellungen, Lohnstufen, Mitglieder mit Lohnkonto, offenem Lohn, Erfahrung, Level, Firmenkilometern und Lohnstufe. Einladungscode und Zahl der offenen ungeklärten Beträge sieht nur der Chef |
+| `GET /api/companies/{id}` | Mitglied | Kassenstand, Einstellungen, Lohnstufen, Mitglieder mit Lohnkonto, offenem Lohn, Erfahrung, Level, Firmenkilometern und Lohnstufe. Je Mitglied außerdem `online` und `last_seen`, solange online auch `plate`, `near_city`, `speed_kmh`, `job` und `truck_id` (der eigene geliehene Lkw), siehe Online. Einladungscode, Zahl der offenen ungeklärten Beträge und `foreign_truck` sieht nur der Chef |
 | `PATCH /api/companies/{id}` | Chef | Einstellungen ändern, alle optional: `revenue_factor`, `daily_flat`, `payroll_time` (wie `04:00`), `advance` |
 | `PUT /api/companies/{id}/wage-levels` | Chef | Lohnstufen ersetzen: `levels`, eine Liste aus `min_level`, `min_km`, `cents_per_km`. 1 bis 20 Stufen |
-| `GET /api/companies/{id}/trucks` | Mitglied | Fuhrpark mit Info, wer was gerade fährt, und `old_plates` (frühere Kennzeichen, älteste zuerst) |
+| `GET /api/companies/{id}/trucks` | Mitglied | Fuhrpark mit Info, wer was gerade geliehen hat, und `old_plates` (frühere Kennzeichen, älteste zuerst). Dazu `driving` (der Ausleiher ist online und meldet genau diesen Lkw), dann auch `speed_kmh` und `near_city`, und `last_known` (`at`, `odometer_km`) mit dem letzten bekannten Zustand. Der Chef bekommt `foreign_drivers`: wer den Lkw gerade fährt, ohne ihn geliehen zu haben |
 | `POST /api/companies/{id}/trucks` | Chef | Lkw anlegen: `plate`, `model`, optional `package`, `odometer_km`, `state` |
 | `POST /api/trucks/{id}/checkout` | Mitglied | Ausleihen. Liefert Bauplan und Zustand. 409, wenn schon verliehen |
 | `GET /api/trucks/{id}/lease` | Ausleiher oder Chef | Die laufende Leihe noch einmal: `lease_id`, `user_id`, `taken_at` und `truck` wie beim Ausleihen, mit Bauplan, Zustand und Kennzeichen. 403 für alle anderen, 409, wenn der Lkw nicht verliehen ist |
-| `POST /api/trucks/{id}/checkin` | Ausleiher oder Chef | Zurückgeben: `odometer_km`, optional `state` und `plate`. Mit `plate` bekommt der Lkw ein neues Kennzeichen, das alte kommt in `old_plates`. 409, wenn ein anderer Lkw der Firma das Kennzeichen gerade hat |
-| `POST /api/companies/{id}/events` | Mitglied | Ereignis aus dem Spiel buchen: `event_id`, `type`, `amount`, optional `distance_km`, `note` und `occurred_at` (wann es im Spiel passiert ist, Unix-Sekunden). War es vor einem schon abgeglichenen Spielstand passiert, korrigiert der Server diesen Abgleich, die Antwort sagt das unter `late`. Die Antwort enthält `occurred_at`, leer ohne plausiblen Zeitpunkt |
-| `GET /api/companies/{id}/ledger` | Mitglied | Die letzten Buchungen, `?limit=50`. Jede mit `game_amount` (Betrag im Spiel), `distance_km`, `payroll_id`, `event_id` und `occurred_at` (leer, wenn der Client keinen plausiblen Zeitpunkt geschickt hat) |
+| `POST /api/trucks/{id}/checkin` | Ausleiher oder Chef | Zurückgeben: `odometer_km`, optional `state` und `plate`. Mit `plate` bekommt der Lkw ein neues Kennzeichen, das alte kommt in `old_plates`. 409, wenn ein anderer Lkw der Firma das Kennzeichen gerade hat. Ohne `odometer_km` nimmt der Chef den Lkw mit dem letzten bekannten Zustand zurück, die Antwort sagt unter `from_last_known.at`, von wann er ist. Ohne letzten Zustand 409, ein Fahrer ohne Kilometerstand bekommt 400 |
+| `POST /api/companies/{id}/heartbeat` | Mitglied | Herzschlag aus dem Spiel, siehe Online: `plate`, optional `odometer_km`, `wear` (`engine`, `transmission`, `cabin`, `chassis`, `wheels`, je 0 bis 1), `fuel_relative` (0 bis 1), `fuel_liters`, `near_city`, `speed_kmh`, `job` (`cargo`, `source_city`, `target_city`) oder `null`. Ohne Kennzeichen oder mit unplausiblen Zahlen 400. Liefert `last_seen` und `leased_truck_id`, wenn das Kennzeichen zum eigenen geliehenen Lkw passt |
+| `POST /api/companies/{id}/events` | Mitglied | Ereignis aus dem Spiel buchen: `event_id`, `type`, `amount`, optional `distance_km`, `note` und `occurred_at` (wann es im Spiel passiert ist, Unix-Sekunden). Bei `job_delivered` optional `cargo`, `source_city` und `target_city` (höchstens 64 Zeichen, ohne Steuerzeichen). War es vor einem schon abgeglichenen Spielstand passiert, korrigiert der Server diesen Abgleich, die Antwort sagt das unter `late`. Die Antwort enthält `occurred_at`, leer ohne plausiblen Zeitpunkt |
+| `GET /api/companies/{id}/ledger` | Mitglied | Die letzten Buchungen, `?limit=50`. Jede mit `game_amount` (Betrag im Spiel), `distance_km`, `payroll_id`, `event_id`, `occurred_at` (leer, wenn der Client keinen plausiblen Zeitpunkt geschickt hat) und bei Aufträgen `cargo`, `source_city`, `target_city` (leer bei alten Buchungen) |
 | `POST /api/companies/{id}/transfer` | Chef | Geld verschieben: `user_id`, `amount`, optional `note`. Positiv geht aus der Kasse an den Fahrer, negativ zurück |
 | `GET /api/companies/{id}/payrolls` | Mitglied | Die letzten Lohnabrechnungen mit einer Zeile je Fahrer, `?limit=30` |
 | `POST /api/companies/{id}/payrolls/run` | Chef | Lohn sofort abrechnen: erst fällige Tage, dann alles seit der letzten Abrechnung |
@@ -114,6 +118,24 @@ Alle Anfragen und Antworten sind JSON. Außer bei `register`, `login` und `healt
 | `POST /api/companies/{id}/sync/{sync_id}/written` | wer abgeglichen hat | Der Betrag aus dem Abgleich steht jetzt im Spielstand. Optional `written_at`: wann der Launcher geschrieben hat, Unix-Sekunden. Nur für den neuesten eigenen Abgleich |
 | `GET /api/companies/{id}/unexplained` | Chef | Offene ungeklärte Beträge, mit `?all=true` auch die geschlossenen |
 | `POST /api/companies/{id}/unexplained/{eid}/close` | Chef | Ungeklärten Betrag schließen, optional mit `note`. Gebucht wird nichts |
+
+## Anmeldung und Tokens
+
+Ein Token läuft nach 30 Tagen ohne Benutzung ab. Jede Anfrage mit dem Token zählt als Benutzung (geschrieben wird höchstens einmal je Minute). Ein abgelaufener Token wird gelöscht, die Anfrage bekommt 401 mit "Die Anmeldung ist abgelaufen, bitte neu anmelden". Tokens aus einer Datenbank von vor dieser Fassung gelten ab der Umstellung als benutzt.
+
+`POST /api/me/password` ändert das Passwort und meldet alle anderen Anmeldungen des Nutzers ab, zum Beispiel ein Dashboard auf einem anderen Rechner. Der benutzte Token bleibt gültig. Wird das Passwort im Launcher geändert, bleiben Launcher und Plugin angemeldet, weil sie sich einen Token teilen. Das Dashboard hat einen eigenen Token: Wird das Passwort dort geändert, sind auch Launcher und Plugin abgemeldet, auch auf demselben Rechner. Ein laufendes Plugin liest seinen Token nur beim Start, seine Herzschläge scheitern dann, der Fahrer erscheint offline und es gibt keinen neuen letzten bekannten Zustand. Buchungen bleiben im Postausgang. Danach im Launcher neu anmelden und das Spiel neu starten.
+
+## Online
+
+Das Plugin schickt alle 10 Sekunden einen Herzschlag an `POST /api/companies/{id}/heartbeat`, solange das Spiel läuft und nicht pausiert ist. Online ist, wer sich in den letzten 30 Sekunden gemeldet hat (Uhr des Servers). Je Fahrer und Firma liegt nur der letzte Herzschlag in der Tabelle `presence`, jede Meldung überschreibt die vorige. Das ist Zustand, kein Journal.
+
+Das Kennzeichen wird mit den aktuellen und den alten Kennzeichen (`old_plates`) des Fuhrparks verglichen. Passen mehrere Lkw, gewinnt der, den dieser Fahrer gerade geliehen hat, egal über welches Kennzeichen. Sonst gewinnt ein aktuelles Kennzeichen, dann das zuletzt ersetzte alte. Das ist nötig, weil der Launcher einen Lkw mit dem Kennzeichen aus dem Bauplan einsetzt: Hat das Spiel es einmal ersetzt, fährt der Lkw wieder mit dem alten, das inzwischen ein anderer Lkw tragen kann. Markup wie `<img src=...>`, ein Land hinter `|`, Leerraum und Groß- und Kleinschreibung zählen dabei nicht, genau wie in `spedhub_save::plate_text`.
+
+- Passt es zu einem Firmen-Lkw, den dieser Fahrer gerade geliehen hat, wird der Herzschlag zum letzten bekannten Zustand des Lkw (`trucks.last_seen_at`, `last_odometer_km`, `last_state`). `last_state` hat die Feldnamen von `TruckState` und startet beim Zustand vom Ausleihen. Nur gemeldete Werte überschreiben ihn. Den einen Wert für die Räder bekommt jede Achse. Ein Kilometerstand unter dem beim Ausleihen wird nicht übernommen.
+- Passt es zu einem Firmen-Lkw, den er nicht geliehen hat, sieht der Chef eine Markierung: `foreign_truck` beim Mitglied und `foreign_drivers` in der Fuhrparkliste. Fahrer sehen das nicht.
+- Nimmt der Chef einen Lkw ohne Kilometerstand zurück, etwa weil das Spiel des Fahrers abgestürzt ist, gelten Kilometerstand und Zustand aus dem letzten bekannten Zustand. Jede Rückgabe leert ihn, damit er nicht beim nächsten Fahrer gilt.
+
+Eine Stadt in der Nähe liefert das Telemetry SDK nicht. Das Feld `near_city` gibt es trotzdem, das Plugin lässt es leer, im Dashboard lässt es sich im Testbereich setzen.
 
 ## Kennzeichen
 
@@ -195,8 +217,6 @@ Spät gemeldete Ereignisse: Kommt ein Ereignis erst an, nachdem sein Fenster sch
 ## Was noch fehlt
 
 - Lkw-Kauf für die Firma
-- Online-Status der Fahrer
-- Ablauf von Tokens, Passwort ändern
 - Firma gründen und beitreten im Launcher, bisher nur im Dashboard. Launcher, Save-Bibliothek und Spiel-Plugin gibt es in einer ersten Fassung
 
 ## Aufbau
@@ -205,6 +225,7 @@ Spät gemeldete Ereignisse: Kommt ein Ereignis erst an, nachdem sein Fenster sch
 |---|---|
 | `src/main.rs` | Start, Einstellungen |
 | `src/api.rs` | Alle Endpunkte, Buchungsregeln und Geldabgleich |
+| `src/presence.rs` | Herzschlag, Online, Kennzeichen vergleichen, letzter bekannter Zustand |
 | `src/reconcile.rs` | Abgleichfenster, Zeitpunkte und Korrektur bei spät gemeldeten Ereignissen |
 | `src/payroll.rs` | Tägliche Lohnabrechnung |
 | `src/levels.rs` | Level aus Erfahrungspunkten, Lohnstufen |
