@@ -4,11 +4,12 @@ use crate::{
     db::{Db, insert_default_wage_levels},
     error::{ApiError, ApiResult},
     levels::{WageLevel, standing, wage_levels},
-    payroll,
+    payroll, plates,
     presence::{self, HeartbeatReq},
+    profiles,
     purchases::{self, Budget},
     reconcile::{client_time, correct_late, kind_label, last_point, plausible_time, window_sum},
-    version,
+    reversal, version,
 };
 use argon2::{
     Argon2,
@@ -19,10 +20,10 @@ use axum::{
     extract::{FromRef, FromRequestParts, Path, Query, State},
     http::{HeaderMap, header::AUTHORIZATION, request::Parts},
     response::Html,
-    routing::{get, post, put},
+    routing::{get, patch, post, put},
 };
 use rusqlite::{Connection, OptionalExtension, params};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -71,10 +72,20 @@ pub fn router_with(db: Db, clock: Clock) -> Router {
             "/api/companies/{id}/trucks",
             get(list_trucks).post(add_truck),
         )
+        .route(
+            "/api/companies/{id}/plate-suggestion",
+            get(plate_suggestion),
+        )
         .route("/api/companies/{id}/wage-levels", put(set_wage_levels))
         .route("/api/companies/{id}/events", post(post_event))
+        .route("/api/companies/{id}/profile", put(set_profile))
+        .route(
+            "/api/companies/{id}/rejected-events",
+            get(list_rejected_events),
+        )
         .route("/api/companies/{id}/heartbeat", post(heartbeat))
         .route("/api/companies/{id}/ledger", get(get_ledger))
+        .route("/api/companies/{id}/ledger/reverse", post(reverse_entries))
         .route(
             "/api/companies/{id}/ledger/{entry}/link-truck",
             post(link_truck).delete(unlink_truck),
@@ -92,6 +103,7 @@ pub fn router_with(db: Db, clock: Clock) -> Router {
             post(close_budget),
         )
         .route("/api/companies/{id}/transfer", post(transfer))
+        .route("/api/companies/{id}/claims/waive", post(waive_claim))
         .route("/api/companies/{id}/payrolls", get(list_payrolls))
         .route("/api/companies/{id}/payrolls/run", post(run_payroll_now))
         .route("/api/companies/{id}/sync", post(sync))
@@ -104,6 +116,7 @@ pub fn router_with(db: Db, clock: Clock) -> Router {
             "/api/companies/{id}/unexplained/{entry}/close",
             post(close_unexplained),
         )
+        .route("/api/trucks/{id}", patch(update_truck))
         .route("/api/trucks/{id}/checkout", post(checkout))
         .route("/api/trucks/{id}/checkin", post(checkin))
         .route("/api/trucks/{id}/lease", get(get_lease))
@@ -575,16 +588,18 @@ async fn get_company(
         )?;
     let levels = wage_levels(&conn, id)?;
     let ds = damage_settings(&conn, id)?;
-    let people: Vec<(i64, String, String)> = conn
+    type Person = (i64, String, String, Option<String>);
+    let people: Vec<Person> = conn
         .prepare(
-            "SELECT u.id, u.name, m.role FROM memberships m JOIN users u ON u.id = m.user_id
+            "SELECT u.id, u.name, m.role, m.profile_name FROM memberships m
+             JOIN users u ON u.id = m.user_id
              WHERE m.company_id = ?1 ORDER BY m.role, u.name",
         )?
-        .query_map([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .query_map([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
         .collect::<Result<_, _>>()?;
     let seen = presence::all(&conn, id)?;
     let mut members = Vec::new();
-    for (uid, uname, urole) in people {
+    for (uid, uname, urole, profile_name) in people {
         let s = standing(&conn, &levels, id, uid)?;
         let mut m = json!({
             "user_id": uid, "name": uname, "role": urole,
@@ -594,11 +609,16 @@ async fn get_company(
             "stage": s.stage.map(|w| w.position), "cents_per_km": s.cents_per_km(),
             "online": false, "last_seen": Value::Null
         });
+        // Das gemeldete Firmenprofil: der Chef sieht alle, ein Fahrer nur seins
+        if role == "chef" || uid == user.id {
+            m["profile_name"] = json!(profile_name);
+        }
         if let Some(p) = seen.get(&uid) {
             m["last_seen"] = json!(p.last_seen);
             if p.online(now) {
                 m["online"] = json!(true);
                 m["plate"] = json!(p.plate);
+                m["model"] = p.model();
                 m["near_city"] = p.near_city();
                 m["speed_kmh"] = p.speed_kmh();
                 m["job"] = p.job();
@@ -818,7 +838,10 @@ async fn set_wage_levels(
 
 #[derive(Deserialize)]
 struct NewTruck {
-    plate: String,
+    /// Kennzeichen in der Firma. Fehlt es oder ist es leer, schlägt der Server eins vor, siehe
+    /// [`crate::plates`].
+    #[serde(default)]
+    plate: Option<String>,
     model: String,
     #[serde(default)]
     package: String,
@@ -827,6 +850,9 @@ struct NewTruck {
     state: Option<Value>,
 }
 
+/// Lkw anlegen. Ohne Kennzeichen bekommt er den Vorschlag des Servers. Ein Kennzeichen muss
+/// sich als selbst vergebenes Kennzeichen in den Spielstand schreiben lassen, sonst 400. Trägt
+/// ein aktiver Lkw der Firma es schon, 409.
 async fn add_truck(
     State(db): State<Db>,
     State(clock): State<Clock>,
@@ -834,13 +860,14 @@ async fn add_truck(
     Path(company_id): Path<i64>,
     Json(b): Json<NewTruck>,
 ) -> ApiResult<Json<Value>> {
-    let plate = b.plate.trim();
     let model = b.model.trim();
-    if plate.is_empty() || model.is_empty() {
-        return Err(ApiError::bad(
-            "Kennzeichen und Modell dürfen nicht leer sein",
-        ));
+    if model.is_empty() {
+        return Err(ApiError::bad("Das Modell darf nicht leer sein"));
     }
+    let wanted = match b.plate.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        Some(p) => Some(plates::company_plate(p).map_err(|e| ApiError::bad(&e))?),
+        None => None,
+    };
     if b.odometer_km < 0 {
         return Err(ApiError::bad("Der Kilometerstand darf nicht negativ sein"));
     }
@@ -849,8 +876,17 @@ async fn add_truck(
     let mut conn = db.lock().unwrap();
     let tx = conn.transaction()?;
     require_chef(&tx, company_id, user.id)?;
+    let (plate, suggested) = match wanted {
+        Some(p) => (p, false),
+        None => (plates::suggest(&tx, company_id)?, true),
+    };
     // Ein ausgemusterter oder verkaufter Lkw gibt sein Kennzeichen ab
-    free_retired_plate(&tx, company_id, plate, now)?;
+    free_retired_plate(&tx, company_id, &plate, now)?;
+    if plates::active_holder(&tx, company_id, &plate, None)?.is_some() {
+        return Err(ApiError::conflict(
+            "Das Kennzeichen gibt es in der Firma schon",
+        ));
+    }
     match tx.execute(
         "INSERT INTO trucks (company_id, plate, model, package, odometer_km, state, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -876,7 +912,117 @@ async fn add_truck(
     tx.commit()?;
     Ok(Json(json!({
         "id": id, "plate": plate, "model": model,
-        "odometer_km": b.odometer_km, "rev": 1
+        "odometer_km": b.odometer_km, "rev": 1, "plate_suggested": suggested
+    })))
+}
+
+/// Vorschlag für das Kennzeichen eines neuen Lkw: Kürzel der Firma und die nächste freie
+/// Nummer, siehe [`crate::plates`]. Nur der Chef, er legt Lkw an.
+async fn plate_suggestion(
+    State(db): State<Db>,
+    user: AuthUser,
+    Path(company_id): Path<i64>,
+) -> ApiResult<Json<Value>> {
+    let conn = db.lock().unwrap();
+    require_chef(&conn, company_id, user.id)?;
+    let name: String = conn.query_row(
+        "SELECT name FROM companies WHERE id = ?1",
+        [company_id],
+        |r| r.get(0),
+    )?;
+    Ok(Json(json!({
+        "plate": plates::suggest(&conn, company_id)?,
+        "prefix": plates::company_prefix(&name)
+    })))
+}
+
+#[derive(Deserialize)]
+struct TruckPatch {
+    /// Neues Kennzeichen in der Firma
+    plate: Option<String>,
+}
+
+/// Kennzeichen eines Lkw ändern, etwa wenn zwei Firmen-Lkw durch Zufall gleich heißen. Nur der
+/// Chef, nicht während einer Leihe (der Spielstand des Fahrers hat dann noch das alte) und
+/// nicht bei ausgemusterten oder verkauften Lkw, sonst 409. Während einer Leihe geht es doch,
+/// wenn sich das alte Kennzeichen nicht als eigenes setzen lässt: Dann steht der Lkw nicht im
+/// Spielstand, und der Launcher setzt ihn mit dem neuen ein. Das alte Kennzeichen kommt zu den
+/// früheren. Beim nächsten Einsetzen schreibt der Launcher das neue in den Spielstand.
+async fn update_truck(
+    State(db): State<Db>,
+    State(clock): State<Clock>,
+    user: AuthUser,
+    Path(truck_id): Path<i64>,
+    Json(b): Json<TruckPatch>,
+) -> ApiResult<Json<Value>> {
+    let now = clock.now();
+    let mut conn = db.lock().unwrap();
+    let tx = conn.transaction()?;
+    let company_id = plates::truck_company(&tx, truck_id)?
+        .ok_or_else(|| ApiError::not_found("Diesen Lkw gibt es nicht"))?;
+    require_chef(&tx, company_id, user.id)?;
+    let raw = b.plate.as_deref().map(str::trim).unwrap_or_default();
+    if raw.is_empty() {
+        return Err(ApiError::bad("Das Kennzeichen fehlt"));
+    }
+    let plate = plates::company_plate(raw).map_err(|e| ApiError::bad(&e))?;
+    let (current, retired): (String, Option<String>) = tx.query_row(
+        "SELECT plate, retired_reason FROM trucks WHERE id = ?1",
+        [truck_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    if let Some(reason) = retired {
+        return Err(retired_error(&reason, "bekommt kein neues Kennzeichen"));
+    }
+    let holder: Option<String> = tx
+        .query_row(
+            "SELECT u.name FROM leases l JOIN users u ON u.id = l.user_id
+             WHERE l.truck_id = ?1 AND l.returned_at IS NULL",
+            [truck_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    // Während einer Leihe hat der Spielstand des Fahrers das alte Kennzeichen. Ausnahme: Das
+    // alte lässt sich gar nicht als eigenes setzen. Dann konnte der Launcher den Lkw nicht
+    // einsetzen, und erst das neue Kennzeichen macht das möglich.
+    if let Some(name) = holder
+        && plates::company_plate(&current).is_ok()
+    {
+        return Err(ApiError::conflict(&format!(
+            "Der Lkw ist gerade an {name} verliehen. Das Kennzeichen lässt sich erst nach der Rückgabe ändern"
+        )));
+    }
+    if plate != current {
+        free_retired_plate(&tx, company_id, &plate, now)?;
+        if plates::active_holder(&tx, company_id, &plate, Some(truck_id))?.is_some() {
+            return Err(ApiError::conflict(&format!(
+                "Das Kennzeichen {plate} hat in der Firma schon ein anderer Lkw"
+            )));
+        }
+        match tx.execute(
+            "UPDATE trucks SET plate = ?1 WHERE id = ?2",
+            params![plate, truck_id],
+        ) {
+            Ok(_) => {}
+            Err(e) if is_unique_violation(&e) => {
+                return Err(ApiError::conflict(&format!(
+                    "Das Kennzeichen {plate} hat in der Firma schon ein anderer Lkw"
+                )));
+            }
+            Err(e) => return Err(e.into()),
+        }
+        tx.execute(
+            "INSERT INTO truck_plates (truck_id, plate, replaced_at) VALUES (?1, ?2, ?3)",
+            params![truck_id, current, now],
+        )?;
+    }
+    let old_plates: Vec<String> = tx
+        .prepare("SELECT plate FROM truck_plates WHERE truck_id = ?1 ORDER BY replaced_at, rowid")?
+        .query_map([truck_id], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    tx.commit()?;
+    Ok(Json(json!({
+        "id": truck_id, "plate": plate, "old_plates": old_plates, "changed": plate != current
     })))
 }
 
@@ -1090,6 +1236,17 @@ async fn checkout(
             "Der Lkw steht in der Werkstatt. Ausleihen geht erst, wenn der Chef ihn reparieren lässt",
         ));
     }
+    // Der Launcher schreibt das Kennzeichen beim Einsetzen als eigenes in den Spielstand. Geht
+    // das nicht, entstünde eine Leihe, deren Lkw nie in den Spielstand kommt.
+    let plate: String =
+        tx.query_row("SELECT plate FROM trucks WHERE id = ?1", [truck_id], |r| {
+            r.get(0)
+        })?;
+    if let Err(e) = plates::company_plate(&plate) {
+        return Err(ApiError::conflict(&format!(
+            "Das Kennzeichen {plate} lässt sich nicht in den Spielstand schreiben ({e}). Der Chef ändert es im Dashboard, danach geht das Ausleihen"
+        )));
+    }
     // Schaden beim Ausleihen: Was danach dazukommt, ist neuer Schaden dieser Leihe
     let damage_out = damage::damage_of(&state).fixable;
     tx.execute(
@@ -1151,7 +1308,9 @@ struct CheckinReq {
 }
 
 /// Lkw zurückgeben. Der Zustand aus dem Spielstand wird übernommen, die Revision steigt.
-/// Mit `plate` bekommt der Lkw ein neues Kennzeichen, das alte kommt in `truck_plates`.
+/// Mit `plate` bekommt der Lkw ein neues Kennzeichen, das alte kommt in `truck_plates`. Lässt
+/// sich das gemeldete nicht als eigenes Kennzeichen setzen, bleibt das alte, das gemeldete kommt
+/// zu den früheren, und die Antwort nennt es in `plate_ignored`.
 ///
 /// Ohne `odometer_km` (Fahrer abgestürzt, kein Spielstand) darf nur der Chef zurücknehmen.
 /// Dann gilt der letzte bekannte Zustand aus dem Herzschlag. Gibt es keinen, 409. Nach jeder
@@ -1231,7 +1390,7 @@ async fn checkin(
             (last_km.unwrap_or(odometer).max(odometer), state, Some(at))
         }
     };
-    let new_plate = match b.plate.as_deref().map(str::trim) {
+    let reported = match b.plate.as_deref().map(str::trim) {
         None => None,
         Some("") => return Err(ApiError::bad("Das Kennzeichen darf nicht leer sein")),
         Some(p) if p.chars().count() > 32 => {
@@ -1242,6 +1401,29 @@ async fn checkin(
         Some(p) if p == current_plate => None,
         Some(p) => Some(p.to_string()),
     };
+    // Ein Kennzeichen, das sich nicht als eigenes setzen lässt (zu lang, Umlaute), übernimmt
+    // der Server nicht: Der Launcher könnte den Lkw damit nie wieder einsetzen. Er behält das
+    // bisherige und merkt sich das gemeldete als früheres, damit die Telemetrie den Lkw mit
+    // dem Spielstand von vor dem nächsten Einsetzen noch findet.
+    let (new_plate, plate_ignored) = match reported {
+        None => (None, None),
+        Some(p) => match plates::company_plate(&p) {
+            Ok(clean) if clean == current_plate => (None, None),
+            Ok(clean) => (Some(clean), None),
+            Err(e) => (None, Some((p, e))),
+        },
+    };
+    if let Some((p, _)) = &plate_ignored {
+        let known: bool = tx
+            .prepare("SELECT 1 FROM truck_plates WHERE truck_id = ?1 AND plate = ?2")?
+            .exists(params![truck_id, p])?;
+        if !known {
+            tx.execute(
+                "INSERT INTO truck_plates (truck_id, plate, replaced_at) VALUES (?1, ?2, ?3)",
+                params![truck_id, p, clock.now()],
+            )?;
+        }
+    }
     if let Some(p) = &new_plate {
         free_retired_plate(&tx, company_id, p, clock.now())?;
         match tx.execute(
@@ -1301,17 +1483,21 @@ async fn checkin(
             "Haftung {plate}, {} Prozentpunkte neuer Schaden",
             damage::percent_text(damage_new)
         );
+        // Beide Seiten mit demselben Zeitpunkt, sie gehören zusammen
+        let now = clock.now();
         for (account, amount) in [("fahrer", -liability), ("firma", liability)] {
             tx.execute(
                 "INSERT INTO ledger (company_id, account, user_id, kind, amount, note, created_at)
                  VALUES (?1, ?2, ?3, 'haftung', ?4, ?5, ?6)",
-                params![company_id, account, holder, amount, note, clock.now()],
+                params![company_id, account, holder, amount, note, now],
             )?;
         }
     }
     tx.commit()?;
     Ok(Json(json!({
         "id": truck_id, "plate": plate, "odometer_km": new_odometer, "rev": rev,
+        // Gemeldetes Kennzeichen, das der Server nicht übernommen hat, und warum
+        "plate_ignored": plate_ignored.map(|(p, e)| json!({ "plate": p, "reason": e })),
         "driven_km": new_odometer - odometer,
         // Gesetzt, wenn der letzte bekannte Zustand übernommen wurde: von wann er ist
         "from_last_known": from_last.map(|at| json!({ "at": at })),
@@ -1515,31 +1701,43 @@ fn retire_truck(
 
 /// Herzschlag aus dem Spiel, alle 10 Sekunden, solange das Spiel läuft und nicht pausiert ist.
 /// Speichert, wer mit welchem Lkw wo fährt, und beim eigenen geliehenen Lkw den letzten
-/// bekannten Zustand. Siehe [`crate::presence`].
+/// bekannten Zustand. Ein Firmen-Lkw ist es nur, wenn Kennzeichen und Modell passen. Siehe
+/// [`crate::presence`].
 async fn heartbeat(
     State(db): State<Db>,
     State(clock): State<Clock>,
     user: AuthUser,
     Path(company_id): Path<i64>,
-    Json(b): Json<HeartbeatReq>,
+    Json(mut b): Json<HeartbeatReq>,
 ) -> ApiResult<Json<Value>> {
+    let profile =
+        profiles::clean_name(b.profile.take().as_deref()).map_err(|e| ApiError::bad(&e))?;
     let hb = b.validate().map_err(|e| ApiError::bad(&e))?;
     let now = clock.now();
     let mut conn = db.lock().unwrap();
     let tx = conn.transaction()?;
     role_in(&tx, company_id, user.id)?;
+    // Aus einem anderen Profil als dem gemeldeten Firmenprofil: verwerfen, ohne Fehler. Ein
+    // Herzschlag wird nie wiederholt, und das Plugin schreibt den Hinweis ins Log.
+    let reported = profiles::reported(&tx, company_id, user.id)?;
+    if let Some(m) = profiles::mismatch(reported.as_deref(), profile.as_deref()) {
+        return Ok(Json(json!({
+            "ok": true, "recorded": false, "note": format!("Herzschlag verworfen. {}", m.message),
+            "last_seen": Value::Null, "leased_truck_id": Value::Null
+        })));
+    }
     let rec = presence::record(&tx, company_id, user.id, &hb, now)?;
     tx.commit()?;
     // Nur der eigene geliehene Lkw kommt zurück. Einen fremden sieht nur der Chef.
     Ok(Json(json!({
-        "ok": true, "last_seen": now,
+        "ok": true, "recorded": true, "last_seen": now,
         "leased_truck_id": rec.truck_id.filter(|_| rec.own_lease)
     })))
 }
 
 // ---------------------------------------------------------------- Kasse
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct EventReq {
     /// Vom Client vergeben und eindeutig. Verhindert doppelte Buchungen.
     event_id: String,
@@ -1564,6 +1762,16 @@ struct EventReq {
     source_city: Option<String>,
     #[serde(default)]
     target_city: Option<String>,
+    /// Name des ETS2-Profils, aus dem das Plugin das Ereignis meldet. Ist für den Fahrer ein
+    /// Firmenprofil gemeldet, muss es genau dieses sein.
+    #[serde(default)]
+    profile: Option<String>,
+    /// Marke und Modell des Lkw, mit dem es passiert ist, aus der Konfiguration `truck` des SDK
+    /// (`brand_id` und `id`). Nur zum Nachsehen, gebucht wird unabhängig davon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    truck_brand: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    truck_model: Option<String>,
 }
 
 /// Ereignis aus dem Spiel buchen. Die Regeln:
@@ -1579,6 +1787,12 @@ struct EventReq {
 /// Ist das Ereignis laut Client vor einem Abgleich passiert, der es nicht kannte, steckte sein Spielbetrag
 /// schon im damaligen Kontostand. Dann wird dieser Abgleich korrigiert (siehe
 /// [`correct_late`]), und die Antwort sagt das unter `late`.
+///
+/// Hat der Fahrer ein Firmenprofil gemeldet und kommt das Ereignis aus einem anderen oder nennt
+/// es keins, wird nichts gebucht: Antwort 422, das Ereignis landet in `rejected_events` und im
+/// Log des Servers. 422 statt 409, weil das Plugin 422 als endgültig behandelt und das Ereignis
+/// beiseitelegt, während es bei 409 den Postausgang immer wieder senden und dahinter stauen
+/// würde. Siehe [`crate::profiles`].
 async fn post_event(
     State(db): State<Db>,
     State(clock): State<Clock>,
@@ -1593,6 +1807,7 @@ async fn post_event(
     if b.amount < 0 || b.amount > 1_000_000_000 {
         return Err(ApiError::bad("Der Betrag darf nicht negativ sein"));
     }
+    let profile = profiles::clean_name(b.profile.as_deref()).map_err(|e| ApiError::bad(&e))?;
     let distance = match b.distance_km {
         None => None,
         Some(d) if d.is_finite() && (0.0..=100_000.0).contains(&d) => Some(d.round() as i64),
@@ -1616,6 +1831,36 @@ async fn post_event(
             "duplicate": true, "booked": [],
             "balance": company_balance(&tx, company_id)?, "wallet": wallet(&tx, company_id, user.id)?
         })));
+    }
+
+    // Nur aus dem gemeldeten Firmenprofil
+    let reported = profiles::reported(&tx, company_id, user.id)?;
+    if let Some(m) = profiles::mismatch(reported.as_deref(), profile.as_deref()) {
+        let payload = serde_json::to_value(&b).unwrap_or(Value::Null);
+        let reason = format!("Ereignis {}", m.reason);
+        profiles::record_rejected(
+            &tx,
+            &profiles::Rejected {
+                company_id,
+                user_id: user.id,
+                event_id,
+                kind: &b.kind,
+                amount: b.amount,
+                profile: profile.as_deref(),
+                reason: &reason,
+                payload: &payload,
+                now: clock.now(),
+            },
+        )?;
+        tx.commit()?;
+        eprintln!(
+            "Abgelehnt: Firma {company_id}, {}: {} {} Euro ({event_id}), {reason}",
+            user.name, b.kind, b.amount
+        );
+        return Err(ApiError(
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+            format!("Ereignis nicht gebucht. {}", m.message),
+        ));
     }
 
     // (Konto, Buchungsart, gebuchter Betrag, Betrag im Spiel), beide mit Vorzeichen
@@ -1646,6 +1891,9 @@ async fn post_event(
     };
     let (cargo, source_city, target_city) =
         (text(&b.cargo), text(&b.source_city), text(&b.target_city));
+    // Der Lkw gehört zu jedem Ereignis
+    let truck_brand = presence::clean_text(b.truck_brand.as_deref(), presence::TEXT_MAX);
+    let truck_model = presence::clean_text(b.truck_model.as_deref(), presence::TEXT_MAX);
     let now = clock.now();
     // Nur ein Zeitpunkt vom Client kann einen alten Abgleich korrigieren. Ohne ihn ist das
     // Ereignis nach jedem bisherigen Abgleich angekommen und zählt im nächsten Fenster.
@@ -1664,8 +1912,9 @@ async fn post_event(
     };
     tx.execute(
         "INSERT INTO ledger (company_id, account, user_id, kind, amount, event_id, note, created_at,
-                             game_amount, distance_km, occurred_at, cargo, source_city, target_city)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                             game_amount, distance_km, occurred_at, cargo, source_city, target_city,
+                             profile, truck_brand, truck_model)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
         params![
             company_id,
             account,
@@ -1680,7 +1929,10 @@ async fn post_event(
             reported_at,
             cargo,
             source_city,
-            target_city
+            target_city,
+            profile,
+            truck_brand,
+            truck_model
         ],
     )?;
     let balance = company_balance(&tx, company_id)?;
@@ -1699,6 +1951,47 @@ async fn post_event(
         res["late"] = late;
     }
     Ok(Json(res))
+}
+
+#[derive(Deserialize)]
+struct ProfileReq {
+    /// Name des Firmenprofils, so wie das Spiel ihn anzeigt. `null` oder leer löscht ihn.
+    #[serde(default)]
+    profile_name: Option<String>,
+}
+
+/// Der Launcher meldet das Firmenprofil des angemeldeten Fahrers. Ab dann bucht der Server nur
+/// noch Ereignisse aus diesem Profil, siehe [`crate::profiles`].
+async fn set_profile(
+    State(db): State<Db>,
+    user: AuthUser,
+    Path(company_id): Path<i64>,
+    Json(b): Json<ProfileReq>,
+) -> ApiResult<Json<Value>> {
+    let name = profiles::clean_name(b.profile_name.as_deref()).map_err(|e| ApiError::bad(&e))?;
+    let conn = db.lock().unwrap();
+    role_in(&conn, company_id, user.id)?;
+    profiles::report(&conn, company_id, user.id, name.as_deref())?;
+    Ok(Json(json!({ "profile_name": name })))
+}
+
+#[derive(Deserialize)]
+struct RejectedQuery {
+    limit: Option<i64>,
+}
+
+/// Ereignisse, die der Server wegen des Profils nicht gebucht hat. Nur der Chef.
+async fn list_rejected_events(
+    State(db): State<Db>,
+    user: AuthUser,
+    Path(company_id): Path<i64>,
+    Query(q): Query<RejectedQuery>,
+) -> ApiResult<Json<Value>> {
+    let limit = q.limit.unwrap_or(100).clamp(1, 500);
+    let conn = db.lock().unwrap();
+    require_chef(&conn, company_id, user.id)?;
+    let entries = profiles::list_rejected(&conn, company_id, limit)?;
+    Ok(Json(json!({ "entries": entries })))
 }
 
 #[derive(Deserialize)]
@@ -1736,11 +2029,13 @@ async fn transfer(
     if b.amount > company_balance(&tx, company_id)? {
         return Err(ApiError::conflict("In der Kasse ist nicht genug Geld"));
     }
+    // Beide Seiten mit demselben Zeitpunkt, sie gehören zusammen
+    let now = clock.now();
     for (account, amount) in [("firma", -b.amount), ("fahrer", b.amount)] {
         tx.execute(
             "INSERT INTO ledger (company_id, account, user_id, kind, amount, note, created_at)
              VALUES (?1, ?2, ?3, 'ueberweisung', ?4, ?5, ?6)",
-            params![company_id, account, b.user_id, amount, b.note, clock.now()],
+            params![company_id, account, b.user_id, amount, b.note, now],
         )?;
     }
     let balance = company_balance(&tx, company_id)?;
@@ -1752,8 +2047,15 @@ async fn transfer(
 #[derive(Deserialize)]
 struct LedgerQuery {
     limit: Option<i64>,
+    /// Nur Buchungen mit `created_at` ab hier (Unix-Sekunden, einschließlich)
+    from: Option<i64>,
+    /// Nur Buchungen mit `created_at` vor diesem Zeitpunkt (Unix-Sekunden, ausschließlich)
+    to: Option<i64>,
 }
 
+/// Die letzten Buchungen, neueste zuerst. Mit `from` und `to` nur die aus diesem Zeitraum
+/// (Empfang beim Server). Jede Buchung sagt, ob und von wem sie storniert ist, ein Storno, was
+/// es storniert, und `reversible`, ob sich die Buchung jetzt stornieren lässt.
 async fn get_ledger(
     State(db): State<Db>,
     user: AuthUser,
@@ -1766,22 +2068,36 @@ async fn get_ledger(
     let mut stmt = conn.prepare(
         "SELECT l.id, l.account, u.name, l.kind, l.amount, l.note, l.created_at, l.user_id,
                 l.game_amount, l.distance_km, l.payroll_id, l.occurred_at, l.event_id,
-                l.cargo, l.source_city, l.target_city, pl.truck_id, tr.plate
+                l.cargo, l.source_city, l.target_city, pl.truck_id, tr.plate, l.profile,
+                l.reverses_id, r.id, r.created_at, r.note, ru.name, o.kind, o.created_at,
+                bu.name, l.truck_brand, l.truck_model
          FROM ledger l LEFT JOIN users u ON u.id = l.user_id
          LEFT JOIN purchase_links pl ON pl.ledger_id = l.id
          LEFT JOIN trucks tr ON tr.id = pl.truck_id
-         WHERE l.company_id = ?1 ORDER BY l.id DESC LIMIT ?2",
+         LEFT JOIN ledger r ON r.reverses_id = l.id AND r.account = l.account
+         LEFT JOIN users ru ON ru.id = r.booked_by
+         LEFT JOIN ledger o ON o.id = l.reverses_id
+         LEFT JOIN users bu ON bu.id = l.booked_by
+         WHERE l.company_id = ?1 AND (?3 IS NULL OR l.created_at >= ?3)
+           AND (?4 IS NULL OR l.created_at < ?4)
+         ORDER BY l.id DESC LIMIT ?2",
     )?;
     let entries = stmt
-        .query_map([company_id, limit], |r| {
+        .query_map(params![company_id, limit, q.from, q.to], |r| {
+            let kind: String = r.get(3)?;
+            let account: String = r.get(1)?;
+            let payroll_id: Option<i64> = r.get(10)?;
+            let reversed_by: Option<i64> = r.get(20)?;
+            let reversible = reversed_by.is_none()
+                && reversal::not_reversible(&kind, &account, payroll_id).is_none();
             Ok(json!({
-                "id": r.get::<_, i64>(0)?, "account": r.get::<_, String>(1)?,
-                "user": r.get::<_, Option<String>>(2)?, "kind": r.get::<_, String>(3)?,
+                "id": r.get::<_, i64>(0)?, "account": account,
+                "user": r.get::<_, Option<String>>(2)?, "kind": kind,
                 "amount": r.get::<_, i64>(4)?, "note": r.get::<_, String>(5)?,
                 "created_at": r.get::<_, i64>(6)?, "user_id": r.get::<_, Option<i64>>(7)?,
                 "game_amount": r.get::<_, Option<i64>>(8)?,
                 "distance_km": r.get::<_, Option<i64>>(9)?,
-                "payroll_id": r.get::<_, Option<i64>>(10)?,
+                "payroll_id": payroll_id,
                 "occurred_at": r.get::<_, Option<i64>>(11)?,
                 "event_id": r.get::<_, Option<String>>(12)?,
                 "cargo": r.get::<_, Option<String>>(13)?,
@@ -1789,13 +2105,128 @@ async fn get_ledger(
                 "target_city": r.get::<_, Option<String>>(15)?,
                 // Als Lkw-Kauf verknüpft: der Lkw und sein aktuelles Kennzeichen
                 "truck_id": r.get::<_, Option<i64>>(16)?,
-                "truck_plate": r.get::<_, Option<String>>(17)?
+                "truck_plate": r.get::<_, Option<String>>(17)?,
+                // Aus diesem ETS2-Profil hat das Plugin das Ereignis gemeldet
+                "profile": r.get::<_, Option<String>>(18)?,
+                // Mit diesem Lkw (Marke und Modell aus der Telemetrie), leer ohne Angabe
+                "truck_brand": r.get::<_, Option<String>>(27)?,
+                "truck_model": r.get::<_, Option<String>>(28)?,
+                // Storno: was diese Buchung storniert (Art und Zeitpunkt des Originals) und wer
+                "reverses_id": r.get::<_, Option<i64>>(19)?,
+                "reverses_kind": r.get::<_, Option<String>>(24)?,
+                "reverses_created_at": r.get::<_, Option<i64>>(25)?,
+                "booked_by_user": r.get::<_, Option<String>>(26)?,
+                // Storniert: von welcher Buchung, wann, warum und von wem
+                "reversed_by": reversed_by,
+                "reversed_at": r.get::<_, Option<i64>>(21)?,
+                "reverse_reason": r.get::<_, Option<String>>(22)?,
+                "reversed_by_user": r.get::<_, Option<String>>(23)?,
+                "reversible": reversible
             }))
         })?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Json(
         json!({ "balance": company_balance(&conn, company_id)?, "entries": entries }),
     ))
+}
+
+#[derive(Deserialize)]
+struct ReverseReq {
+    #[serde(default)]
+    entry_ids: Vec<i64>,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+/// Buchungen stornieren, siehe [`crate::reversal`]. Nur der Chef. Alles oder nichts in einer
+/// Transaktion. Die Antwort enthält die neuen Storno-Buchungen, den Kassenstand und je
+/// betroffenem Fahrer Lohnkonto und Wirkung auf den Geldabgleich.
+async fn reverse_entries(
+    State(db): State<Db>,
+    State(clock): State<Clock>,
+    user: AuthUser,
+    Path(company_id): Path<i64>,
+    Json(b): Json<ReverseReq>,
+) -> ApiResult<Json<Value>> {
+    let reason = reversal::clean_reason(b.reason.as_deref()).map_err(|e| ApiError::bad(&e))?;
+    let mut conn = db.lock().unwrap();
+    let tx = conn.transaction()?;
+    require_chef(&tx, company_id, user.id)?;
+    let (entries, drivers) =
+        reversal::reverse(&tx, company_id, user.id, &b.entry_ids, &reason, clock.now())?;
+    let mut list = Vec::new();
+    for (uid, mut d) in drivers {
+        let name: Option<String> = tx
+            .query_row("SELECT name FROM users WHERE id = ?1", [uid], |r| r.get(0))
+            .optional()?;
+        d["user"] = json!(name);
+        d["wallet"] = json!(wallet(&tx, company_id, uid)?);
+        // Ein Storno ändert an offenen Forderungen nichts, der Chef erlässt sie getrennt
+        d["open_claim"] = json!(payroll::open_claim(&tx, company_id, uid)?);
+        list.push(d);
+    }
+    let balance = company_balance(&tx, company_id)?;
+    tx.commit()?;
+    Ok(Json(json!({
+        "entries": entries, "balance": balance, "drivers": list
+    })))
+}
+
+#[derive(Deserialize)]
+struct WaiveReq {
+    user_id: i64,
+    amount: i64,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+/// Offene Lohnforderung eines Fahrers ganz oder zum Teil erlassen, siehe
+/// [`payroll::waive_claim`]. Nur der Chef, mit Grund. Das braucht er etwa, wenn er einen
+/// Auftrag storniert, dessen Lohn eine Abrechnung als Forderung stehen gelassen hat: Das Storno
+/// selbst ändert an der Forderung nichts.
+async fn waive_claim(
+    State(db): State<Db>,
+    State(clock): State<Clock>,
+    user: AuthUser,
+    Path(company_id): Path<i64>,
+    Json(b): Json<WaiveReq>,
+) -> ApiResult<Json<Value>> {
+    let reason = reversal::clean_reason(b.reason.as_deref()).map_err(|e| ApiError::bad(&e))?;
+    let mut conn = db.lock().unwrap();
+    let tx = conn.transaction()?;
+    require_chef(&tx, company_id, user.id)?;
+    let is_member: bool = tx
+        .prepare("SELECT 1 FROM memberships WHERE company_id = ?1 AND user_id = ?2")?
+        .exists([company_id, b.user_id])?;
+    if !is_member {
+        return Err(ApiError::not_found("Diese Person ist nicht in der Firma"));
+    }
+    let open = match payroll::waive_claim(
+        &tx,
+        company_id,
+        b.user_id,
+        b.amount,
+        (&reason, user.id),
+        clock.now(),
+    )? {
+        Ok(open) => open,
+        Err(payroll::WaiveError::NotPositive) => {
+            return Err(ApiError::bad("Der Betrag muss größer als 0 sein"));
+        }
+        Err(payroll::WaiveError::TooMuch(0)) => {
+            return Err(ApiError::conflict("Es ist kein Lohn offen"));
+        }
+        Err(payroll::WaiveError::TooMuch(open)) => {
+            return Err(ApiError::conflict(&format!(
+                "Offen sind nur {open} €, mehr lässt sich nicht erlassen"
+            )));
+        }
+    };
+    let wallet = wallet(&tx, company_id, b.user_id)?;
+    tx.commit()?;
+    Ok(Json(json!({
+        "user_id": b.user_id, "waived": b.amount, "open_claim": open, "wallet": wallet
+    })))
 }
 
 #[derive(Deserialize)]
@@ -1826,6 +2257,14 @@ async fn link_truck(
     if kind != "betriebskosten" || account != "firma" {
         return Err(ApiError::bad(
             "Als Lkw-Kauf lässt sich nur eine Betriebskosten-Buchung der Firmenkasse verknüpfen",
+        ));
+    }
+    let reversed: bool = tx
+        .prepare("SELECT 1 FROM ledger WHERE reverses_id = ?1")?
+        .exists([entry])?;
+    if reversed {
+        return Err(ApiError::conflict(
+            "Die Buchung ist storniert und lässt sich nicht mehr als Lkw-Kauf verknüpfen",
         ));
     }
     let linked: Option<String> = tx
@@ -1887,7 +2326,8 @@ struct CandidateQuery {
     limit: Option<i64>,
 }
 
-/// Betriebskosten-Buchungen des Chefs, die noch mit keinem Lkw verknüpft sind, neueste zuerst.
+/// Betriebskosten-Buchungen des Chefs, die noch mit keinem Lkw verknüpft und nicht storniert
+/// sind, neueste zuerst.
 /// Daraus wählt der Chef nach "Lkw übernehmen" den Kauf.
 async fn purchase_candidates(
     State(db): State<Db>,
@@ -1904,6 +2344,7 @@ async fn purchase_candidates(
              WHERE l.company_id = ?1 AND l.account = 'firma' AND l.kind = 'betriebskosten'
                AND l.user_id = ?2
                AND NOT EXISTS (SELECT 1 FROM purchase_links p WHERE p.ledger_id = l.id)
+               AND NOT EXISTS (SELECT 1 FROM ledger s WHERE s.reverses_id = l.id)
              ORDER BY l.id DESC LIMIT ?3",
         )?
         .query_map(params![company_id, user.id, limit], |r| {
@@ -2040,14 +2481,20 @@ async fn list_payrolls(
     let conn = db.lock().unwrap();
     role_in(&conn, company_id, user.id)?;
     let ids: Vec<i64> = conn
-        .prepare("SELECT id FROM payroll_runs WHERE company_id = ?1 ORDER BY id DESC LIMIT ?2")?
-        .query_map([company_id, limit], |r| r.get(0))?
+        .prepare(
+            "SELECT id FROM payroll_runs WHERE company_id = ?1
+               AND (?3 IS NULL OR created_at >= ?3) AND (?4 IS NULL OR created_at < ?4)
+             ORDER BY id DESC LIMIT ?2",
+        )?
+        .query_map(params![company_id, limit, q.from, q.to], |r| r.get(0))?
         .collect::<Result<_, _>>()?;
     let runs = ids
         .into_iter()
         .map(|id| payroll::run_json(&conn, id))
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(Json(json!({ "payrolls": runs })))
+    // Erlassene Forderungen im selben Zeitraum, für das Kassenbuch
+    let waivers = payroll::waivers_json(&conn, company_id, (q.from, q.to), limit)?;
+    Ok(Json(json!({ "payrolls": runs, "claim_waivers": waivers })))
 }
 
 /// Abrechnung sofort auslösen (Testbereich im Dashboard). Nur der Chef.
@@ -2150,16 +2597,41 @@ async fn sync(
         diff = Some(d);
         if d < 0 {
             costs = -d;
-            let note = format!("Abgleich: erwartet {exp} €, im Spiel {} €", b.ingame_money);
-            tx.execute(
-                "INSERT INTO ledger (company_id, account, user_id, kind, amount, note, created_at)
-                 VALUES (?1, 'firma', ?2, 'betriebskosten', ?3, ?4, ?5)",
-                params![company_id, user.id, d, note, t],
-            )?;
-            booked.push(json!({ "account": "firma", "kind": "betriebskosten", "amount": d }));
         } else {
             surplus = d;
         }
+    }
+
+    // Erst der Abgleichpunkt, damit die Betriebskosten ihn in `sync_id` tragen. Was geschrieben
+    // werden soll und die größte Buchung kommen danach dazu.
+    tx.execute(
+        "INSERT INTO sync_points (company_id, user_id, ingame_money, xp, expected, write_money,
+                                  last_ledger_id, created_at, cutoff, diff, costs_booked,
+                                  unexplained_attributed)
+         VALUES (?1, ?2, ?3, ?4, ?5, 0, 0, ?6, ?7, ?8, ?9, ?10)",
+        params![
+            company_id,
+            user.id,
+            b.ingame_money,
+            b.xp,
+            expected,
+            t,
+            cutoff,
+            diff,
+            costs,
+            surplus
+        ],
+    )?;
+    let sync_id = tx.last_insert_rowid();
+    if let (Some(exp), true) = (expected, costs > 0) {
+        let note = format!("Abgleich: erwartet {exp} €, im Spiel {} €", b.ingame_money);
+        tx.execute(
+            "INSERT INTO ledger (company_id, account, user_id, kind, amount, note, created_at,
+                                 sync_id)
+             VALUES (?1, 'firma', ?2, 'betriebskosten', ?3, ?4, ?5, ?6)",
+            params![company_id, user.id, -costs, note, t, sync_id],
+        )?;
+        booked.push(json!({ "account": "firma", "kind": "betriebskosten", "amount": -costs }));
     }
 
     let advance: i64 = tx.query_row(
@@ -2174,26 +2646,9 @@ async fn sync(
     let last_ledger_id: i64 =
         tx.query_row("SELECT COALESCE(MAX(id), 0) FROM ledger", [], |r| r.get(0))?;
     tx.execute(
-        "INSERT INTO sync_points (company_id, user_id, ingame_money, xp, expected, write_money,
-                                  last_ledger_id, created_at, cutoff, diff, costs_booked,
-                                  unexplained_attributed)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-        params![
-            company_id,
-            user.id,
-            b.ingame_money,
-            b.xp,
-            expected,
-            write_money,
-            last_ledger_id,
-            t,
-            cutoff,
-            diff,
-            costs,
-            surplus
-        ],
+        "UPDATE sync_points SET write_money = ?1, last_ledger_id = ?2 WHERE id = ?3",
+        params![write_money, last_ledger_id, sync_id],
     )?;
-    let sync_id = tx.last_insert_rowid();
     let mut unexplained = Value::Null;
     if surplus > 0 {
         tx.execute(

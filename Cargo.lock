@@ -2702,7 +2702,7 @@ dependencies = [
 
 [[package]]
 name = "spedhub-launcher"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "axum",
  "eframe",
@@ -2719,7 +2719,7 @@ dependencies = [
 
 [[package]]
 name = "spedhub-plugin"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "axum",
  "scs-sdk-plugin",
@@ -2732,7 +2732,7 @@ dependencies = [
 
 [[package]]
 name = "spedhub-save"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "aes",
  "cbc",
@@ -2744,7 +2744,7 @@ dependencies = [
 
 [[package]]
 name = "spedhub-server"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "argon2",
  "axum",

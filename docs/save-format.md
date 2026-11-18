@@ -23,11 +23,20 @@ Test mit ETS2 1.62, Spielstand mit `spedhub-save` gebaut (Lkw eingesetzt):
 - **Das Spiel vergibt beim Speichern alle `_nameless`-Namen neu.** Von den Namen, die `spedhub-save` vergeben hat, ist danach keiner mehr da. Unit-Namen taugen also nicht, um einen Lkw über mehrere Speichervorgänge wiederzuerkennen.
 - **Das Spiel hat das Kennzeichen ersetzt.** Aus dem selbst vergebenen `"BZ PM 1411|_germany"` wurde ein vom Spiel erzeugtes Kennzeichen der Heimatstadt mit Markup (`"EF<offset ...>XU 577|germany"`). Das Kennzeichen taugt also nicht als dauerhafte Kennung eines Firmen-Lkw. SpedHub erkennt Lkw deshalb über Modell und Teile wieder, siehe [Lkw wiedererkennen](#lkw-wiedererkennen).
 
+Zweiter Test mit ETS2 1.62, frisches Profil, Launcher 0.2.0:
+
+- **Der neue Speicherplatz des Launchers erscheint im Spiel und lädt.** Der eingesetzte Lkw ist eigener und aktiver Lkw.
+- **Das Spiel übernimmt den beim Geldabgleich geschriebenen Kontostand** (`bank.money_account` und `info_money_account`).
+- **Kein `Economy reset - company mismatch` mit einem frischen Profil.** Der Reset beim ersten Test lag am alten Spielstand, nicht am Einsetzen.
+- **Das Plugin lädt** (Log: "SpedHub: aktiv"). Herzschläge kommen beim Server an, `job.delivered` kommt mit Fracht, Start- und Zielstadt, Strecke und Zeitpunkt an.
+- **Kennzeichen können zwischen Lkw kollidieren.** Ein eingesetzter Actros (DD RI 772) bekam im Spiel das Kennzeichen `"BZ PM 1411|_germany"`. Das ist das Wunschkennzeichen aus einem anderen Profil desselben Spielers, also das Kennzeichen eines anderen Firmen-Lkw. Ein Kennzeichen allein identifiziert einen Firmen-Lkw deshalb nicht, es muss zusammen mit dem Modell passen.
+
+  Vermutliche Ursache, im Code nachvollzogen: Der Bauplan eines Firmen-Lkw (`TruckPackage.license_plate`) trägt das Kennzeichen aus dem Spielstand, aus dem der Chef ihn übernommen hat, und der Launcher hat bis November 2026 genau dieses Kennzeichen eingesetzt (`package_from_checkout` übernahm nur Zustand und Kilometerstand vom Server, nicht `trucks.plate`). Stammte der Bauplan aus einem Spielstand, in dem der Lkw das Wunschkennzeichen des Profils trug, kam dieses Kennzeichen in jeden Spielstand, in den der Lkw eingesetzt wurde, auch wenn auf dem Server ein anderes stand. Seitdem setzt der Launcher beim Einsetzen das Kennzeichen vom Server, siehe [Kennzeichen](#kennzeichen). Ob das Spiel selbst Kennzeichen durch das Wunschkennzeichen ersetzt, ist damit nicht ausgeschlossen und offen.
+
 Noch offen dazu:
 
 - Warum das Spiel das Kennzeichen ersetzt und ob es das bei jedem Laden tut oder nur einmal.
-- Beim Laden stand im Log `Economy reset - company mismatch`. Dieselbe Meldung kam auch beim Laden eines unveränderten alten Spielstands mit laufendem Auftrag. Ob das Einsetzen sie auslöst, ist offen.
-- Ob ein vom Launcher angelegter neuer Speicherplatz im Spiel erscheint, siehe [Neuer Speicherplatz](#neuer-speicherplatz).
+- Ob das Spiel ein vom Launcher gesetztes Firmen-Kennzeichen (`NL 001|_germany`) behält, nach dem Laden und nach dem nächsten Autosave. Prüfschritte stehen unter [Kennzeichen](#kennzeichen).
 
 `testdata/nach_spiel_neues_kennzeichen.sii` bildet das nach: `erwartet_nach_einsetzen.sii` mit neuen Unit-Namen, einem Kennzeichen mit Markup und 425 km mehr.
 
@@ -173,6 +182,12 @@ Das Spiel kann ein selbst vergebenes Kennzeichen durch eins mit Markup ersetzen 
 
 Zum Suchen und Vergleichen nimmt `spedhub-save` den Text vor dem `|`, ersetzt jedes Markup-Tag durch ein Leerzeichen und vergleicht ohne Rücksicht auf Groß- und Kleinschreibung. Aus dem ersten Beispiel wird so `DD RI 772`. Neu gesetzte Kennzeichen sind immer selbst vergebene, mit Großbuchstaben, Ziffern, Leerzeichen, Punkt und Bindestrich, höchstens 16 Zeichen.
 
+**Kennzeichen der Firmen-Lkw.** Jeder Firmen-Lkw hat auf dem Server ein eigenes Kennzeichen (`trucks.plate`), das der Chef beim Anlegen festlegt oder das der Server vorschlägt (Kürzel der Firma und Nummer, etwa `NL 001`). Beim Einsetzen setzt der Launcher dieses Kennzeichen ins Paket, bevor `insert_truck` läuft: als selbst vergebenes Kennzeichen `<TEXT>|_<land>` mit dem Land aus dem Kennzeichen im Bauplan (`custom_plate` und `plate_country`). Aus `DD<...>RI 772|germany` im Bauplan und `NL 001` auf dem Server wird `NL 001|_germany`. Der Bauplan selbst bleibt, wie er ist. Lässt sich das Kennzeichen vom Server nicht so setzen (andere Zeichen, mehr als 16), bricht das Einsetzen mit einer Meldung ab, der Chef ändert es dann im Dashboard, auch während der Leihe. So ein Kennzeichen kann nur aus der Zeit vor der Prüfung stammen: Seitdem prüft der Server es beim Anlegen, Ändern und Ausleihen und übernimmt es bei der Rückgabe nicht. Ein Firmen-Lkw von vor dieser Fassung bekommt beim nächsten Einsetzen sein Kennzeichen vom Server, umgebaut wird nichts.
+
+Weil auch dann ein Kennzeichen kollidieren kann (das Spiel ersetzt es, oder ein eigener Lkw des Fahrers heißt zufällig gleich), zählt es nirgends allein: Der Server ordnet einen Herzschlag nur zu, wenn auch das Modell passt, und die Rückgabe nimmt einen Lkw über das Kennzeichen nur, wenn sein Modell zum Bauplan passt, sonst sucht sie über die Teile.
+
+Noch im Spiel zu prüfen: Behält das Spiel das gesetzte Kennzeichen? Dazu einen Lkw mit Firmen-Kennzeichen (etwa `NL 001`) einsetzen lassen, den neuen Speicherplatz laden, im Lkw-Manager und am Lkw das Kennzeichen ansehen und im Log des Plugins (Herzschlag, Dashboard unter Fahrer) das gemeldete Kennzeichen notieren. Dann einen Autosave abwarten (oder speichern), im Spielstand `license_plate` der `vehicle`-Unit lesen (`spedhub-save decode`) und prüfen, ob dort weiter `"NL 001|_germany"` steht. Dasselbe nach einem zweiten Laden. Wird es ersetzt, das neue Kennzeichen notieren und ob es das Wunschkennzeichen des Profils ist.
+
 ## Lkw wiedererkennen
 
 Weil das Spiel Unit-Namen und Kennzeichen ersetzt, findet `spedhub_save::find_package_truck` den Lkw zu einem Paket ohne beides:
@@ -183,6 +198,8 @@ Weil das Spiel Unit-Namen und Kennzeichen ersetzt, findet `spedhub_save::find_pa
 - Die `data_path`-Listen stimmen zu mindestens 80 Prozent überein (`DEFAULT_MIN_MATCH`). Gemessen wird der Anteil der gemeinsamen Einträge an allen Einträgen beider Listen, jeder Eintrag einmal. Getauschte, fehlende und zusätzliche Teile zählen so gleich. Der Test-Scania hat 74 verschiedene Teile. Mit drei getauschten sind es 92 Prozent, bei 80 Prozent verträgt er bis zu acht.
 
 Passen mehrere, gewinnt die größte Übereinstimmung. Liegen die besten gleichauf, etwa bei zwei baugleichen Lkw, ist das ein Fehler (`AmbiguousTruck`) und kein Raten.
+
+Das Modell kommt aus dem `data_path` der Form `/def/vehicle/truck/<modell>/data.sii`, etwa `scania.s_2016`. Mit der Telemetrie vergleicht SpedHub über `spedhub_save::model_key`: klein geschrieben, ohne Präfix `vehicle.`, und hat das Modell keinen Punkt, kommt die Marke (`brand_id`) davor. So ergeben `scania.s_2016` aus dem Spielstand und `brand_id` `scania` mit `id` `s_2016`, `scania.s_2016` oder `vehicle.scania.s_2016` aus dem SDK denselben Schlüssel. Welche Form `id` im Spiel hat, ist nicht geprüft.
 
 ## Lkw einsetzen
 
@@ -229,7 +246,7 @@ Der Kontostand steht in `bank.money_account`, immer in Euro, als ganze Zahl. Der
 
 `info.sii` hat nur die eine Unit `save_container`. Sie enthält außerdem Name, Spielzeit, Save-Version (`version: 105`), Erfahrungspunkte und die DLC-Liste (`dependencies[]`).
 
-Beim Geldabgleich setzt der Launcher beide Felder auf den Betrag, den der Server nennt (Lohnkonto plus Betriebsvorschuss), und schreibt das als neuen Speicherplatz. Noch nicht im Spiel geprüft ist, ob das Spiel den geänderten Kontostand übernimmt.
+Beim Geldabgleich setzt der Launcher beide Felder auf den Betrag, den der Server nennt (Lohnkonto plus Betriebsvorschuss), und schreibt das als neuen Speicherplatz. Das Spiel übernimmt den Kontostand (im Spiel bestätigt, ETS2 1.62).
 
 ## Erfahrung und Level
 
@@ -249,11 +266,11 @@ Quellen:
 - TS SE Tool (Apache-2.0), `FormMethods.cs`, Tabelle `PlayerLevelUps` für ETS2, und `Economy.getPlayerLvl()` für die Rechnung ab Level 31. Der Server rechnet nach dieser Tabelle (`server/src/levels.rs`), Code ist nicht übernommen.
 - Unabhängig davon nennt die Spielanleitung von gamepressure.com ("ETS2: Experience") dieselben Summen für Level 1 bis 9 (200, 700, 1400, 2300, 3300, 4400, 5700, 7300, 9000).
 
-Eigentlich stehen die Werte in `def/economy_data.sii` im Archiv des Spiels. Die Datei ist hier nicht nachgelesen. Wirtschafts-Mods können die Tabelle ändern. Der Server speichert deshalb immer die Erfahrungspunkte selbst und rechnet das Level erst bei Bedarf, eine andere Tabelle lässt sich also nachträglich einsetzen. Ob das berechnete Level zu dem passt, das das Spiel anzeigt, ist im Spiel noch nicht geprüft.
+Eigentlich stehen die Werte in `def/economy_data.sii` im Archiv des Spiels. Die Datei ist hier nicht nachgelesen. Wirtschafts-Mods können die Tabelle ändern. Die Mod von SpedHub (`docs/wirtschafts-mod.md`) ändert nur die Werte für den Erlös, die Erfahrung bleibt. Der Server speichert deshalb immer die Erfahrungspunkte selbst und rechnet das Level erst bei Bedarf, eine andere Tabelle lässt sich also nachträglich einsetzen. Ob das berechnete Level zu dem passt, das das Spiel anzeigt, ist im Spiel noch nicht geprüft.
 
 ## Neuer Speicherplatz
 
-Noch nicht im Spiel geprüft. Der Launcher schreibt einen geliehenen Lkw nicht in einen vorhandenen Speicherplatz, sondern legt einen neuen an:
+Im Spiel bestätigt (ETS2 1.62): Der neue Speicherplatz erscheint und lädt. Der Launcher schreibt einen geliehenen Lkw nicht in einen vorhandenen Speicherplatz, sondern legt einen neuen an:
 
 - Ordner ist die nächste freie Nummer unter `save\` (`1`, `2`, …), so wie das Spiel eigene Spielstände nummeriert.
 - `game.sii` ist der neueste Spielstand mit eingesetztem Lkw, als Klartext.
@@ -261,17 +278,16 @@ Noch nicht im Spiel geprüft. Der Launcher schreibt einen geliehenen Lkw nicht i
 - Beim Einsetzen setzt der Launcher auch den Kontostand in `game.sii`, Einsetzen und Geldabgleich ergeben zusammen einen Speicherplatz. Ein Abgleich ohne Lkw heißt `"SpedHub: Geldabgleich"`.
 - `preview.tga` fehlt, wie bei Autosaves.
 
-Offen ist, ob das Spiel den Speicherplatz in der Liste zeigt, ob es nach `file_time` sortiert und ob es einen Klartext-`game.sii` in einem sonst verschlüsselt gespeicherten Profil lädt.
+Offen ist noch, ob das Spiel nach `file_time` sortiert.
 ## Offen
 
-- Warum das Spiel Kennzeichen ersetzt und ob es das bei jedem Laden tut, siehe [Im Spiel bestätigt](#im-spiel-bestätigt).
-- Woher `Economy reset - company mismatch` beim Laden kommt.
+- Warum das Spiel Kennzeichen ersetzt und ob es das bei jedem Laden tut, siehe [Im Spiel bestätigt](#im-spiel-bestätigt). Ob es ein vom Launcher gesetztes Firmen-Kennzeichen behält, siehe [Kennzeichen](#kennzeichen).
+- Ob `id` aus der Konfiguration `truck` der Telemetrie dieselbe Modellkennung ist wie im Spielstand (`scania.s_2016`, mit oder ohne `vehicle.`, oder nur `s_2016` neben `brand_id`), siehe `spedhub_save::model_key`.
 - Was mit `truck_profit_logs` passiert, wenn das Log leer ist: Der Lkw-Manager rechnet laut Community-Quellen Kilometer aus dem Log und nicht aus dem Tacho.
 - Wie ein Spielstand aussieht, in dem der Spieler gar keinen Lkw hat und auch keinen Auftrag fährt.
 - Einsetzen in ein Profil, das schon eigene Lkw hat, und Entfernen des aktiven Lkw mit Ersatz: so gebaut wie oben beschrieben, im Spiel nicht geprüft.
 - Wie das Spiel ein `game.sii` als Klartext schreibt (`g_save_format 2`): Zeilenende, Einrückung, Dateiende.
 - Ob `owned_trucks[]` beim Entfernen eines Lkw angepasst werden muss.
-- Ob ein vom Launcher angelegter Speicherplatz im Spiel erscheint und lädt, siehe oben.
-- Ob das Spiel einen geänderten Kontostand übernimmt und ob `info_players_experience` immer gleich `economy.experience_points` ist.
+- Ob `info_players_experience` immer gleich `economy.experience_points` ist.
 - Ob das aus den Erfahrungspunkten berechnete Level zu dem passt, das das Spiel anzeigt.
 - Lkw mit Mod-Teilen.

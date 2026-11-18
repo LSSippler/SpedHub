@@ -45,7 +45,8 @@ CREATE TABLE IF NOT EXISTS trucks (
     UNIQUE (company_id, plate)
 );
 -- Frühere Kennzeichen eines Lkw. Das Spiel kann das Kennzeichen ersetzen, der Launcher meldet
--- das neue bei der Rückgabe. Über die alten lässt sich Telemetrie noch zuordnen.
+-- das neue bei der Rückgabe, und der Chef kann es ändern. Über die alten lässt sich Telemetrie
+-- noch zuordnen, und ein Vorschlag für ein neues Kennzeichen nimmt keins davon.
 CREATE TABLE IF NOT EXISTS truck_plates (
     truck_id     INTEGER NOT NULL REFERENCES trucks(id),
     plate        TEXT NOT NULL,
@@ -133,6 +134,19 @@ CREATE TABLE IF NOT EXISTS wage_claims (
     payroll_id  INTEGER NOT NULL REFERENCES payroll_runs(id),
     created_at  INTEGER NOT NULL
 );
+-- Erlassene Lohnforderungen: Der Chef verzichtet für die Firma nicht, sondern streicht einem
+-- Fahrer einen Teil seiner offenen Forderung, etwa nach dem Storno eines Auftrags, dessen Lohn
+-- die Kasse nicht mehr zahlen konnte. Ebenfalls ein Journal, Einträge werden nie geändert. Die
+-- offene Forderung ist die Summe von wage_claims minus die Summe hier (siehe payroll::open_claim).
+CREATE TABLE IF NOT EXISTS wage_claim_waivers (
+    id          INTEGER PRIMARY KEY,
+    company_id  INTEGER NOT NULL REFERENCES companies(id),
+    user_id     INTEGER NOT NULL REFERENCES users(id),
+    amount      INTEGER NOT NULL CHECK (amount > 0),
+    reason      TEXT NOT NULL,
+    booked_by   INTEGER NOT NULL REFERENCES users(id),
+    created_at  INTEGER NOT NULL
+);
 -- Abgleichpunkte: was der Launcher im Spielstand vorgefunden hat und was er schreiben sollte.
 -- Grundlage für den nächsten Abgleich ist write_money, wenn written = 1, sonst ingame_money.
 -- last_ledger_id: größte Buchung beim Abgleich. Ereignisse mit Zeitpunkt wählt seit November
@@ -165,7 +179,7 @@ CREATE TABLE IF NOT EXISTS unexplained (
 );
 -- Wer gerade fährt: der letzte Herzschlag je Fahrer und Firma. Das ist Zustand, kein Journal,
 -- jede Meldung überschreibt die vorige. `data` hält alle gemeldeten Werte als JSON. `truck_id`
--- ist der Firmen-Lkw, zu dem das Kennzeichen passt, `own_lease` = 1, wenn der Fahrer ihn
+-- ist der Firmen-Lkw, zu dem Kennzeichen und Modell passen, `own_lease` = 1, wenn der Fahrer ihn
 -- gerade geliehen hat.
 CREATE TABLE IF NOT EXISTS presence (
     company_id  INTEGER NOT NULL REFERENCES companies(id),
@@ -198,6 +212,22 @@ CREATE TABLE IF NOT EXISTS purchase_budgets (
 );
 -- Höchstens ein offenes Budget je Firma
 CREATE UNIQUE INDEX IF NOT EXISTS one_open_budget ON purchase_budgets(company_id) WHERE closed_at IS NULL;
+-- Ereignisse, die der Server nicht gebucht hat, weil sie nicht aus dem gemeldeten Firmenprofil
+-- des Fahrers kamen (siehe `profiles.rs`). Kein Journal, nur zum Nachsehen für den Chef. `payload`
+-- ist das Ereignis, wie es ankam, als JSON. Je Fahrer und event_id nur einmal.
+CREATE TABLE IF NOT EXISTS rejected_events (
+    id          INTEGER PRIMARY KEY,
+    company_id  INTEGER NOT NULL REFERENCES companies(id),
+    user_id     INTEGER NOT NULL REFERENCES users(id),
+    event_id    TEXT NOT NULL,
+    type        TEXT NOT NULL,
+    amount      INTEGER NOT NULL,
+    profile     TEXT,
+    reason      TEXT NOT NULL,
+    payload     TEXT NOT NULL DEFAULT '{}',
+    created_at  INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS rejected_event_once ON rejected_events(company_id, user_id, event_id);
 -- Eine Betriebskosten-Buchung ist der Kauf dieses Lkw. Die Buchung selbst bleibt, wie sie ist,
 -- die Verknüpfung ändert nur die Anzeige im Kassenbuch.
 CREATE TABLE IF NOT EXISTS purchase_links (
@@ -248,8 +278,10 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("ledger", "cargo", "TEXT"),
     ("ledger", "source_city", "TEXT"),
     ("ledger", "target_city", "TEXT"),
-    // Bei Buchungen aus einem spät gemeldeten Ereignis (`betriebskosten` und
-    // `betriebskosten_korrektur`): der Abgleich, dessen Fenster neu gerechnet wurde. Sonst leer.
+    // Bei `betriebskosten` und `betriebskosten_korrektur`: der Abgleich, zu dessen Fenster sie
+    // gehören. Korrekturen aus spät gemeldeten oder stornierten Ereignissen tragen ihn seit
+    // der ersten Fassung der späten Ereignisse, Betriebskosten, die ein Abgleich selbst bucht,
+    // erst seit dem Storno. Bei älteren steht nichts, siehe `reversal::cost_sync`.
     ("ledger", "sync_id", "INTEGER"),
     // Abgleich: Zeitpunkt des gelesenen Spielstands. Der Kontostand darin enthält die
     // Ereignisse bis hier.
@@ -288,6 +320,28 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("trucks", "retired_at", "INTEGER"),
     ("trucks", "retired_reason", "TEXT"),
     ("trucks", "sale_price", "INTEGER"),
+    // Name des ETS2-Profils, das der Launcher als Firmenprofil des Fahrers gemeldet hat. Ist er
+    // gesetzt, bucht der Server nur Ereignisse aus diesem Profil. Leer bei älteren Launchern.
+    ("memberships", "profile_name", "TEXT"),
+    // Profil, aus dem das Plugin das Ereignis gemeldet hat. Leer bei älteren Plugins, beim
+    // Dashboard ohne gemeldetes Profil und bei allen anderen Buchungen.
+    ("ledger", "profile", "TEXT"),
+    // Storno: die Buchung, die diese Buchung storniert (`kind` = 'storno'). Gegenbuchungen in
+    // der Kasse beim Storno einer Lohnbuchung verweisen auf dieselbe Buchung, deshalb ist der
+    // Verweis je Konto eindeutig (Index `ledger_reverses_once` in `migrate`).
+    ("ledger", "reverses_id", "INTEGER REFERENCES ledger(id)"),
+    // Wer die Buchung von Hand ausgelöst hat, wenn es nicht der Kontoinhaber ist. Bisher nur
+    // bei Stornos: der Chef, der storniert hat. Sonst leer.
+    ("ledger", "booked_by", "INTEGER REFERENCES users(id)"),
+    // Betriebskosten dieses Fensters, die der Chef storniert und damit erlassen hat, soweit
+    // sie nicht inzwischen durch Ereignisse erklärt sind. Eine spätere Korrektur des Fensters
+    // bucht sie nicht wieder an, siehe `reconcile::rebook`.
+    ("sync_points", "costs_waived", "INTEGER NOT NULL DEFAULT 0"),
+    // Marke und Modell des Lkw, mit dem das Ereignis passiert ist, wie das Plugin sie aus der
+    // Konfiguration `truck` des SDK kennt (`brand_id` und `id`). Leer bei älteren Plugins, beim
+    // Dashboard und bei allen anderen Buchungen.
+    ("ledger", "truck_brand", "TEXT"),
+    ("ledger", "truck_model", "TEXT"),
 ];
 
 /// Fünf Lohnstufen von 40 bis 80 Cent je Kilometer: (Level im Spiel, Firmenkilometer, Cent je km).
@@ -318,6 +372,12 @@ fn migrate(conn: &Connection, now: i64) -> rusqlite::Result<()> {
                                 costs_booked = MAX(0, expected - ingame_money),
                                 unexplained_attributed = MAX(0, ingame_money - expected)
          WHERE diff IS NULL AND expected IS NOT NULL;",
+    )?;
+    // Jede Buchung lässt sich je Konto nur einmal stornieren. Erst hier, weil die Spalte in
+    // einer alten Datenbank eben erst angelegt wurde.
+    conn.execute_batch(
+        "CREATE UNIQUE INDEX IF NOT EXISTS ledger_reverses_once ON ledger(reverses_id, account)
+         WHERE reverses_id IS NOT NULL;",
     )?;
     // Tokens von vor dem Ablauf gelten ab jetzt als benutzt
     conn.execute(

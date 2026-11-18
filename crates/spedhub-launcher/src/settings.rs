@@ -3,7 +3,7 @@
 //! | Datei in `%LOCALAPPDATA%\SpedHub` | Inhalt |
 //! |---|---|
 //! | `launcher.json` | Server, Name, Firma, Profil, Spielordner, Token (unter Windows mit DPAPI verschlüsselt) |
-//! | `plugin.json` | Server, Token, Firma für das Spiel-Plugin. Das Plugin liest den Token im Klartext |
+//! | `plugin.json` | Server, Token, Firma, Firmenprofil und Pfad zu `game.log.txt` für das Spiel-Plugin. Das Plugin liest den Token im Klartext |
 //! | `backups\` | Kopien der Speicherplätze, bevor der Launcher etwas schreibt |
 
 use crate::error::{Error, Result};
@@ -131,19 +131,32 @@ struct PluginConfig<'a> {
     server_url: &'a str,
     token: &'a str,
     company_id: i64,
+    /// Angezeigter Name des Firmenprofils. Nur aus diesem Profil meldet das Plugin etwas.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profile_name: Option<&'a str>,
+    /// Vollständiger Pfad zu `game.log.txt`, daraus liest das Plugin das aktive Profil
+    #[serde(skip_serializing_if = "Option::is_none")]
+    game_log: Option<&'a Path>,
 }
 
-/// Schreibt `plugin.json` für das Spiel-Plugin.
+/// Schreibt `plugin.json` für das Spiel-Plugin. Ohne `profile_name` (kein Firmenprofil
+/// gewählt) und ohne `game_log` meldet das Plugin nichts, es weiß dann nicht, ob das aktive
+/// Profil das Firmenprofil ist. Der Launcher schreibt die Datei deshalb bei jedem Wechsel von
+/// Firma oder Firmenprofil neu.
 pub fn write_plugin_config(
     paths: &AppPaths,
     server_url: &str,
     token: &str,
     company_id: i64,
+    profile_name: Option<&str>,
+    game_log: Option<&Path>,
 ) -> Result<()> {
     let config = PluginConfig {
         server_url: server_url.trim().trim_end_matches('/'),
         token,
         company_id,
+        profile_name,
+        game_log,
     };
     let text = serde_json::to_string_pretty(&config)
         .map_err(|e| Error::Other(format!("Plugin-Konfiguration: {e}")))?;

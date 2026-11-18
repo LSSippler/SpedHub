@@ -525,6 +525,7 @@ async fn dashboard_wird_ausgeliefert() {
     assert!(html.contains("Kassenbuch"));
     assert!(html.contains(r#"betriebskosten_korrektur: "Betriebskosten, Korrektur""#));
     assert!(html.contains("Herzschlag senden") && html.contains("Passwort ändern"));
+    assert!(html.contains("Kennzeichen ändern") && html.contains("plate-suggestion"));
 }
 
 #[tokio::test]
@@ -2422,7 +2423,20 @@ impl Firma {
             .await
     }
 
-    async fn beat(&self, token: &str, body: Value) -> (StatusCode, Value) {
+    /// Herzschlag wie vom Plugin, mit Marke und Modell der Lkw aus [`Firma::truck`]
+    /// (`scania` und `s_2016`, zusammen `scania.s_2016`), wenn `body` kein `truck_model` hat.
+    /// Genau so, wie er ist, geht er mit [`Firma::beat_raw`].
+    async fn beat(&self, token: &str, mut body: Value) -> (StatusCode, Value) {
+        if let Some(o) = body.as_object_mut()
+            && !o.contains_key("truck_model")
+        {
+            o.insert("truck_brand".into(), json!("scania"));
+            o.insert("truck_model".into(), json!("s_2016"));
+        }
+        self.beat_raw(token, body).await
+    }
+
+    async fn beat_raw(&self, token: &str, body: Value) -> (StatusCode, Value) {
         self.post(
             token,
             &format!("/api/companies/{}/heartbeat", self.id),
@@ -2715,7 +2729,7 @@ async fn altes_kennzeichen_des_eigenen_lkw_schlaegt_aktuelles_eines_anderen() {
     // Der Chef gibt das frei gewordene Kennzeichen einem neuen Lkw A
     let a = f.truck("SPED 001", 5000, full_state(5000)).await;
 
-    // Der Launcher setzt B mit dem Kennzeichen aus dem Bauplan ein, also wieder "SPED 001"
+    // B fährt noch mit "SPED 001", etwa aus einem Spielstand von vor der Rückgabe
     f.checkout(&f.fahrer, b).await;
     f.clock.advance(10);
     let seen = f.clock.now();
@@ -4451,4 +4465,2462 @@ async fn lkw_verkaufen() {
         f.truck_as(&f.chef, b).await["retired"]["sale_price"],
         json!(0)
     );
+}
+
+// ------------------------------------------------------------ Nur das Firmenprofil zählt
+
+impl Firma {
+    async fn put(&self, token: &str, path: &str, body: Value) -> (StatusCode, Value) {
+        call(&self.app, "PUT", path, Some(token), Some(body)).await
+    }
+
+    /// Das Firmenprofil melden, wie es der Launcher tut
+    async fn report_profile(&self, token: &str, name: Value) -> (StatusCode, Value) {
+        self.put(
+            token,
+            &format!("/api/companies/{}/profile", self.id),
+            json!({ "profile_name": name }),
+        )
+        .await
+    }
+
+    /// Ereignis wie vom Plugin, mit Profil. Liefert Status und Antwort, ohne zu prüfen.
+    async fn event_from(
+        &self,
+        token: &str,
+        event_id: &str,
+        kind: &str,
+        amount: i64,
+        profile: Option<&str>,
+        occurred_at: Option<i64>,
+    ) -> (StatusCode, Value) {
+        let mut body = json!({ "event_id": event_id, "type": kind, "amount": amount });
+        if let Some(p) = profile {
+            body["profile"] = json!(p);
+        }
+        if let Some(t) = occurred_at {
+            body["occurred_at"] = json!(t);
+        }
+        self.post(token, &format!("/api/companies/{}/events", self.id), body)
+            .await
+    }
+
+    async fn rejected(&self, token: &str) -> (StatusCode, Value) {
+        self.get(
+            token,
+            &format!("/api/companies/{}/rejected-events", self.id),
+        )
+        .await
+    }
+}
+
+#[tokio::test]
+async fn firmenprofil_melden_und_sehen() {
+    let f = Firma::new().await;
+    // Noch nichts gemeldet
+    assert!(f.member(f.fahrer_id).await["profile_name"].is_null());
+
+    // Der Fahrer meldet sein Firmenprofil, Leerraum am Rand zählt nicht
+    let (s, r) = f
+        .report_profile(&f.fahrer, json!("  Nordfracht Müller  "))
+        .await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!(r["profile_name"], "Nordfracht Müller");
+    let (s, _) = f.report_profile(&f.chef, json!("Chefin")).await;
+    assert_eq!(s, StatusCode::OK);
+
+    // Der Chef sieht die Profile aller, der Fahrer nur seins
+    assert_eq!(
+        f.member_as(&f.chef, f.fahrer_id).await["profile_name"],
+        "Nordfracht Müller"
+    );
+    assert_eq!(
+        f.member_as(&f.chef, f.chef_id).await["profile_name"],
+        "Chefin"
+    );
+    assert_eq!(
+        f.member_as(&f.fahrer, f.fahrer_id).await["profile_name"],
+        "Nordfracht Müller"
+    );
+    let chef_seen_by_driver = f.member_as(&f.fahrer, f.chef_id).await;
+    assert!(
+        chef_seen_by_driver.get("profile_name").is_none(),
+        "{chef_seen_by_driver}"
+    );
+
+    // Unsinn: zu lang, Steuerzeichen
+    for bad in [json!("x".repeat(101)), json!("Nord\nfracht")] {
+        let (s, v) = f.report_profile(&f.fahrer, bad).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    }
+    assert_eq!(
+        f.member(f.fahrer_id).await["profile_name"],
+        "Nordfracht Müller",
+        "unverändert"
+    );
+
+    // Fremde, ohne Anmeldung, unbekannte Firma
+    let fremder = register(&f.app, "Fremder").await;
+    let (s, _) = f.report_profile(&fremder, json!("X")).await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    let (s, _) = call(
+        &f.app,
+        "PUT",
+        &format!("/api/companies/{}/profile", f.id),
+        None,
+        Some(json!({ "profile_name": "X" })),
+    )
+    .await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+    let (s, _) = f
+        .put(
+            &f.fahrer,
+            "/api/companies/999/profile",
+            json!({ "profile_name": "X" }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+
+    // Leer oder null löscht das gemeldete Profil
+    let (s, r) = f.report_profile(&f.fahrer, json!("")).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(r["profile_name"].is_null());
+    assert!(f.member(f.fahrer_id).await["profile_name"].is_null());
+    let (s, _) = f.report_profile(&f.fahrer, Value::Null).await;
+    assert_eq!(s, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn ereignis_aus_dem_firmenprofil_wird_gebucht_andere_abgelehnt() {
+    let f = Firma::new().await;
+    let (s, _) = f.report_profile(&f.fahrer, json!("Nordfracht")).await;
+    assert_eq!(s, StatusCode::OK);
+    first_sync(&f).await;
+
+    // Aus dem Firmenprofil: gebucht, mit Profil im Kassenbuch
+    let (s, r) = f
+        .event_from(
+            &f.fahrer,
+            "a-1",
+            "job_delivered",
+            1000,
+            Some("Nordfracht"),
+            Some(t(5)),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!(f.balance().await, 1000);
+    let l = f.ledger().await;
+    assert_eq!(l.len(), 1);
+    assert_eq!(l[0]["profile"], "Nordfracht");
+
+    // Aus einem privaten Profil: nicht gebucht, 422 mit Meldung, protokolliert
+    let (s, v) = f
+        .event_from(
+            &f.fahrer,
+            "p-1",
+            "job_delivered",
+            10_000,
+            Some("Privat"),
+            Some(t(10)),
+        )
+        .await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{v}");
+    let msg = v["error"].as_str().unwrap();
+    assert!(
+        msg.contains("'Privat'") && msg.contains("'Nordfracht'"),
+        "{msg}"
+    );
+    let (s, _) = f
+        .event_from(&f.fahrer, "p-2", "fined", 300, Some("Privat"), Some(t(11)))
+        .await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+    // Andere Schreibweise ist ein anderes Profil, Leerraum am Rand zählt nicht
+    let (s, _) = f
+        .event_from(
+            &f.fahrer,
+            "p-3",
+            "tollgate",
+            40,
+            Some("nordfracht"),
+            Some(t(12)),
+        )
+        .await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+    let (s, r) = f
+        .event_from(
+            &f.fahrer,
+            "a-2",
+            "tollgate",
+            40,
+            Some(" Nordfracht "),
+            Some(t(13)),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    // Ohne Profil, etwa von einem älteren Plugin: ebenso abgelehnt
+    let (s, v) = f
+        .event_from(&f.fahrer, "o-1", "fined", 100, None, Some(t(14)))
+        .await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{v}");
+    assert!(v["error"].as_str().unwrap().contains("kein Profil"));
+    // Noch einmal geschickt: wieder abgelehnt, aber nur einmal protokolliert
+    let (s, _) = f
+        .event_from(
+            &f.fahrer,
+            "p-1",
+            "job_delivered",
+            10_000,
+            Some("Privat"),
+            Some(t(10)),
+        )
+        .await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+
+    // Nichts davon ist gebucht: Kasse, Lohnkonto, Kassenbuch
+    assert_eq!(f.balance().await, 1000 - 40);
+    assert_eq!(f.wallet(f.fahrer_id).await, 0);
+    let l = f.ledger().await;
+    assert_eq!(l.len(), 2, "{l:?}");
+    assert!(l.iter().all(|e| e["profile"] == "Nordfracht"));
+
+    // Der Geldabgleich zählt nur gebuchte Ereignisse: keine Betriebskosten aus dem privaten
+    // Auftrag über 10000 Euro
+    let r = sync_written_at(&f, 2000 + 1000 - 40, 30).await;
+    assert_eq!(n(&r["expected"]), 2000 + 1000 - 40, "{r}");
+    assert_eq!(r["booked"], json!([]));
+    assert!(r["unexplained"].is_null());
+
+    // Der Chef sieht die abgelehnten Ereignisse, neueste zuerst
+    let (s, list) = f.rejected(&f.chef).await;
+    assert_eq!(s, StatusCode::OK, "{list}");
+    let e = list["entries"].as_array().unwrap();
+    assert_eq!(e.len(), 4, "{list}");
+    let ids: Vec<&str> = e.iter().map(|x| x["event_id"].as_str().unwrap()).collect();
+    assert_eq!(ids, vec!["o-1", "p-3", "p-2", "p-1"]);
+    let p1 = &e[3];
+    assert_eq!(p1["user"], "Fahrer");
+    assert_eq!(n(&p1["user_id"]), f.fahrer_id);
+    assert_eq!(p1["type"], "job_delivered");
+    assert_eq!(n(&p1["amount"]), 10_000);
+    assert_eq!(p1["profile"], "Privat");
+    assert!(p1["reason"].as_str().unwrap().contains("'Privat'"));
+    // Abgelehnt, als die Uhr des Servers noch auf 10:00 stand
+    assert_eq!(n(&p1["created_at"]), t(0));
+    assert_eq!(p1["payload"]["event_id"], "p-1");
+    assert_eq!(n(&p1["payload"]["occurred_at"]), t(10));
+    assert!(e[0]["profile"].is_null());
+    assert!(e[0]["reason"].as_str().unwrap().contains("ohne Profil"));
+
+    // Der Fahrer sieht die Liste nicht
+    let (s, _) = f.rejected(&f.fahrer).await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn ohne_gemeldetes_firmenprofil_wird_wie_bisher_gebucht() {
+    let f = Firma::new().await;
+    // Kein Profil gemeldet, etwa mit einem älteren Launcher: alles wird gebucht
+    let (s, _) = f
+        .event_from(&f.fahrer, "a-1", "job_delivered", 1000, None, None)
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    let (s, _) = f
+        .event_from(&f.fahrer, "a-2", "tollgate", 40, Some("Privat"), None)
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(f.balance().await, 960);
+    // Das Profil steht trotzdem an der Buchung
+    let l = f.ledger().await;
+    let by = |id: &str| l.iter().find(|e| e["event_id"] == id).unwrap().clone();
+    assert!(by("a-1")["profile"].is_null());
+    assert_eq!(by("a-2")["profile"], "Privat");
+    let (_, list) = f.rejected(&f.chef).await;
+    assert_eq!(list["entries"], json!([]));
+
+    // Das Firmenprofil eines anderen Fahrers gilt nicht für diesen
+    let (s, _) = f.report_profile(&f.chef, json!("Chefin")).await;
+    assert_eq!(s, StatusCode::OK);
+    let (s, _) = f
+        .event_from(&f.fahrer, "a-3", "tollgate", 10, Some("Privat"), None)
+        .await;
+    assert_eq!(s, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn herzschlag_aus_anderem_profil_aendert_presence_nicht() {
+    let f = Firma::new().await;
+    let truck = f.truck("SPED 001", 1000, full_state(1000)).await;
+    f.checkout(&f.fahrer, truck).await;
+    // Ohne gemeldetes Profil zählt jeder Herzschlag
+    let (s, r) = f
+        .beat(
+            &f.fahrer,
+            json!({ "plate": "SPED 001", "odometer_km": 1100, "profile": "Privat" }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!(r["recorded"], true);
+    let start = f.clock.now();
+    assert_eq!(n(&f.member(f.fahrer_id).await["last_seen"]), start);
+
+    let (s, _) = f.report_profile(&f.fahrer, json!("Nordfracht")).await;
+    assert_eq!(s, StatusCode::OK);
+
+    // Aus dem privaten Profil und ohne Profil: 200, aber verworfen
+    f.clock.set(start + 20);
+    for body in [
+        json!({ "plate": "SPED 001", "odometer_km": 5000, "speed_kmh": 80, "profile": "Privat" }),
+        json!({ "plate": "SPED 001", "odometer_km": 5000 }),
+    ] {
+        let (s, r) = f.beat(&f.fahrer, body.clone()).await;
+        assert_eq!(s, StatusCode::OK, "{body} {r}");
+        assert_eq!(r["recorded"], false, "{r}");
+        assert!(r["note"].as_str().unwrap().contains("Nordfracht"), "{r}");
+        assert!(r["leased_truck_id"].is_null());
+    }
+    // Presence und letzter bekannter Zustand bleiben, wie sie waren
+    let m = f.member(f.fahrer_id).await;
+    assert_eq!(n(&m["last_seen"]), start);
+    assert!(m["speed_kmh"].is_null(), "{m}");
+    let (_, _, seen_at, last_km, _) = f.truck_row(truck);
+    assert_eq!((seen_at, last_km), (Some(start), Some(1100)));
+    // Nach 31 Sekunden offline, die verworfenen Herzschläge halten ihn nicht online
+    f.clock.set(start + 31);
+    assert_eq!(f.member(f.fahrer_id).await["online"], false);
+
+    // Aus dem Firmenprofil: wieder online
+    let (s, r) = f
+        .beat(
+            &f.fahrer,
+            json!({ "plate": "SPED 001", "odometer_km": 1200, "profile": "Nordfracht" }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(r["recorded"], true);
+    assert_eq!(n(&r["leased_truck_id"]), truck);
+    let m = f.member(f.fahrer_id).await;
+    assert_eq!(m["online"], true);
+    assert_eq!(n(&m["last_seen"]), start + 31);
+    assert_eq!(f.truck_row(truck).3, Some(1200));
+}
+
+#[tokio::test]
+async fn alte_datenbank_bekommt_firmenprofil_und_protokoll() {
+    let path = std::env::temp_dir().join(format!("spedhub-profil-{}.db", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    {
+        let c = rusqlite::Connection::open(&path).unwrap();
+        c.execute_batch(
+            "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                pw_hash TEXT NOT NULL, created_at INTEGER NOT NULL);
+             CREATE TABLE companies (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                invite_code TEXT NOT NULL UNIQUE,
+                wage_percent INTEGER NOT NULL DEFAULT 30 CHECK (wage_percent BETWEEN 0 AND 100),
+                created_at INTEGER NOT NULL);
+             CREATE TABLE memberships (company_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
+                role TEXT NOT NULL, joined_at INTEGER NOT NULL, PRIMARY KEY (company_id, user_id));
+             CREATE TABLE ledger (id INTEGER PRIMARY KEY, company_id INTEGER NOT NULL,
+                account TEXT NOT NULL CHECK (account IN ('firma', 'fahrer')), user_id INTEGER,
+                kind TEXT NOT NULL, amount INTEGER NOT NULL, event_id TEXT,
+                note TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL);
+             INSERT INTO users VALUES (1, 'Alt', 'x', 1000);
+             INSERT INTO companies VALUES (1, 'Altfracht', 'ABCD1234', 30, 1000);
+             INSERT INTO memberships VALUES (1, 1, 'chef', 1000);
+             INSERT INTO ledger VALUES (1, 1, 'firma', 1, 'maut', -50, 'toll-1', '', 2000);",
+        )
+        .unwrap();
+    }
+    let db = spedhub_server::db::open(path.to_str().unwrap()).unwrap();
+    {
+        let conn = db.lock().unwrap();
+        // Die alte Mitgliedschaft und die alte Buchung haben kein Profil
+        let profile: Option<String> = conn
+            .query_row("SELECT profile_name FROM memberships", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(profile, None);
+        let (amount, profile): (i64, Option<String>) = conn
+            .query_row("SELECT amount, profile FROM ledger", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!((amount, profile), (-50, None));
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM rejected_events", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0);
+    }
+    // Zweites Öffnen geht auch, danach läuft alles wie in einer neuen Datenbank
+    drop(db);
+    let db = spedhub_server::db::open(path.to_str().unwrap()).unwrap();
+    let f = Firma::with_db(db).await;
+    let (s, _) = f.report_profile(&f.fahrer, json!("Nordfracht")).await;
+    assert_eq!(s, StatusCode::OK);
+    let (s, _) = f
+        .event_from(&f.fahrer, "x-1", "tollgate", 10, Some("Privat"), None)
+        .await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+    let (s, _) = f
+        .event_from(&f.fahrer, "x-2", "tollgate", 10, Some("Nordfracht"), None)
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    let (_, list) = f.rejected(&f.chef).await;
+    assert_eq!(list["entries"].as_array().unwrap().len(), 1);
+    drop(f);
+    let _ = std::fs::remove_file(&path);
+}
+
+// ------------------------------------------------------------ Storno
+
+impl Firma {
+    /// Buchungen stornieren, wie der Chef im Kassenbuch
+    async fn reverse(&self, token: &str, ids: &[i64], reason: &str) -> (StatusCode, Value) {
+        self.post(
+            token,
+            &format!("/api/companies/{}/ledger/reverse", self.id),
+            json!({ "entry_ids": ids, "reason": reason }),
+        )
+        .await
+    }
+
+    /// Stornieren, das klappen muss
+    async fn reverse_ok(&self, ids: &[i64], reason: &str) -> Value {
+        let (s, r) = self.reverse(&self.chef, ids, reason).await;
+        assert_eq!(s, StatusCode::OK, "{r}");
+        r
+    }
+
+    /// id der Buchung eines Ereignisses
+    async fn entry_id(&self, event_id: &str) -> i64 {
+        let l = self.ledger().await;
+        n(&l.iter()
+            .find(|e| e["event_id"] == event_id)
+            .unwrap_or_else(|| panic!("kein Ereignis {event_id}"))["id"])
+    }
+
+    /// Diff, gebuchte und erlassene Betriebskosten eines Abgleichs
+    fn sync_row(&self, sync_id: i64) -> (i64, i64, i64) {
+        let conn = self.db.lock().unwrap();
+        conn.query_row(
+            "SELECT diff, costs_booked, costs_waived FROM sync_points WHERE id = ?1",
+            [sync_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap()
+    }
+
+    /// Wirkung eines Stornos für den Fahrer
+    fn driver_of<'a>(&self, r: &'a Value) -> &'a Value {
+        self.driver_of_user(r, self.fahrer_id)
+    }
+
+    fn driver_of_user<'a>(&self, r: &'a Value, user_id: i64) -> &'a Value {
+        r["drivers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["user_id"] == user_id)
+            .unwrap_or_else(|| panic!("kein {user_id} in {r}"))
+    }
+
+    fn ledger_count(&self) -> i64 {
+        let conn = self.db.lock().unwrap();
+        conn.query_row("SELECT COUNT(*) FROM ledger", [], |r| r.get(0))
+            .unwrap()
+    }
+}
+
+#[tokio::test]
+async fn storno_einer_buchung() {
+    let f = Firma::new().await;
+    f.event(&f.fahrer, "job-1", "job_delivered", 1000, Some(400.0))
+        .await;
+    let job = f.entry_id("job-1").await;
+    let before = f.entry(job).await;
+    assert_eq!(before["reversible"], true);
+    assert!(before["reversed_by"].is_null());
+    assert_eq!(f.member(f.fahrer_id).await["company_km"], 400);
+
+    f.clock.advance(3600);
+    let now = f.clock.now();
+    let r = f.reverse_ok(&[job], "  Aus dem privaten Profil  ").await;
+    let e = r["entries"].as_array().unwrap();
+    assert_eq!(e.len(), 1, "{r}");
+    let storno = &e[0];
+    assert_eq!(
+        (
+            &storno["kind"],
+            &storno["account"],
+            n(&storno["amount"]),
+            n(&storno["reverses_id"]),
+            n(&storno["user_id"]),
+            &storno["note"],
+            n(&storno["created_at"])
+        ),
+        (
+            &json!("storno"),
+            &json!("firma"),
+            -1000,
+            job,
+            f.fahrer_id,
+            &json!("Aus dem privaten Profil"),
+            now
+        )
+    );
+    assert_eq!(n(&r["balance"]), 0);
+    let d = f.driver_of(&r);
+    assert_eq!(d["user"], "Fahrer");
+    assert_eq!(n(&d["wallet"]), 0);
+    // Noch kein Abgleich: zählt nirgends
+    assert_eq!(
+        (&d["corrections"], n(&d["open_window"]), &d["waived"]),
+        (&json!([]), 0, &json!([]))
+    );
+
+    // Das Original bleibt, wie es war, und sagt, wer es wann warum storniert hat
+    let after = f.entry(job).await;
+    for k in [
+        "account",
+        "kind",
+        "amount",
+        "note",
+        "created_at",
+        "event_id",
+        "distance_km",
+        "game_amount",
+        "user_id",
+    ] {
+        assert_eq!(after[k], before[k], "{k}");
+    }
+    assert_eq!(after["reversed_by"], storno["id"]);
+    assert_eq!(n(&after["reversed_at"]), now);
+    assert_eq!(after["reverse_reason"], "Aus dem privaten Profil");
+    assert_eq!(after["reversed_by_user"], "Chefin");
+    assert_eq!(after["reversible"], false);
+    // Das Storno verweist auf das Original, mit dessen Art und Zeitpunkt
+    let s = f.entry(n(&storno["id"])).await;
+    assert_eq!(n(&s["reverses_id"]), job);
+    assert_eq!(s["reverses_kind"], "auftrag");
+    assert_eq!(s["reverses_created_at"], before["created_at"]);
+    assert_eq!(s["booked_by_user"], "Chefin");
+    assert_eq!(s["user"], "Fahrer");
+    assert_eq!(s["reversible"], false);
+    assert!(s["event_id"].is_null() && s["game_amount"].is_null());
+    // In der Datenbank: Original unverändert, Storno mit dem Chef in booked_by
+    {
+        let conn = f.db.lock().unwrap();
+        let (amount, kind, rev): (i64, String, Option<i64>) = conn
+            .query_row(
+                "SELECT amount, kind, reverses_id FROM ledger WHERE id = ?1",
+                [job],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!((amount, kind.as_str(), rev), (1000, "auftrag", None));
+        let by: i64 = conn
+            .query_row(
+                "SELECT booked_by FROM ledger WHERE id = ?1",
+                [n(&storno["id"])],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(by, f.chef_id);
+    }
+    // Kasse und Firmenkilometer ohne den Auftrag. Der Fahrer sieht das Storno auch.
+    assert_eq!(f.balance().await, 0);
+    assert_eq!(f.member(f.fahrer_id).await["company_km"], 0);
+    let (s, l) = f
+        .get(&f.fahrer, &format!("/api/companies/{}/ledger", f.id))
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(l["entries"][0]["kind"], "storno");
+    assert_eq!(l["entries"][1]["reverse_reason"], "Aus dem privaten Profil");
+}
+
+#[tokio::test]
+async fn storno_mehrerer_buchungen_alles_oder_nichts() {
+    let f = Firma::new().await;
+    f.event(&f.fahrer, "a", "job_delivered", 1000, None).await;
+    f.event(&f.fahrer, "b", "tollgate", 40, None).await;
+    f.event(&f.fahrer, "c", "fined", 100, None).await;
+    let (a, b, c) = (
+        f.entry_id("a").await,
+        f.entry_id("b").await,
+        f.entry_id("c").await,
+    );
+    let count = f.ledger_count();
+
+    // Eine unbekannte id: nichts gebucht, die Meldung nennt sie
+    let (s, v) = f
+        .reverse(&f.chef, &[a, b, 999_999], "privates Profil")
+        .await;
+    assert_eq!(s, StatusCode::NOT_FOUND, "{v}");
+    assert!(
+        v["error"].as_str().unwrap().contains("Buchung 999999"),
+        "{v}"
+    );
+    assert_eq!(f.ledger_count(), count);
+    assert_eq!(f.balance().await, 960);
+
+    // Mehrere auf einmal, doppelt genannte zählen einmal
+    let r = f.reverse_ok(&[b, a, a], "privates Profil").await;
+    let ids: Vec<i64> = r["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| n(&e["reverses_id"]))
+        .collect();
+    assert_eq!(ids, vec![a, b], "älteste zuerst");
+    assert_eq!(n(&r["balance"]), 0);
+    assert_eq!(f.ledger_count(), count + 2);
+
+    // Doppeltes Storno: 409, auch zusammen mit einer stornierbaren, und c bleibt
+    let (s, v) = f.reverse(&f.chef, &[c, a], "noch einmal").await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    let msg = v["error"].as_str().unwrap();
+    assert!(
+        msg.contains(&format!("Buchung {a} (Auftrag")) && msg.contains("schon storniert"),
+        "{msg}"
+    );
+    assert_eq!(f.ledger_count(), count + 2);
+    assert_eq!(f.entry(c).await["reversible"], true);
+    assert_eq!(f.wallet(f.fahrer_id).await, -100);
+
+    // Storno eines Stornos: 409
+    let storno = n(&r["entries"][0]["id"]);
+    let (s, v) = f.reverse(&f.chef, &[storno], "zurück").await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    assert!(
+        v["error"].as_str().unwrap().contains("selbst ein Storno"),
+        "{v}"
+    );
+    assert_eq!(f.ledger_count(), count + 2);
+
+    // Die letzte geht
+    f.reverse_ok(&[c], "privates Profil").await;
+    assert_eq!(f.wallet(f.fahrer_id).await, 0);
+    assert_eq!(f.balance().await, 0);
+}
+
+#[tokio::test]
+async fn storno_nur_durch_den_chef_mit_grund() {
+    let f = Firma::new().await;
+    f.event(&f.fahrer, "a", "job_delivered", 1000, None).await;
+    let a = f.entry_id("a").await;
+    let count = f.ledger_count();
+
+    // Fahrer: 403
+    let (s, v) = f.reverse(&f.fahrer, &[a], "privates Profil").await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "{v}");
+    // Ohne Grund, zu kurz, zu lang, mit Zeilenumbruch: 400
+    for reason in [
+        json!(null),
+        json!(""),
+        json!("  ab  "),
+        json!("x".repeat(201)),
+        json!("a\nb c"),
+    ] {
+        let (s, v) = f
+            .post(
+                &f.chef,
+                &format!("/api/companies/{}/ledger/reverse", f.id),
+                json!({ "entry_ids": [a], "reason": reason }),
+            )
+            .await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{reason} {v}");
+    }
+    let (s, v) = f
+        .post(
+            &f.chef,
+            &format!("/api/companies/{}/ledger/reverse", f.id),
+            json!({ "entry_ids": [a] }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    assert!(v["error"].as_str().unwrap().contains("Grund"));
+    // Keine oder zu viele Buchungen: 400
+    let (s, _) = f.reverse(&f.chef, &[], "privates Profil").await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    let many: Vec<i64> = (1..=501).collect();
+    let (s, v) = f.reverse(&f.chef, &many, "privates Profil").await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    assert!(v["error"].as_str().unwrap().contains("500"));
+
+    // Eine Buchung aus einer fremden Firma: 404, und in der fremden Firma ist die Chefin nicht
+    let fremdchef = register(&f.app, "Fremdchef").await;
+    let (_, g) = call(
+        &f.app,
+        "POST",
+        "/api/companies",
+        Some(&fremdchef),
+        Some(json!({ "name": "Südfracht" })),
+    )
+    .await;
+    let gid = n(&g["id"]);
+    let (s, _) = f
+        .post(
+            &fremdchef,
+            &format!("/api/companies/{gid}/events"),
+            json!({ "event_id": "x", "type": "job_delivered", "amount": 5000 }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    let (_, gl) = f
+        .get(&fremdchef, &format!("/api/companies/{gid}/ledger"))
+        .await;
+    let foreign = n(&gl["entries"][0]["id"]);
+    let (s, v) = f.reverse(&f.chef, &[a, foreign], "privates Profil").await;
+    assert_eq!(s, StatusCode::NOT_FOUND, "{v}");
+    assert!(
+        v["error"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("Buchung {foreign}"))
+    );
+    let (s, _) = f
+        .post(
+            &f.chef,
+            &format!("/api/companies/{gid}/ledger/reverse"),
+            json!({ "entry_ids": [foreign], "reason": "fremd" }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    assert_eq!(f.ledger_count(), count + 1, "nur die Buchung der Südfracht");
+    assert_eq!(f.balance().await, 1000);
+
+    // Korrekturen aus dem Geldabgleich lassen sich nicht stornieren
+    first_sync(&f).await;
+    sync_written_at(&f, 1000, 30).await;
+    f.clock.set(t(35));
+    let e = f
+        .event_at(&f.fahrer, "maut", "tollgate", 1000, None, Some(t(10)))
+        .await;
+    assert_eq!(e["late"]["booked"][0]["kind"], "betriebskosten_korrektur");
+    let k = n(&f.entries("betriebskosten_korrektur").await[0]["id"]);
+    assert_eq!(f.entry(k).await["reversible"], false);
+    let (s, v) = f.reverse(&f.chef, &[k], "falsch").await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    assert!(v["error"].as_str().unwrap().contains("Korrektur"), "{v}");
+}
+
+#[tokio::test]
+async fn storno_wirkt_auf_kasse_und_lohnkonto() {
+    let f = Firma::new().await;
+    f.event(&f.fahrer, "job", "job_delivered", 1000, Some(500.0))
+        .await;
+    // Lohn: 500 km mal 40 Cent plus 50 Euro Pauschale
+    let (s, r) = f
+        .post(
+            &f.chef,
+            &format!("/api/companies/{}/payrolls/run", f.id),
+            json!({}),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!(f.wallet(f.fahrer_id).await, 250);
+    assert_eq!(f.balance().await, 750);
+    f.event(&f.fahrer, "strafe", "fined", 100, None).await;
+    f.event(&f.fahrer, "abbruch", "job_cancelled", 70, None)
+        .await;
+    f.event(&f.fahrer, "maut", "tollgate", 50, None).await;
+    f.event(&f.fahrer, "faehre", "ferry", 30, None).await;
+    assert_eq!(f.wallet(f.fahrer_id).await, 80);
+    assert_eq!(f.balance().await, 670);
+
+    // Strafe und Abbruch storniert: Das Lohnkonto steigt wieder
+    let ids = [f.entry_id("strafe").await, f.entry_id("abbruch").await];
+    let r = f.reverse_ok(&ids, "privates Profil").await;
+    assert_eq!(n(&f.driver_of(&r)["wallet"]), 250);
+    assert_eq!(f.balance().await, 670);
+    // Maut und Fähre: Die Kasse bekommt das Geld zurück
+    let ids = [f.entry_id("maut").await, f.entry_id("faehre").await];
+    let r = f.reverse_ok(&ids, "privates Profil").await;
+    assert_eq!(n(&r["balance"]), 750);
+    // Der Auftrag: Die Kasse verliert den Erlös, den gezahlten Lohn holt der Server nicht zurück
+    let r = f
+        .reverse_ok(&[f.entry_id("job").await], "privates Profil")
+        .await;
+    assert_eq!(n(&r["balance"]), -250);
+    assert_eq!(f.wallet(f.fahrer_id).await, 250);
+    assert_eq!(f.member(f.fahrer_id).await["company_km"], 0);
+
+    // Die Summe der Lohnabrechnung in der Kasse lässt sich nicht stornieren
+    let total = f
+        .entries("lohn")
+        .await
+        .into_iter()
+        .find(|e| e["account"] == "firma")
+        .unwrap();
+    assert_eq!(total["reversible"], false);
+    let (s, v) = f.reverse(&f.chef, &[n(&total["id"])], "zurück").await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    assert!(
+        v["error"]
+            .as_str()
+            .unwrap()
+            .contains("Lohnbuchungen der einzelnen Fahrer")
+    );
+    // Die Lohnbuchung des Fahrers schon: Lohnkonto runter, Kasse rauf
+    let runs = f.payrolls().await;
+    let l = line(&runs[0], f.fahrer_id);
+    let lohn = n(&l["entry_id"]);
+    assert!(l["reversed_by"].is_null());
+    assert_eq!(f.entry(lohn).await["reversible"], true);
+    let r = f.reverse_ok(&[lohn], "Auftrag war privat").await;
+    let e = r["entries"].as_array().unwrap();
+    assert_eq!(e.len(), 2, "Storno und Gegenbuchung in der Kasse: {r}");
+    let by = |account: &str| {
+        e.iter()
+            .find(|x| x["account"] == account)
+            .unwrap_or_else(|| panic!("{account} fehlt in {r}"))
+    };
+    assert_eq!(
+        (n(&by("fahrer")["amount"]), n(&by("firma")["amount"])),
+        (-250, 250)
+    );
+    assert!(e.iter().all(|x| n(&x["reverses_id"]) == lohn));
+    assert_eq!(n(&r["balance"]), 0);
+    assert_eq!(n(&f.driver_of(&r)["wallet"]), 0);
+    assert_eq!(f.wallet(f.fahrer_id).await, 0);
+    // Die Abrechnung zeigt das Storno an der Zeile, die Lohnbuchung ist danach nicht mehr stornierbar
+    let runs = f.payrolls().await;
+    let l = line(&runs[0], f.fahrer_id);
+    assert_eq!(l["reversed_by"], by("fahrer")["id"]);
+    assert_eq!(l["reverse_reason"], "Auftrag war privat");
+    assert_eq!(l["reversed_by_user"], "Chefin");
+    let (s, _) = f.reverse(&f.chef, &[lohn], "noch einmal").await;
+    assert_eq!(s, StatusCode::CONFLICT);
+    // Alles zurück auf null, nichts verschwunden oder doppelt
+    assert_eq!(f.balance().await, 0);
+}
+
+#[tokio::test]
+async fn ueberweisung_und_haftung_werden_als_paar_storniert() {
+    let f = Firma::new().await;
+    f.event(&f.fahrer, "job", "job_delivered", 1000, None).await;
+    let (s, _) = f
+        .post(
+            &f.chef,
+            &format!("/api/companies/{}/transfer", f.id),
+            json!({ "user_id": f.fahrer_id, "amount": 300, "note": "Vorschuss" }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!((f.balance().await, f.wallet(f.fahrer_id).await), (700, 300));
+    let u = f.entries("ueberweisung").await;
+    let side = |account: &str| n(&u.iter().find(|e| e["account"] == account).unwrap()["id"]);
+    // Nur die Seite auf dem Lohnkonto gewählt: Die Kasse wird mit storniert
+    let r = f.reverse_ok(&[side("fahrer")], "versehentlich").await;
+    assert_eq!(r["entries"].as_array().unwrap().len(), 2, "{r}");
+    assert_eq!((f.balance().await, f.wallet(f.fahrer_id).await), (1000, 0));
+    let (s, v) = f.reverse(&f.chef, &[side("firma")], "versehentlich").await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+
+    // Haftung: 6 Prozentpunkte neuer Schaden, die Hälfte von 6 mal 150 Euro
+    f.patch(&f.chef, json!({ "liability_percent": 50 })).await;
+    let truck = f
+        .truck("SPED 001", 1000, worn(1000, 0.0, 0.0, 0.0, 0.4, &[0.0]))
+        .await;
+    let r = f
+        .drive(truck, 1100, worn(1100, 0.2, 0.0, 0.0, 0.4, &[0.0]))
+        .await;
+    assert_eq!(r["liability"], 450);
+    assert_eq!(
+        (f.balance().await, f.wallet(f.fahrer_id).await),
+        (1450, -450)
+    );
+    let h = f.entries("haftung").await;
+    let firma = n(&h.iter().find(|e| e["account"] == "firma").unwrap()["id"]);
+    let r = f.reverse_ok(&[firma], "Schaden war schon da").await;
+    assert_eq!(r["entries"].as_array().unwrap().len(), 2, "{r}");
+    assert_eq!((f.balance().await, f.wallet(f.fahrer_id).await), (1000, 0));
+    assert!(
+        f.entries("haftung")
+            .await
+            .iter()
+            .all(|e| e["reversible"] == false)
+    );
+}
+
+#[tokio::test]
+async fn storniertes_ereignis_im_offenen_fenster_zaehlt_nicht() {
+    let f = Firma::new().await;
+    first_sync(&f).await;
+    // Ein privater Auftrag mit Zeitpunkt und eine Maut ohne Zeitpunkt, beide nach dem Abgleich
+    f.clock.set(t(5));
+    f.event_at(&f.fahrer, "a", "job_delivered", 1000, None, Some(t(5)))
+        .await;
+    f.event(&f.fahrer, "b", "tollgate", 40, None).await;
+    let ids = [f.entry_id("a").await, f.entry_id("b").await];
+    let r = f.reverse_ok(&ids, "privates Profil").await;
+    let d = f.driver_of(&r);
+    assert_eq!(
+        (&d["corrections"], n(&d["open_window"])),
+        (&json!([]), 2),
+        "{r}"
+    );
+    // Im Spiel der Firma ist nichts passiert: Der Abgleich erwartet 2000 und bucht nichts
+    let r = sync_written_at(&f, 2000, 30).await;
+    assert_eq!((n(&r["expected"]), n(&r["events"])), (2000, 0));
+    assert_eq!(r["booked"], json!([]));
+    assert!(r["unexplained"].is_null());
+    assert_eq!(f.balance().await, 0);
+}
+
+#[tokio::test]
+async fn storniertes_ereignis_in_abgeglichenem_fenster_bucht_korrektur() {
+    let f = Firma::new().await;
+    first_sync(&f).await;
+    // Privater Auftrag um 10:05: Der Abgleich zählt ihn, im Spiel der Firma fehlt er
+    f.clock.set(t(5));
+    f.event_at(&f.fahrer, "a", "job_delivered", 1000, None, Some(t(5)))
+        .await;
+    let s1 = sync_written_at(&f, 2000, 30).await;
+    assert_eq!(
+        s1["booked"],
+        json!([{ "account": "firma", "kind": "betriebskosten", "amount": -1000 }])
+    );
+    let sid = n(&s1["sync_id"]);
+    // Die Betriebskosten tragen ihren Abgleich
+    let costs = f.entries("betriebskosten").await;
+    {
+        let conn = f.db.lock().unwrap();
+        let sync_id: Option<i64> = conn
+            .query_row(
+                "SELECT sync_id FROM ledger WHERE id = ?1",
+                [n(&costs[0]["id"])],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(sync_id, Some(sid));
+    }
+    assert_eq!(f.balance().await, 0);
+
+    f.clock.set(t(40));
+    let r = f
+        .reverse_ok(&[f.entry_id("a").await], "privates Profil")
+        .await;
+    let d = f.driver_of(&r);
+    assert_eq!(n(&d["open_window"]), 0);
+    let c = &d["corrections"][0];
+    assert_eq!(n(&c["sync_id"]), sid);
+    assert_eq!((n(&c["diff_before"]), n(&c["diff"])), (-1000, 0));
+    assert_eq!(n(&c["events"]), 1);
+    assert_eq!(
+        c["booked"],
+        json!([{ "account": "firma", "kind": "betriebskosten_korrektur", "amount": 1000 }])
+    );
+    // Erlös weg, Betriebskosten zurück: Die Firma hat, was sie wirklich hatte
+    assert_eq!(n(&r["balance"]), 0);
+    assert_eq!(f.costs().await, 0);
+    assert_eq!(f.sync_row(sid), (0, 0, 0));
+    let k = &f.entries("betriebskosten_korrektur").await[0];
+    let note = k["note"].as_str().unwrap();
+    assert!(
+        note.starts_with("Storno: Auftrag, Abgleich vom 16.11.2026 10:31"),
+        "{note}"
+    );
+    // Der nächste Abgleich bucht nichts
+    let r = sync_written_at(&f, 2000, 60).await;
+    assert_eq!(r["booked"], json!([]));
+    assert!(r["unexplained"].is_null());
+}
+
+#[tokio::test]
+async fn stornierte_strafe_erklaert_ungeklaerten_betrag() {
+    let f = Firma::new().await;
+    first_sync(&f).await;
+    // Private Strafe um 10:05: Der Abgleich erwartet 300 weniger, als im Spiel der Firma ist
+    f.clock.set(t(5));
+    f.event_at(&f.fahrer, "s", "fined", 300, None, Some(t(5)))
+        .await;
+    let r = sync_written_at(&f, 2000, 30).await;
+    assert_eq!(n(&r["unexplained"]["amount"]), 300);
+    assert_eq!(n(&r["write_money"]), 1700);
+    assert_eq!(f.company(&f.chef).await["open_unexplained"], 1);
+
+    f.clock.set(t(40));
+    let r = f
+        .reverse_ok(&[f.entry_id("s").await], "privates Profil")
+        .await;
+    let c = &f.driver_of(&r)["corrections"][0];
+    assert_eq!((n(&c["diff_before"]), n(&c["diff"])), (300, 0));
+    assert_eq!(c["booked"], json!([]));
+    assert_eq!(c["unexplained"]["closed"], true);
+    let u = f.unexplained().await;
+    assert_eq!(u[0]["note"], "Durch stornierte Ereignisse erklärt");
+    assert_eq!(f.company(&f.chef).await["open_unexplained"], 0);
+    // Das Lohnkonto hat die 300 zurück, der nächste Abgleich schreibt sie ins Spiel
+    assert_eq!(n(&f.driver_of(&r)["wallet"]), 0);
+    let r = sync_written_at(&f, 1700, 60).await;
+    assert_eq!(r["booked"], json!([]));
+    assert!(r["unexplained"].is_null());
+    assert_eq!(n(&r["write_money"]), 2000);
+}
+
+#[tokio::test]
+async fn storniertes_ereignis_ohne_zeitpunkt_im_abgeglichenen_fenster() {
+    let f = Firma::new().await;
+    // Vor dem ersten Abgleich: steckt im Anfangsstand, ein Storno ändert am Abgleich nichts
+    f.event(&f.fahrer, "vorher", "job_delivered", 500, None)
+        .await;
+    first_sync(&f).await;
+    // Ohne Zeitpunkt nach dem ersten Abgleich: zählt im zweiten
+    f.clock.set(t(5));
+    f.event(&f.fahrer, "a", "job_delivered", 1000, None).await;
+    let s1 = sync_written_at(&f, 2000, 30).await;
+    assert_eq!(n(&s1["events"]), 1);
+    assert_eq!(n(&s1["booked"][0]["amount"]), -1000);
+    f.clock.set(t(40));
+    let ids = [f.entry_id("vorher").await, f.entry_id("a").await];
+    let r = f.reverse_ok(&ids, "privates Profil").await;
+    let d = f.driver_of(&r);
+    assert_eq!(d["corrections"].as_array().unwrap().len(), 1, "{r}");
+    assert_eq!(n(&d["corrections"][0]["sync_id"]), n(&s1["sync_id"]));
+    assert_eq!(n(&d["open_window"]), 0);
+    assert_eq!(f.costs().await, 0);
+    assert_eq!(f.balance().await, 0);
+}
+
+/// Der zweite Test im Spiel: Ereignisse aus einem privaten Profil sind gebucht, und der
+/// Abgleich des Firmenprofils hat daraus falsche Betriebskosten gebucht. Der Chef storniert die
+/// Ereignisse über den Zeitraum, danach stimmt die Kasse.
+#[tokio::test]
+async fn privates_profil_nachtraeglich_stornieren() {
+    let f = Firma::new().await;
+    first_sync(&f).await;
+    // Ohne gemeldetes Firmenprofil bucht der Server alles, auch aus "Privat"
+    let private: [(&str, &str, i64, Option<f64>); 12] = [
+        ("p1", "job_delivered", 1000, Some(300.0)),
+        ("p2", "tollgate", 50, None),
+        ("p3", "fined", 300, None),
+        ("p4", "job_delivered", 2000, Some(600.0)),
+        ("p5", "tollgate", 40, None),
+        ("p6", "ferry", 200, None),
+        ("p7", "job_cancelled", 500, None),
+        ("p8", "tollgate", 30, None),
+        ("p9", "train", 150, None),
+        ("p10", "fined", 100, None),
+        ("p11", "job_delivered", 1500, Some(450.0)),
+        ("p12", "tollgate", 20, None),
+    ];
+    for (i, (id, kind, amount, km)) in private.iter().enumerate() {
+        let m = 5 + 3 * i as i64;
+        f.clock.set(t(m));
+        let mut body = json!({ "event_id": id, "type": kind, "amount": amount,
+                               "occurred_at": t(m), "profile": "Privat" });
+        if let Some(km) = km {
+            body["distance_km"] = json!(km);
+        }
+        let (s, v) = f
+            .post(&f.fahrer, &format!("/api/companies/{}/events", f.id), body)
+            .await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+    }
+    // Spielbeträge 4500 - 300 - 100 - 500 - 140 - 200 - 150 = 3110, Kasse plus 4010
+    assert_eq!(f.balance().await, 4010);
+    assert_eq!(f.wallet(f.fahrer_id).await, -900);
+    assert_eq!(f.member(f.fahrer_id).await["company_km"], 1350);
+
+    // Im Firmenprofil hat der Fahrer nur für 200 Euro getankt. Der Abgleich erwartet 5110.
+    let s1 = sync_written_at(&f, 1800, 60).await;
+    assert_eq!(n(&s1["expected"]), 5110);
+    assert_eq!(n(&s1["booked"][0]["amount"]), -3310);
+    assert_eq!(n(&s1["write_money"]), 1100);
+    assert_eq!(f.balance().await, 700);
+
+    // Der Chef sucht den Zeitraum heraus: nur die privaten Ereignisse, ohne die Betriebskosten
+    f.clock.set(t(120));
+    let (s, l) = f
+        .get(
+            &f.chef,
+            &format!(
+                "/api/companies/{}/ledger?limit=500&from={}&to={}",
+                f.id,
+                t(5),
+                t(60)
+            ),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{l}");
+    let ids: Vec<i64> = l["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["reversible"] == true)
+        .map(|e| n(&e["id"]))
+        .collect();
+    assert_eq!(ids.len(), 12, "{l}");
+    let r = f
+        .reverse_ok(&ids, "Ereignisse aus dem privaten Profil")
+        .await;
+    assert_eq!(r["entries"].as_array().unwrap().len(), 12);
+    let d = f.driver_of(&r);
+    let c = &d["corrections"][0];
+    assert_eq!(
+        d["corrections"].as_array().unwrap().len(),
+        1,
+        "ein Fenster: {r}"
+    );
+    assert_eq!(n(&c["events"]), 12);
+    assert_eq!((n(&c["diff_before"]), n(&c["diff"])), (-3310, -200));
+    assert_eq!(n(&c["booked"][0]["amount"]), 3110);
+    assert!(
+        c["booked"][0]["kind"] == "betriebskosten_korrektur"
+            && f.entries("betriebskosten_korrektur").await[0]["note"]
+                .as_str()
+                .unwrap()
+                .starts_with("Storno: 12 Ereignisse, Abgleich vom")
+    );
+
+    // Die Kasse hat genau das Tanken bezahlt, das Lohnkonto ist wieder bei 0
+    assert_eq!(n(&r["balance"]), -200);
+    assert_eq!(f.costs().await, -200);
+    assert_eq!(n(&d["wallet"]), 0);
+    assert_eq!(f.member(f.fahrer_id).await["company_km"], 0);
+    assert_eq!(f.company(&f.chef).await["open_unexplained"], 0);
+    // Der nächste Abgleich findet den geschriebenen Stand und bucht nichts Falsches
+    let s2 = sync_written_at(&f, 1100, 150).await;
+    assert_eq!(n(&s2["expected"]), 1100);
+    assert_eq!(s2["booked"], json!([]));
+    assert!(s2["unexplained"].is_null());
+    assert_eq!(n(&s2["write_money"]), 2000);
+    assert_eq!(f.balance().await, -200);
+    // Und die Lohnabrechnung zahlt für die privaten Aufträge nichts
+    let (s, r) = f
+        .post(
+            &f.chef,
+            &format!("/api/companies/{}/payrolls/run", f.id),
+            json!({}),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!(f.wallet(f.fahrer_id).await, 0);
+}
+
+/// Erst die Ereignisse stornieren, dann die Betriebskosten: Ein Teil ist dann schon
+/// korrigiert. Das Storno erlässt nur den Rest, der korrigierte Teil wird ausgeglichen. Am Ende
+/// zahlt die Firma dasselbe wie in der anderen Reihenfolge.
+#[tokio::test]
+async fn betriebskosten_nach_den_ereignissen_stornieren() {
+    let f = Firma::new().await;
+    first_sync(&f).await;
+    f.clock.set(t(5));
+    f.event_at(&f.fahrer, "a", "job_delivered", 1000, None, Some(t(5)))
+        .await;
+    let s1 = sync_written_at(&f, 2000, 30).await;
+    let sid = n(&s1["sync_id"]);
+    let costs = n(&f.entries("betriebskosten").await[0]["id"]);
+    f.clock.set(t(35));
+    f.reverse_ok(&[f.entry_id("a").await], "privates Profil")
+        .await;
+    assert_eq!(f.balance().await, 0);
+    assert_eq!(f.sync_row(sid), (0, 0, 0));
+    // Ganz korrigiert: Das Storno geht, gibt aber nichts zurück
+    let r = f.reverse_ok(&[costs], "privates Profil").await;
+    assert_eq!(
+        f.driver_of(&r)["waived"],
+        json!([{ "sync_id": sid, "entry_id": costs, "amount": 0, "already_corrected": 1000 }])
+    );
+    let e = r["entries"].as_array().unwrap();
+    assert_eq!(e.len(), 2, "Storno und Ausgleich: {r}");
+    assert_eq!(
+        (&e[1]["kind"], n(&e[1]["amount"]), n(&e[1]["sync_id"])),
+        (&json!("betriebskosten_korrektur"), -1000, sid)
+    );
+    assert!(
+        e[1]["note"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("Storno von Buchung {costs}")),
+        "{r}"
+    );
+    assert_eq!(n(&r["balance"]), 0);
+    assert_eq!(f.sync_row(sid), (0, 0, 0));
+    // Der Ausgleich ist eine Korrektur und lässt sich nicht stornieren
+    let k = n(&e[1]["id"]);
+    assert_eq!(f.entry(k).await["reversible"], false);
+
+    // Zweites Fenster: privater Auftrag über 1000 und echtes Tanken für 300. Ereignis und
+    // Betriebskosten zusammen: erst das Ereignis, dann die Betriebskosten.
+    f.clock.set(t(40));
+    f.event_at(&f.fahrer, "b", "job_delivered", 1000, None, Some(t(40)))
+        .await;
+    let s2 = sync_written_at(&f, 1700, 60).await;
+    let sid2 = n(&s2["sync_id"]);
+    assert_eq!(n(&s2["booked"][0]["amount"]), -1300);
+    let costs2 = n(&f.entries("betriebskosten").await[0]["id"]);
+    f.clock.set(t(65));
+    let r = f
+        .reverse_ok(&[costs2, f.entry_id("b").await], "privates Profil")
+        .await;
+    assert_eq!(
+        f.driver_of(&r)["waived"],
+        json!([{ "sync_id": sid2, "entry_id": costs2, "amount": 300, "already_corrected": 1000 }])
+    );
+    assert_eq!(n(&r["balance"]), 0, "auch das Tanken ist erlassen");
+    assert_eq!(f.sync_row(sid2), (-300, 0, 300));
+
+    // Drittes Fenster, genauso, nur in zwei Schritten: dasselbe Ergebnis
+    f.clock.set(t(70));
+    f.event_at(&f.fahrer, "c", "job_delivered", 1000, None, Some(t(70)))
+        .await;
+    let s3 = sync_written_at(&f, 1700, 90).await;
+    let sid3 = n(&s3["sync_id"]);
+    let costs3 = n(&f.entries("betriebskosten").await[0]["id"]);
+    f.clock.set(t(95));
+    f.reverse_ok(&[f.entry_id("c").await], "privates Profil")
+        .await;
+    assert_eq!(f.balance().await, -300, "das Tanken bleibt bei der Firma");
+    assert_eq!(f.sync_row(sid3), (-300, 300, 0));
+    f.reverse_ok(&[costs3], "Tanken war privat").await;
+    assert_eq!(f.balance().await, 0);
+    assert_eq!(f.sync_row(sid3), (-300, 0, 300));
+}
+
+/// Eine spät gemeldete Maut korrigiert die Betriebskosten eines Abgleichs zum Teil. Den Rest
+/// kann der Chef danach noch erlassen, ohne dass die Maut ein zweites Mal zurückkommt.
+#[tokio::test]
+async fn spaete_maut_sperrt_storno_der_betriebskosten_nicht() {
+    let f = Firma::new().await;
+    first_sync(&f).await;
+    // Im Spiel fehlen 1000: Die Firma bucht 1000 Betriebskosten
+    let s1 = sync_written_at(&f, 1000, 30).await;
+    let sid = n(&s1["sync_id"]);
+    assert_eq!(n(&s1["booked"][0]["amount"]), -1000);
+    let costs = n(&f.entries("betriebskosten").await[0]["id"]);
+    // Danach kommt eine Maut über 300 aus diesem Fenster: Korrektur über 300
+    f.clock.set(t(40));
+    let e = f
+        .event_at(&f.fahrer, "maut", "tollgate", 300, None, Some(t(10)))
+        .await;
+    assert_eq!(
+        e["late"]["booked"],
+        json!([{ "account": "firma", "kind": "betriebskosten_korrektur", "amount": 300 }])
+    );
+    assert_eq!(f.balance().await, -1000);
+    assert_eq!(f.sync_row(sid), (-700, 700, 0));
+    // Die restlichen 700 erlässt der Chef
+    f.clock.set(t(45));
+    let r = f.reverse_ok(&[costs], "Tanken war privat").await;
+    assert_eq!(
+        f.driver_of(&r)["waived"],
+        json!([{ "sync_id": sid, "entry_id": costs, "amount": 700, "already_corrected": 300 }])
+    );
+    assert_eq!(n(&r["balance"]), -300, "nur die Maut selbst");
+    assert_eq!(f.sync_row(sid), (-700, 0, 700));
+    // Ein noch späteres Ereignis aus dem Fenster erklärt zuerst den erlassenen Teil
+    f.clock.set(t(50));
+    let e = f
+        .event_at(&f.fahrer, "faehre", "ferry", 200, None, Some(t(20)))
+        .await;
+    assert_eq!(e["late"]["booked"], json!([]));
+    assert_eq!(f.balance().await, -500);
+    assert_eq!(f.sync_row(sid), (-500, 0, 500));
+}
+
+/// Erst die Betriebskosten stornieren, dann die Ereignisse: Die Firma hat die Kosten erlassen,
+/// das Storno der Ereignisse gibt nichts ein zweites Mal zurück. Spätere Korrekturen legen die
+/// erlassenen Kosten nicht wieder an.
+#[tokio::test]
+async fn betriebskosten_vor_den_ereignissen_stornieren() {
+    let f = Firma::new().await;
+    first_sync(&f).await;
+    f.clock.set(t(5));
+    f.event_at(&f.fahrer, "a", "job_delivered", 1000, None, Some(t(5)))
+        .await;
+    let s1 = sync_written_at(&f, 2000, 30).await;
+    let sid = n(&s1["sync_id"]);
+    let costs = n(&f.entries("betriebskosten").await[0]["id"]);
+    f.clock.set(t(35));
+    let r = f
+        .reverse_ok(&[costs], "kommt aus dem privaten Auftrag")
+        .await;
+    assert_eq!(
+        f.driver_of(&r)["waived"],
+        json!([{ "sync_id": sid, "entry_id": costs, "amount": 1000, "already_corrected": 0 }])
+    );
+    assert_eq!(r["entries"].as_array().unwrap().len(), 1, "kein Ausgleich");
+    assert_eq!(n(&r["balance"]), 1000);
+    assert_eq!(f.sync_row(sid), (-1000, 0, 1000));
+    // Jetzt das Ereignis: keine Korrektur, die Kosten sind schon erlassen
+    let r = f
+        .reverse_ok(&[f.entry_id("a").await], "privates Profil")
+        .await;
+    let c = &f.driver_of(&r)["corrections"][0];
+    assert_eq!((n(&c["diff_before"]), n(&c["diff"])), (-1000, 0));
+    assert_eq!(c["booked"], json!([]));
+    assert_eq!(n(&r["balance"]), 0);
+    assert_eq!(
+        f.sync_row(sid),
+        (0, 0, 0),
+        "der Auftrag erklärt den erlassenen Teil"
+    );
+    // Später gemeldet: ein echter Auftrag über 500 im selben Fenster. Im Spiel fehlen jetzt
+    // 500, das sind neue Kosten und die bucht der Server wie in der anderen Reihenfolge.
+    f.clock.set(t(40));
+    let e = f
+        .event_at(&f.fahrer, "echt", "job_delivered", 500, None, Some(t(20)))
+        .await;
+    assert_eq!(n(&e["late"]["booked"][0]["amount"]), -500);
+    assert_eq!(f.balance().await, 0);
+
+    // Zweites Fenster: echte Maut über 800, erst nach dem Abgleich gemeldet. Der Chef hält die
+    // Betriebskosten für falsch und storniert sie. Dann kommt die Maut: keine zweite Gutschrift.
+    let s2 = sync_written_at(&f, 2000 - 800, 60).await;
+    let sid2 = n(&s2["sync_id"]);
+    let costs2 = n(&f.entries("betriebskosten").await[0]["id"]);
+    f.clock.set(t(65));
+    f.reverse_ok(&[costs2], "unklar").await;
+    assert_eq!(f.sync_row(sid2), (-800, 0, 800));
+    let before = f.balance().await;
+    f.clock.set(t(70));
+    let e = f
+        .event_at(&f.fahrer, "maut", "tollgate", 800, None, Some(t(50)))
+        .await;
+    assert_eq!(e["late"]["booked"], json!([]));
+    assert_eq!(f.balance().await, before - 800, "nur die Maut selbst");
+    assert_eq!(f.sync_row(sid2), (0, 0, 0));
+
+    // Drittes Fenster: erlassen, dann zeigt ein später Auftrag noch mehr Aufwand. Nur der
+    // neue Teil wird gebucht, die erlassenen Kosten nicht wieder.
+    let s3 = sync_written_at(&f, 2000 - 600, 90).await;
+    let sid3 = n(&s3["sync_id"]);
+    let costs3 = n(&f.entries("betriebskosten").await[0]["id"]);
+    f.clock.set(t(95));
+    f.reverse_ok(&[costs3], "unklar").await;
+    f.clock.set(t(96));
+    let e = f
+        .event_at(&f.fahrer, "spaet", "job_delivered", 400, None, Some(t(80)))
+        .await;
+    assert_eq!(
+        e["late"]["booked"],
+        json!([{ "account": "firma", "kind": "betriebskosten", "amount": -400 }])
+    );
+    assert_eq!(f.sync_row(sid3), (-1000, 400, 600));
+}
+
+/// Betriebskosten aus einem Abgleich von vor dem Storno tragen kein `sync_id`. Der Server
+/// ordnet sie über `last_ledger_id` zu, ohne die Buchung zu ändern.
+#[tokio::test]
+async fn alte_betriebskosten_ohne_abgleich_werden_zugeordnet() {
+    let f = Firma::new().await;
+    first_sync(&f).await;
+    f.clock.set(t(5));
+    f.event_at(&f.fahrer, "a", "job_delivered", 1000, None, Some(t(5)))
+        .await;
+    let s1 = sync_written_at(&f, 2000, 30).await;
+    let sid = n(&s1["sync_id"]);
+    // Ein zweiter Abgleich ohne neue Buchung hat dieselbe last_ledger_id
+    let s2 = sync_written_at(&f, 2000, 31).await;
+    assert_eq!(s2["booked"], json!([]));
+    let costs = n(&f.entries("betriebskosten").await[0]["id"]);
+    {
+        // So sehen Betriebskosten aus der Zeit vor dem Storno aus
+        let conn = f.db.lock().unwrap();
+        conn.execute("UPDATE ledger SET sync_id = NULL WHERE id = ?1", [costs])
+            .unwrap();
+        assert_eq!(
+            spedhub_server::reversal::cost_sync(&conn, f.id, costs).unwrap(),
+            Some(sid)
+        );
+    }
+    f.clock.set(t(40));
+    f.reverse_ok(&[costs], "privates Profil").await;
+    assert_eq!(f.sync_row(sid), (-1000, 0, 1000));
+    f.reverse_ok(&[f.entry_id("a").await], "privates Profil")
+        .await;
+    assert_eq!(f.balance().await, 0, "nichts doppelt zurück");
+    assert_eq!(f.costs().await, -1000);
+}
+
+#[tokio::test]
+async fn storno_von_betriebskosten_und_anschaffungsbudget() {
+    let f = Firma::new().await;
+    full_cash(&f).await;
+    // Betriebskosten von vor der Freigabe: Ihr Storno vergrößert das Budget nicht
+    f.chef_sync(2000, -1).await;
+    f.clock.set(t(2));
+    f.event_at(&f.chef, "privat", "job_delivered", 700, None, Some(t(2)))
+        .await;
+    f.chef_sync(2000, 3).await;
+    let old_costs = n(&f.entries("betriebskosten").await[0]["id"]);
+    f.clock.set(t(5));
+    f.budget(&f.chef, json!({ "amount": 50_000 })).await;
+    f.reverse_ok(&[old_costs], "privat").await;
+    assert_eq!(n(&f.budgets().await["open"]["rest"]), 50_000);
+    let r = f.chef_sync(2000, 10).await;
+    assert_eq!(n(&r["write_money"]), 52_000);
+
+    // Nach der Freigabe: Ein privater Auftrag lässt den Abgleich 1000 Betriebskosten buchen,
+    // die das Budget verbrauchen
+    f.clock.set(t(15));
+    f.event_at(&f.chef, "p2", "job_delivered", 1000, None, Some(t(15)))
+        .await;
+    let r = f.chef_sync(52_000, 20).await;
+    assert_eq!(n(&r["booked"][0]["amount"]), -1000);
+    assert_eq!((n(&r["budget"]), n(&r["write_money"])), (49_000, 51_000));
+    let costs = n(&f.entries("betriebskosten").await[0]["id"]);
+    // Storniert die Chefin die Betriebskosten, ist das Budget wieder frei
+    f.clock.set(t(25));
+    f.reverse_ok(&[costs], "privater Auftrag").await;
+    let b = &f.budgets().await["open"];
+    assert_eq!((n(&b["consumed"]), n(&b["rest"])), (0, 50_000));
+    // Der private Auftrag danach: Die Kosten sind erlassen, am Budget ändert sich nichts
+    f.reverse_ok(&[f.entry_id("p2").await], "privat").await;
+    assert_eq!(n(&f.budgets().await["open"]["rest"]), 50_000);
+    // Der nächste Abgleich findet den geschriebenen Stand und schreibt das volle Budget
+    let r = f.chef_sync(51_000, 30).await;
+    assert_eq!(r["booked"], json!([]));
+    assert_eq!((n(&r["budget"]), n(&r["write_money"])), (50_000, 52_000));
+    // Noch der private Auftrag von vor der Freigabe: keine Korrektur, die Kosten sind erlassen
+    let r = f.reverse_ok(&[f.entry_id("privat").await], "privat").await;
+    assert_eq!(
+        f.driver_of_user(&r, f.chef_id)["corrections"][0]["booked"],
+        json!([])
+    );
+    assert_eq!(n(&f.budgets().await["open"]["rest"]), 50_000);
+    assert_eq!(f.balance().await, 100_000);
+
+    // Nach dem Schließen gibt ein Storno nichts mehr zurück
+    f.clock.set(t(35));
+    let r = f.chef_sync(52_000 - 400, 40).await;
+    assert_eq!(n(&r["booked"][0]["amount"]), -400);
+    let costs = n(&f.entries("betriebskosten").await[0]["id"]);
+    let open = f.budgets().await["open"].clone();
+    let (s, _) = f.close_budget(&f.chef, &open).await;
+    assert_eq!(s, StatusCode::OK);
+    f.clock.set(t(45));
+    f.reverse_ok(&[costs], "Tanken war privat").await;
+    let b = &f.budgets().await["budgets"][0];
+    assert_eq!((n(&b["consumed"]), n(&b["rest"])), (400, 49_600));
+}
+
+#[tokio::test]
+async fn firmenkilometer_und_lohn_ohne_stornierte_auftraege() {
+    let f = Firma::new().await;
+    // Montag: zwei Aufträge, einer storniert. Dienstag: nur ein stornierter.
+    f.at(16, 12, 0);
+    f.event(&f.fahrer, "a", "job_delivered", 1000, Some(500.0))
+        .await;
+    f.event(&f.fahrer, "b", "job_delivered", 1000, Some(300.0))
+        .await;
+    f.at(17, 12, 0);
+    f.event(&f.fahrer, "c", "job_delivered", 1000, Some(200.0))
+        .await;
+    assert_eq!(f.member(f.fahrer_id).await["company_km"], 1000);
+    let ids = [f.entry_id("b").await, f.entry_id("c").await];
+    f.reverse_ok(&ids, "privates Profil").await;
+    assert_eq!(f.member(f.fahrer_id).await["company_km"], 500);
+
+    // Mittwoch 4:00: Montag und Dienstag werden abgerechnet
+    f.at(18, 4, 0);
+    assert_eq!(f.run_due(), 2);
+    let runs = f.payrolls().await;
+    let monday = runs.iter().find(|r| r["day"] == "2026-11-16").unwrap();
+    let l = line(monday, f.fahrer_id);
+    assert_eq!(
+        (n(&l["km"]), n(&l["flat_days"]), n(&l["wage"])),
+        (500, 1, 250)
+    );
+    // Am Dienstag gab es nur den stornierten Auftrag: keine Zeile, keine Pauschale
+    let tuesday = runs.iter().find(|r| r["day"] == "2026-11-17").unwrap();
+    assert_eq!(tuesday["lines"], json!([]), "{tuesday}");
+    assert_eq!(f.wallet(f.fahrer_id).await, 250);
+    // Ein Storno nach der Abrechnung holt den Lohn nicht von selbst zurück
+    f.reverse_ok(&[f.entry_id("a").await], "privat").await;
+    assert_eq!(f.wallet(f.fahrer_id).await, 250);
+    assert_eq!(f.member(f.fahrer_id).await["company_km"], 0);
+}
+
+#[tokio::test]
+async fn kassenbuch_nach_zeitraum_filtern() {
+    let f = Firma::new().await;
+    f.at(16, 10, 0);
+    f.event(&f.fahrer, "a", "tollgate", 10, None).await;
+    f.at(17, 0, 0);
+    f.event(&f.fahrer, "b", "tollgate", 20, None).await;
+    f.at(17, 23, 59);
+    f.event(&f.fahrer, "c", "tollgate", 30, None).await;
+    let (s, r) = f
+        .post(
+            &f.chef,
+            &format!("/api/companies/{}/payrolls/run", f.id),
+            json!({}),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    f.at(18, 0, 0);
+    f.event(&f.fahrer, "d", "tollgate", 40, None).await;
+
+    let range = |from: i64, to: i64| {
+        format!(
+            "/api/companies/{}/ledger?limit=500&from={from}&to={to}",
+            f.id
+        )
+    };
+    // Dienstag, lokaler Tag: von einschließlich Mitternacht bis ausschließlich Mitternacht
+    let (s, l) = f
+        .get(
+            &f.fahrer,
+            &range(berlin(2026, 11, 17, 0, 0), berlin(2026, 11, 18, 0, 0)),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{l}");
+    let ids: Vec<&str> = l["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|e| e["event_id"].as_str())
+        .collect();
+    assert_eq!(ids, vec!["c", "b"]);
+    // Nur von, nur bis
+    let (_, l) = f
+        .get(
+            &f.chef,
+            &format!(
+                "/api/companies/{}/ledger?from={}",
+                f.id,
+                berlin(2026, 11, 18, 0, 0)
+            ),
+        )
+        .await;
+    assert_eq!(l["entries"].as_array().unwrap().len(), 1);
+    let (_, l) = f
+        .get(
+            &f.chef,
+            &format!(
+                "/api/companies/{}/ledger?to={}",
+                f.id,
+                berlin(2026, 11, 17, 0, 0)
+            ),
+        )
+        .await;
+    assert_eq!(l["entries"][0]["event_id"], "a");
+    assert_eq!(l["entries"].as_array().unwrap().len(), 1);
+    // Die Lohnabrechnungen lassen sich genauso filtern
+    let (_, p) = f
+        .get(
+            &f.chef,
+            &format!(
+                "/api/companies/{}/payrolls?from={}&to={}",
+                f.id,
+                berlin(2026, 11, 17, 0, 0),
+                berlin(2026, 11, 18, 0, 0)
+            ),
+        )
+        .await;
+    // Am Dienstagabend: der fällige Montag und die Abrechnung von Hand
+    let kinds: Vec<&str> = p["payrolls"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, vec!["hand", "taeglich"]);
+    let (_, p) = f
+        .get(
+            &f.chef,
+            &format!(
+                "/api/companies/{}/payrolls?from={}",
+                f.id,
+                berlin(2026, 11, 18, 0, 0)
+            ),
+        )
+        .await;
+    assert_eq!(p["payrolls"], json!([]));
+}
+
+#[tokio::test]
+async fn alte_datenbank_bekommt_storno() {
+    let path = std::env::temp_dir().join(format!("spedhub-storno-{}.db", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    {
+        let c = rusqlite::Connection::open(&path).unwrap();
+        c.execute_batch(
+            "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                pw_hash TEXT NOT NULL, created_at INTEGER NOT NULL);
+             CREATE TABLE companies (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                invite_code TEXT NOT NULL UNIQUE,
+                wage_percent INTEGER NOT NULL DEFAULT 30 CHECK (wage_percent BETWEEN 0 AND 100),
+                created_at INTEGER NOT NULL);
+             CREATE TABLE memberships (company_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
+                role TEXT NOT NULL, joined_at INTEGER NOT NULL, PRIMARY KEY (company_id, user_id));
+             CREATE TABLE ledger (id INTEGER PRIMARY KEY, company_id INTEGER NOT NULL,
+                account TEXT NOT NULL CHECK (account IN ('firma', 'fahrer')), user_id INTEGER,
+                kind TEXT NOT NULL, amount INTEGER NOT NULL, event_id TEXT,
+                note TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL);
+             CREATE TABLE sync_points (id INTEGER PRIMARY KEY, company_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL, ingame_money INTEGER NOT NULL, xp INTEGER,
+                expected INTEGER, write_money INTEGER NOT NULL, last_ledger_id INTEGER NOT NULL,
+                written INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL);
+             INSERT INTO users VALUES (1, 'Alt', 'x', 1000);
+             INSERT INTO companies VALUES (1, 'Altfracht', 'ABCD1234', 30, 1000);
+             INSERT INTO memberships VALUES (1, 1, 'chef', 1000);
+             INSERT INTO ledger VALUES (1, 1, 'firma', 1, 'maut', -50, 'toll-1', '', 2000);
+             INSERT INTO sync_points VALUES (1, 1, 1, 2000, NULL, NULL, 2000, 1, 1, 2000);",
+        )
+        .unwrap();
+    }
+    let db = spedhub_server::db::open(path.to_str().unwrap()).unwrap();
+    {
+        let conn = db.lock().unwrap();
+        // Neue Spalten leer oder 0, die alte Buchung unverändert, der Index ist da
+        let (amount, rev, by): (i64, Option<i64>, Option<i64>) = conn
+            .query_row(
+                "SELECT amount, reverses_id, booked_by FROM ledger WHERE id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!((amount, rev, by), (-50, None, None));
+        let waived: i64 = conn
+            .query_row("SELECT costs_waived FROM sync_points", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(waived, 0);
+        let index: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'ledger_reverses_once'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(index, 1);
+    }
+    // Zweites Öffnen geht auch
+    drop(db);
+    let db = spedhub_server::db::open(path.to_str().unwrap()).unwrap();
+    let f = Firma::with_db(db).await;
+    // Eine Buchung, wie sie vor dem Storno geschrieben wurde, lässt sich stornieren
+    let old = {
+        let conn = f.db.lock().unwrap();
+        conn.execute(
+            "INSERT INTO ledger (company_id, account, user_id, kind, amount, event_id, created_at)
+             VALUES (?1, 'firma', ?2, 'maut', -30, 'alt-1', 2000)",
+            [f.id, f.fahrer_id],
+        )
+        .unwrap();
+        conn.last_insert_rowid()
+    };
+    let r = f.reverse_ok(&[old], "alte Buchung").await;
+    assert_eq!(n(&r["balance"]), 0);
+    // Der Index hält auch ohne die Prüfung im Server: ein zweites Storno derselben Buchung
+    // auf demselben Konto scheitert
+    {
+        let conn = f.db.lock().unwrap();
+        let err = conn.execute(
+            "INSERT INTO ledger (company_id, account, user_id, kind, amount, created_at, reverses_id)
+             VALUES (?1, 'firma', ?2, 'storno', 30, 3000, ?3)",
+            [f.id, f.fahrer_id, old],
+        );
+        assert!(err.is_err());
+    }
+    drop(f);
+    let _ = std::fs::remove_file(&path);
+}
+
+// ------------------------------------------------------------ Kennzeichen und Modell
+
+impl Firma {
+    /// Lkw mit eigenem Modell anlegen (als Chef), liefert die ID
+    async fn truck_model(&self, plate: &str, model: &str) -> i64 {
+        let (s, t) = self
+            .post(
+                &self.chef,
+                &format!("/api/companies/{}/trucks", self.id),
+                json!({ "plate": plate, "model": model, "odometer_km": 1000, "state": full_state(1000) }),
+            )
+            .await;
+        assert_eq!(s, StatusCode::OK, "{t}");
+        n(&t["id"])
+    }
+
+    async fn suggestion(&self, token: &str) -> (StatusCode, Value) {
+        self.get(
+            token,
+            &format!("/api/companies/{}/plate-suggestion", self.id),
+        )
+        .await
+    }
+
+    async fn suggested(&self) -> String {
+        let (s, v) = self.suggestion(&self.chef).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        v["plate"].as_str().unwrap().to_string()
+    }
+
+    async fn add(&self, body: Value) -> (StatusCode, Value) {
+        self.post(
+            &self.chef,
+            &format!("/api/companies/{}/trucks", self.id),
+            body,
+        )
+        .await
+    }
+
+    async fn set_plate(&self, token: &str, truck: i64, plate: &str) -> (StatusCode, Value) {
+        call(
+            &self.app,
+            "PATCH",
+            &format!("/api/trucks/{truck}"),
+            Some(token),
+            Some(json!({ "plate": plate })),
+        )
+        .await
+    }
+
+    /// Wen der Chef als fremd gefahren sieht: (id, Kennzeichen) oder nichts
+    async fn foreign(&self) -> Option<(i64, String)> {
+        let m = self.member_as(&self.chef, self.fahrer_id).await;
+        m.get("foreign_truck")
+            .map(|t| (n(&t["id"]), t["plate"].as_str().unwrap().to_string()))
+    }
+}
+
+#[tokio::test]
+async fn zwei_firmen_lkw_mit_gleichem_kennzeichen_und_anderem_modell() {
+    let f = Firma::new().await;
+    // Scania A fuhr als "SPED 001", das Spiel hat es ersetzt, die Rückgabe brachte "EF XU 577"
+    let a = f.truck("SPED 001", 1000, full_state(1000)).await;
+    f.checkout(&f.fahrer, a).await;
+    let (s, _) = f
+        .checkin(
+            &f.fahrer,
+            a,
+            json!({ "odometer_km": 1100, "plate": "EF XU 577" }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    // Volvo B trägt "SPED 001" jetzt als aktuelles Kennzeichen
+    let b = f.truck_model("SPED 001", "volvo.fh16_2012").await;
+    let volvo = json!({ "truck_brand": "volvo", "truck_model": "fh16_2012" });
+    let with = |plate: &str, model: &Value| {
+        let mut body = model.clone();
+        body["plate"] = json!(plate);
+        body["speed_kmh"] = json!(70);
+        body
+    };
+
+    // Mit dem Modell des Volvo: B, als fremd gefahren markiert (niemand hat ihn geliehen)
+    let (s, r) = f.beat(&f.fahrer, with("SPED 001", &volvo)).await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!(f.foreign().await, Some((b, "SPED 001".into())));
+    // Mit dem Modell des Scania und demselben Text, auch mit Markup und Land: A über sein
+    // altes Kennzeichen, obwohl das aktuelle von B gleich lautet
+    f.beat(
+        &f.fahrer,
+        json!({ "plate": "<offset hshift=4>sped<img src=/x.mat> 001|_germany", "speed_kmh": 70 }),
+    )
+    .await;
+    assert_eq!(f.foreign().await, Some((a, "EF XU 577".into())));
+    assert_eq!(f.truck_as(&f.chef, b).await["foreign_drivers"], json!([]));
+    assert_eq!(
+        f.truck_as(&f.chef, a).await["foreign_drivers"][0]["user_id"],
+        f.fahrer_id
+    );
+
+    // Der Fahrer leiht A: Herzschlag mit Scania wird letzter Zustand von A
+    f.checkout(&f.fahrer, a).await;
+    f.clock.advance(10);
+    let seen = f.clock.now();
+    let (_, r) = f
+        .beat(
+            &f.fahrer,
+            json!({ "plate": "SPED 001", "odometer_km": 1150.0, "speed_kmh": 70 }),
+        )
+        .await;
+    assert_eq!(n(&r["leased_truck_id"]), a);
+    assert_eq!(f.truck_row(a).2, Some(seen));
+    assert_eq!(f.truck_row(a).3, Some(1150));
+    assert!(f.foreign().await.is_none());
+    assert_eq!(f.truck_as(&f.chef, a).await["driving"], true);
+
+    // Mit dem Volvo, obwohl er A geliehen hat: B ist gemeint, A bleibt unberührt
+    f.clock.advance(10);
+    let (_, r) = f
+        .beat(
+            &f.fahrer,
+            json!({ "plate": "SPED 001", "odometer_km": 9999.0, "truck_brand": "volvo",
+                    "truck_model": "volvo.fh16_2012" }),
+        )
+        .await;
+    assert!(r["leased_truck_id"].is_null(), "{r}");
+    assert_eq!(f.truck_row(a).2, Some(seen), "kein neuer letzter Zustand");
+    assert_eq!(f.truck_row(a).3, Some(1150));
+    assert_eq!(f.truck_row(b).2, None);
+    assert_eq!(f.foreign().await, Some((b, "SPED 001".into())));
+    assert_eq!(f.truck_as(&f.chef, a).await["driving"], false);
+}
+
+#[tokio::test]
+async fn herzschlag_mit_fremdem_modell_ist_kein_firmen_lkw() {
+    let f = Firma::new().await;
+    // Der Fall aus dem Spiel: Der eigene Lkw des Fahrers hat dasselbe Kennzeichen wie ein
+    // Firmen-Lkw, ist aber ein anderes Modell
+    let t = f.truck("SPED 001", 1000, full_state(1000)).await;
+    let frei = f.truck("SPED 002", 1000, full_state(1000)).await;
+    f.checkout(&f.fahrer, t).await;
+    let daf = |plate: &str| {
+        json!({ "plate": plate, "odometer_km": 5000.0, "speed_kmh": 80,
+                "truck_brand": "daf", "truck_model": "xf_euro6",
+                "wear": { "engine": 0.5 } })
+    };
+
+    let (s, r) = f.beat(&f.fahrer, daf("SPED 001")).await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!(r["recorded"], true);
+    assert!(r["leased_truck_id"].is_null(), "kein Firmen-Lkw");
+    // Kein letzter Zustand, keine Fahrt im Fuhrpark, keine Markierung
+    assert_eq!(f.truck_row(t).2, None);
+    assert_eq!(f.truck_row(t).4, None);
+    let l = f.truck_as(&f.chef, t).await;
+    assert_eq!(l["driving"], false);
+    assert_eq!(l["foreign_drivers"], json!([]));
+    assert!(l["last_known"].is_null());
+    // Online ist er trotzdem, mit Kennzeichen und Modell, aber ohne Firmen-Lkw
+    let m = f.member_as(&f.chef, f.fahrer_id).await;
+    assert_eq!(m["online"], true);
+    assert_eq!(m["plate"], "SPED 001");
+    assert_eq!(m["model"], "daf.xf_euro6");
+    assert!(m["truck_id"].is_null());
+    assert!(m.get("foreign_truck").is_none(), "{m}");
+
+    // Ein nicht geliehener Firmen-Lkw mit fremdem Modell: auch keine Markierung
+    f.beat(&f.fahrer, daf("SPED 002")).await;
+    assert!(f.foreign().await.is_none());
+    assert_eq!(
+        f.truck_as(&f.chef, frei).await["foreign_drivers"],
+        json!([])
+    );
+
+    // Ohne letzten Zustand nimmt der Chef nicht ohne Kilometerstand zurück
+    let (s, _) = f.checkin(&f.chef, t, json!({})).await;
+    assert_eq!(s, StatusCode::CONFLICT);
+
+    // Mit dem richtigen Modell passt es
+    let (_, r) = f.beat(&f.fahrer, json!({ "plate": "SPED 001" })).await;
+    assert_eq!(n(&r["leased_truck_id"]), t);
+}
+
+#[tokio::test]
+async fn herzschlag_ohne_modell_gehoert_zu_keinem_lkw() {
+    let f = Firma::new().await;
+    let t = f.truck("SPED 001", 1000, full_state(1000)).await;
+    let frei = f.truck("SPED 002", 1000, full_state(1000)).await;
+    f.checkout(&f.fahrer, t).await;
+    // Ein älteres Plugin schickt kein Modell, oder nur die Marke
+    for body in [
+        json!({ "plate": "SPED 001", "odometer_km": 1200.0 }),
+        json!({ "plate": "SPED 001", "odometer_km": 1200.0, "truck_brand": "scania" }),
+        json!({ "plate": "SPED 001", "odometer_km": 1200.0, "truck_model": "  " }),
+    ] {
+        let (s, r) = f.beat_raw(&f.fahrer, body.clone()).await;
+        assert_eq!(s, StatusCode::OK, "{body} {r}");
+        assert_eq!(r["recorded"], true);
+        assert!(r["leased_truck_id"].is_null(), "{body}");
+        assert_eq!(f.truck_row(t).2, None, "{body}");
+        let m = f.member_as(&f.chef, f.fahrer_id).await;
+        assert_eq!(m["online"], true);
+        assert!(m["model"].is_null() && m["truck_id"].is_null(), "{m}");
+        assert!(m.get("foreign_truck").is_none(), "{m}");
+    }
+    f.beat_raw(&f.fahrer, json!({ "plate": "SPED 002" })).await;
+    assert!(f.foreign().await.is_none());
+    assert_eq!(
+        f.truck_as(&f.chef, frei).await["foreign_drivers"],
+        json!([])
+    );
+    assert_eq!(f.truck_as(&f.chef, t).await["driving"], false);
+    // Zu lange Angaben sind kein Fehler, sie werden gekürzt wie andere Texte
+    let (s, _) = f
+        .beat_raw(
+            &f.fahrer,
+            json!({ "plate": "SPED 001", "truck_model": "x".repeat(100) }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn kennzeichen_vorschlag_aus_kuerzel_und_naechster_nummer() {
+    // Die Firma heißt "Nordfracht": Kürzel NOR
+    let f = Firma::new().await;
+    let (s, v) = f.suggestion(&f.chef).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v, json!({ "plate": "NOR 001", "prefix": "NOR" }));
+    // Nur der Chef legt Lkw an und bekommt Vorschläge
+    let (s, _) = f.suggestion(&f.fahrer).await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+
+    // Anlegen ohne Kennzeichen: der Vorschlag
+    let (s, t) = f.add(json!({ "model": "scania.s_2016" })).await;
+    assert_eq!(s, StatusCode::OK, "{t}");
+    assert_eq!(
+        (t["plate"].clone(), t["plate_suggested"].clone()),
+        (json!("NOR 001"), json!(true))
+    );
+    let (_, t2) = f
+        .add(json!({ "plate": "", "model": "scania.s_2016" }))
+        .await;
+    assert_eq!(t2["plate"], "NOR 002");
+    assert_eq!(f.suggested().await, "NOR 003");
+
+    // Vergebene Nummern werden übersprungen, auch von Hand vergebene
+    f.add(json!({ "plate": "nor 003", "model": "scania.s_2016" }))
+        .await;
+    f.add(json!({ "plate": "NOR 005", "model": "scania.s_2016" }))
+        .await;
+    assert_eq!(f.suggested().await, "NOR 004");
+
+    // Ein früheres Kennzeichen zählt als vergeben: NOR 004 bekommt bei der Rückgabe ein neues
+    let (_, t4) = f.add(json!({ "model": "scania.s_2016" })).await;
+    assert_eq!(t4["plate"], "NOR 004");
+    let t4 = n(&t4["id"]);
+    f.checkout(&f.fahrer, t4).await;
+    f.checkin(
+        &f.fahrer,
+        t4,
+        json!({ "odometer_km": 10, "plate": "EF XU 577" }),
+    )
+    .await;
+    assert_eq!(f.suggested().await, "NOR 006");
+
+    // Auch Kennzeichen ausgemusterter und verkaufter Lkw
+    let (_, t6) = f.add(json!({ "model": "scania.s_2016" })).await;
+    assert_eq!(t6["plate"], "NOR 006");
+    let (s, _) = f.retire(&f.chef, n(&t6["id"])).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(f.suggested().await, "NOR 007");
+    let (_, t7) = f.add(json!({ "model": "volvo.fh16_2012" })).await;
+    f.sell(&f.chef, n(&t7["id"]), 0).await;
+    assert_eq!(f.suggested().await, "NOR 008");
+    // Der Vorschlag ist ein gültiges Kennzeichen zum Einsetzen
+    let plate = f.suggested().await;
+    assert_eq!(
+        spedhub_save::plate_text(&spedhub_save::custom_plate(&plate, "germany").unwrap()),
+        plate
+    );
+}
+
+#[tokio::test]
+async fn kennzeichen_beim_anlegen_pruefen() {
+    let f = Firma::new().await;
+    // Nur, was sich als eigenes Kennzeichen in den Spielstand schreiben lässt
+    for bad in [
+        "MÜNCHEN 1",
+        "SPED 001|_germany",
+        "A_B 1",
+        "<img src=/a.mat>AB",
+        "ABCDEFGHIJKLMNOPQ",
+    ] {
+        let (s, v) = f
+            .add(json!({ "plate": bad, "model": "scania.s_2016" }))
+            .await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{bad}: {v}");
+        assert!(v["error"].as_str().unwrap().contains("Kennzeichen"), "{v}");
+    }
+    let (s, v) = f.add(json!({ "plate": "SPED 001", "model": " " })).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    assert_eq!(v["error"], "Das Modell darf nicht leer sein");
+    assert_eq!(f.ledger().await.len(), 0);
+    let (_, l) = f
+        .get(&f.chef, &format!("/api/companies/{}/trucks", f.id))
+        .await;
+    assert_eq!(l["trucks"], json!([]), "nichts angelegt");
+
+    // Klein geschrieben und mit doppeltem Leerraum: so, wie es im Spiel steht
+    let (s, t) = f
+        .add(json!({ "plate": " sped  1-a. ", "model": "scania.s_2016" }))
+        .await;
+    assert_eq!(s, StatusCode::OK, "{t}");
+    assert_eq!(t["plate"], "SPED 1-A.");
+    assert_eq!(t["plate_suggested"], false);
+    let (s, t) = f
+        .add(json!({ "plate": "ABCDEFGHIJKLMNOP", "model": "scania.s_2016" }))
+        .await;
+    assert_eq!(s, StatusCode::OK, "16 Zeichen gehen: {t}");
+    // Eindeutig je Firma, auch in anderer Schreibweise
+    let (s, v) = f
+        .add(json!({ "plate": "Sped 1-a.", "model": "volvo.fh16_2012" }))
+        .await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    assert_eq!(v["error"], "Das Kennzeichen gibt es in der Firma schon");
+}
+
+#[tokio::test]
+async fn chef_aendert_das_kennzeichen() {
+    let f = Firma::new().await;
+    let a = f.truck("SPED 001", 1000, full_state(1000)).await;
+    let b = f.truck("SPED 002", 1000, full_state(1000)).await;
+
+    // Nur der Chef, nur mit gültigem Kennzeichen
+    let (s, _) = f.set_plate(&f.fahrer, a, "NOR 100").await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    let (s, v) = f.set_plate(&f.chef, a, "NÖR 1").await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    let (s, v) = f.set_plate(&f.chef, a, " ").await;
+    assert_eq!(
+        (s, v["error"].clone()),
+        (StatusCode::BAD_REQUEST, json!("Das Kennzeichen fehlt"))
+    );
+    let (s, _) = f.set_plate(&f.chef, 999, "NOR 100").await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    // Das Kennzeichen eines anderen aktiven Lkw: 409
+    let (s, v) = f.set_plate(&f.chef, a, "sped 002").await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    assert_eq!(
+        v["error"],
+        "Das Kennzeichen SPED 002 hat in der Firma schon ein anderer Lkw"
+    );
+
+    // Während einer Leihe nicht: Im Spielstand des Fahrers steht noch das alte
+    f.checkout(&f.fahrer, a).await;
+    let (s, v) = f.set_plate(&f.chef, a, "NOR 100").await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    assert_eq!(
+        v["error"],
+        "Der Lkw ist gerade an Fahrer verliehen. Das Kennzeichen lässt sich erst nach der Rückgabe ändern"
+    );
+    f.checkin(&f.fahrer, a, json!({ "odometer_km": 1100 }))
+        .await;
+
+    // Geändert: das alte kommt zu den früheren
+    let (s, v) = f.set_plate(&f.chef, a, "nor 100").await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(
+        v,
+        json!({ "id": a, "plate": "NOR 100", "old_plates": ["SPED 001"], "changed": true })
+    );
+    let l = f.truck_as(&f.fahrer, a).await;
+    assert_eq!(l["plate"], "NOR 100");
+    assert_eq!(l["old_plates"], json!(["SPED 001"]));
+    // Dasselbe noch einmal ändert nichts
+    let (_, v) = f.set_plate(&f.chef, a, "NOR 100").await;
+    assert_eq!(v["changed"], false);
+    assert_eq!(v["old_plates"], json!(["SPED 001"]));
+    // Beim Ausleihen kommt das neue mit, das der Launcher in den Spielstand schreibt
+    let (_, out) = f
+        .post(&f.fahrer, &format!("/api/trucks/{a}/checkout"), json!({}))
+        .await;
+    assert_eq!(out["truck"]["plate"], "NOR 100");
+    // Ein Herzschlag mit dem alten Kennzeichen gehört weiter zu A
+    let (_, r) = f.beat(&f.fahrer, json!({ "plate": "SPED 001" })).await;
+    assert_eq!(n(&r["leased_truck_id"]), a);
+    let (_, r) = f.beat(&f.fahrer, json!({ "plate": "NOR 100" })).await;
+    assert_eq!(n(&r["leased_truck_id"]), a);
+    f.checkin(&f.fahrer, a, json!({ "odometer_km": 1200 }))
+        .await;
+    // Das frei gewordene Kennzeichen darf B bekommen
+    let (s, v) = f.set_plate(&f.chef, b, "SPED 001").await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["old_plates"], json!(["SPED 002"]));
+
+    // Das Kennzeichen eines ausgemusterten Lkw wandert, ausgemusterte ändern es nicht mehr
+    f.retire(&f.chef, b).await;
+    let (s, v) = f.set_plate(&f.chef, b, "NOR 200").await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    assert_eq!(
+        v["error"],
+        "Der Lkw ist ausgemustert und bekommt kein neues Kennzeichen"
+    );
+    let (s, _) = f.set_plate(&f.chef, a, "SPED 001").await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(
+        f.truck_as(&f.chef, b).await["plate"],
+        format!("SPED 001 (Lkw {b})")
+    );
+    assert_eq!(
+        f.truck_as(&f.chef, a).await["old_plates"],
+        json!(["SPED 001", "NOR 100"])
+    );
+}
+
+#[tokio::test]
+async fn ereignis_speichert_marke_und_modell() {
+    let f = Firma::new().await;
+    let (s, r) = f
+        .post(
+            &f.fahrer,
+            &format!("/api/companies/{}/events", f.id),
+            json!({ "event_id": "job-1", "type": "job_delivered", "amount": 1000, "distance_km": 300,
+                    "truck_brand": " scania ", "truck_model": "vehicle.scania.s_2016" }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    let (s, _) = f
+        .post(
+            &f.fahrer,
+            &format!("/api/companies/{}/events", f.id),
+            json!({ "event_id": "maut-1", "type": "tollgate", "amount": 10,
+                    "truck_brand": "volvo", "truck_model": "x".repeat(100) }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    f.event(&f.fahrer, "alt-1", "fined", 50, None).await;
+    let l = f.ledger().await;
+    let by = |id: &str| l.iter().find(|e| e["event_id"] == id).unwrap().clone();
+    let job = by("job-1");
+    assert_eq!(
+        (job["truck_brand"].clone(), job["truck_model"].clone()),
+        (json!("scania"), json!("vehicle.scania.s_2016"))
+    );
+    // Bei jeder Art, gekürzt wie andere Texte
+    assert_eq!(by("maut-1")["truck_brand"], "volvo");
+    assert_eq!(by("maut-1")["truck_model"], "x".repeat(64));
+    // Ohne Angabe, etwa vom älteren Plugin oder aus dem Dashboard: leer
+    let old = by("alt-1");
+    assert!(
+        old["truck_brand"].is_null() && old["truck_model"].is_null(),
+        "{old}"
+    );
+    // Andere Buchungen haben keins
+    assert!(
+        l.iter()
+            .filter(|e| e["event_id"].is_null())
+            .all(|e| e["truck_model"].is_null())
+    );
+
+    // Ein abgelehntes Ereignis behält beides in seinem Inhalt
+    call(
+        &f.app,
+        "PUT",
+        &format!("/api/companies/{}/profile", f.id),
+        Some(&f.fahrer),
+        Some(json!({ "profile_name": "Nordfracht" })),
+    )
+    .await;
+    let (s, _) = f
+        .post(
+            &f.fahrer,
+            &format!("/api/companies/{}/events", f.id),
+            json!({ "event_id": "privat-1", "type": "fined", "amount": 10, "profile": "Privat",
+                    "truck_brand": "daf", "truck_model": "xf_euro6" }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+    let (_, r) = f
+        .get(&f.chef, &format!("/api/companies/{}/rejected-events", f.id))
+        .await;
+    assert_eq!(r["entries"][0]["payload"]["truck_model"], "xf_euro6");
+}
+
+// ------------------------------------------------------------ Offenen Lohn erlassen
+
+impl Firma {
+    async fn waive(&self, token: &str, body: Value) -> (StatusCode, Value) {
+        self.post(
+            token,
+            &format!("/api/companies/{}/claims/waive", self.id),
+            body,
+        )
+        .await
+    }
+
+    async fn run_payroll(&self) -> Value {
+        let (s, r) = self
+            .post(
+                &self.chef,
+                &format!("/api/companies/{}/payrolls/run", self.id),
+                json!({}),
+            )
+            .await;
+        assert_eq!(s, StatusCode::OK, "{r}");
+        r
+    }
+}
+
+/// Die Kasse reicht nicht für den Lohn eines Auftrags, der Rest bleibt als Forderung stehen.
+/// Storniert der Chef Auftrag und Lohnbuchung, bleibt die Forderung, bis er sie erlässt. Sonst
+/// zahlte die nächste Abrechnung sie für den stornierten Auftrag aus.
+#[tokio::test]
+async fn lohnforderung_nach_storno_erlassen() {
+    let f = Firma::new().await;
+    // 1000 km: 400 € plus 50 € Pauschale. In der Kasse sind nur 100 €.
+    f.event(&f.fahrer, "job", "job_delivered", 100, Some(1000.0))
+        .await;
+    f.run_payroll().await;
+    let m = f.member(f.fahrer_id).await;
+    assert_eq!((n(&m["wallet"]), n(&m["open_claim"])), (100, 350));
+    assert_eq!(f.balance().await, 0);
+
+    // Auftrag und Lohnbuchung storniert: Kasse und Lohnkonto auf 0, die Forderung bleibt
+    let lohn = n(&line(&f.payrolls().await[0], f.fahrer_id)["entry_id"]);
+    let r = f
+        .reverse_ok(&[f.entry_id("job").await, lohn], "privates Profil")
+        .await;
+    let d = f.driver_of(&r);
+    assert_eq!((n(&d["wallet"]), n(&d["open_claim"])), (0, 350));
+    assert_eq!(n(&r["balance"]), 0);
+
+    // Nur der Chef, mit Grund, für ein Mitglied, höchstens die offene Forderung
+    let body = |amount: i64, reason: &str| json!({ "user_id": f.fahrer_id, "amount": amount, "reason": reason });
+    let (s, _) = f.waive(&f.fahrer, body(350, "privat")).await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    let (s, v) = f.waive(&f.chef, body(350, " ")).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    let (s, v) = f.waive(&f.chef, body(0, "privat")).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    let (s, v) = f.waive(&f.chef, body(351, "privat")).await;
+    assert_eq!(
+        (s, v["error"].clone()),
+        (
+            StatusCode::CONFLICT,
+            json!("Offen sind nur 350 €, mehr lässt sich nicht erlassen")
+        )
+    );
+    let (s, _) = f
+        .waive(
+            &f.chef,
+            json!({ "user_id": 999, "amount": 1, "reason": "privat" }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    assert_eq!(n(&f.member(f.fahrer_id).await["open_claim"]), 350);
+
+    // Zum Teil, dann den Rest
+    f.clock.advance(60);
+    let (s, v) = f
+        .waive(&f.chef, body(100, "Lohn für privaten Auftrag"))
+        .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(
+        v,
+        json!({ "user_id": f.fahrer_id, "waived": 100, "open_claim": 250, "wallet": 0 })
+    );
+    let (s, v) = f.waive(&f.chef, body(250, "Rest")).await;
+    assert_eq!((s, n(&v["open_claim"])), (StatusCode::OK, 0));
+    let (s, v) = f.waive(&f.chef, body(1, "noch mehr")).await;
+    assert_eq!(
+        (s, v["error"].clone()),
+        (StatusCode::CONFLICT, json!("Es ist kein Lohn offen"))
+    );
+    // Kein Geld geflossen
+    assert_eq!(f.balance().await, 0);
+    assert_eq!(f.wallet(f.fahrer_id).await, 0);
+
+    // Das Kassenbuch zeigt, wer wann was erlassen hat, neueste zuerst
+    let (s, p) = f
+        .get(&f.fahrer, &format!("/api/companies/{}/payrolls", f.id))
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    let w = p["claim_waivers"].as_array().unwrap();
+    assert_eq!(w.len(), 2, "{p}");
+    assert_eq!(
+        (
+            &w[1]["user"],
+            n(&w[1]["amount"]),
+            &w[1]["reason"],
+            &w[1]["booked_by_user"]
+        ),
+        (
+            &json!("Fahrer"),
+            100,
+            &json!("Lohn für privaten Auftrag"),
+            &json!("Chefin")
+        )
+    );
+
+    // Die nächste Abrechnung mit Geld in der Kasse zahlt nur den neuen Lohn
+    f.clock.advance(60);
+    f.event(&f.fahrer, "job-2", "job_delivered", 1000, Some(100.0))
+        .await;
+    let r = f.run_payroll().await;
+    let runs = r["payrolls"].as_array().unwrap();
+    let l = line(runs.last().unwrap(), f.fahrer_id);
+    assert_eq!(n(&l["claim_before"]), 0, "{l}");
+    assert_eq!(n(&l["claim_after"]), 0);
+    assert_eq!(f.wallet(f.fahrer_id).await, n(&l["paid"]));
+    assert!(n(&l["paid"]) < 350, "{l}");
+}
+
+// ------------------------------------------------------------ Storno von Paaren
+
+/// Die beiden Seiten einer Überweisung gehören zusammen, auch wenn sie verschiedene Zeitpunkte
+/// tragen (ältere Server lasen die Uhr je Seite). Fehlt die Gegenseite, wird nichts gebucht.
+#[tokio::test]
+async fn paar_storno_ohne_gleichen_zeitpunkt_und_ohne_gegenseite() {
+    let f = Firma::new().await;
+    f.event(&f.fahrer, "job", "job_delivered", 1000, None).await;
+    let (s, _) = f
+        .post(
+            &f.chef,
+            &format!("/api/companies/{}/transfer", f.id),
+            json!({ "user_id": f.fahrer_id, "amount": 500, "note": "Vorschuss" }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    let u = f.entries("ueberweisung").await;
+    let side = |account: &str| n(&u.iter().find(|e| e["account"] == account).unwrap()["id"]);
+    let (kasse, lohnkonto) = (side("firma"), side("fahrer"));
+    {
+        // Die Seite auf dem Lohnkonto eine Sekunde später, wie über eine Sekundengrenze
+        let conn = f.db.lock().unwrap();
+        conn.execute(
+            "UPDATE ledger SET created_at = created_at + 1 WHERE id = ?1",
+            [lohnkonto],
+        )
+        .unwrap();
+    }
+    let r = f.reverse_ok(&[kasse], "versehentlich").await;
+    assert_eq!(r["entries"].as_array().unwrap().len(), 2, "{r}");
+    assert_eq!((f.balance().await, f.wallet(f.fahrer_id).await), (1000, 0));
+
+    // Eine Überweisung ohne Gegenseite (etwa von Hand in die Datenbank geschrieben): 409
+    let lone = {
+        let conn = f.db.lock().unwrap();
+        conn.execute(
+            "INSERT INTO ledger (company_id, account, user_id, kind, amount, note, created_at)
+             VALUES (?1, 'firma', ?2, 'ueberweisung', -200, '', ?3)",
+            rusqlite::params![f.id, f.fahrer_id, f.clock.now()],
+        )
+        .unwrap();
+        conn.last_insert_rowid()
+    };
+    let count = f.ledger_count();
+    let (s, v) = f.reverse(&f.chef, &[lone], "versehentlich").await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    let msg = v["error"].as_str().unwrap();
+    assert!(
+        msg.contains(&format!("Buchung {lone} (Überweisung")) && msg.contains("Gegenbuchung"),
+        "{msg}"
+    );
+    assert_eq!(f.ledger_count(), count);
+
+    // Ist eine Seite schon allein storniert (so konnte es früher passieren), geht die andere
+    // allein, und die Konten stimmen wieder
+    let (s, _) = f
+        .post(
+            &f.chef,
+            &format!("/api/companies/{}/transfer", f.id),
+            json!({ "user_id": f.fahrer_id, "amount": 300, "note": "Vorschuss" }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    let u = f.entries("ueberweisung").await;
+    let open: Vec<&Value> = u
+        .iter()
+        .filter(|e| e["reversible"] == true && n(&e["amount"]).abs() == 300)
+        .collect();
+    let kasse = n(&open.iter().find(|e| e["account"] == "firma").unwrap()["id"]);
+    let lohnkonto = n(&open.iter().find(|e| e["account"] == "fahrer").unwrap()["id"]);
+    {
+        let conn = f.db.lock().unwrap();
+        conn.execute(
+            "INSERT INTO ledger (company_id, account, user_id, kind, amount, note, created_at,
+                                 reverses_id, booked_by)
+             VALUES (?1, 'firma', ?2, 'storno', 300, 'alt', ?3, ?4, ?5)",
+            rusqlite::params![f.id, f.fahrer_id, f.clock.now(), kasse, f.chef_id],
+        )
+        .unwrap();
+    }
+    let r = f.reverse_ok(&[lohnkonto], "nachholen").await;
+    assert_eq!(r["entries"].as_array().unwrap().len(), 1, "{r}");
+    assert_eq!(f.wallet(f.fahrer_id).await, 0);
+}
+
+// ------------------------------------------------------------ Kennzeichen, die nicht passen
+
+/// Meldet der Launcher bei der Rückgabe ein Kennzeichen, das sich nicht als eigenes setzen
+/// lässt, behält der Lkw seins. Das gemeldete kommt zu den früheren, damit die Telemetrie den
+/// Lkw weiter findet. So bleibt der Lkw ausleih- und einsetzbar.
+#[tokio::test]
+async fn rueckgabe_mit_kennzeichen_das_nicht_passt() {
+    let f = Firma::new().await;
+    let a = f.truck("SPED 001", 1000, full_state(1000)).await;
+    f.checkout(&f.fahrer, a).await;
+    let (s, r) = f
+        .checkin(
+            &f.fahrer,
+            a,
+            json!({ "odometer_km": 1100, "plate": "MÜ AB 123 XYZ ABCDEF" }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!(r["plate"], "SPED 001");
+    assert_eq!(r["plate_ignored"]["plate"], "MÜ AB 123 XYZ ABCDEF");
+    assert!(r["plate_ignored"]["reason"].as_str().unwrap().len() > 3);
+    let l = f.truck_as(&f.chef, a).await;
+    assert_eq!(l["plate"], "SPED 001");
+    assert_eq!(l["old_plates"], json!(["MÜ AB 123 XYZ ABCDEF"]));
+    // Ausleihen geht, mit dem eigenen Kennzeichen
+    let (s, out) = f
+        .post(&f.fahrer, &format!("/api/trucks/{a}/checkout"), json!({}))
+        .await;
+    assert_eq!(s, StatusCode::OK, "{out}");
+    assert_eq!(out["truck"]["plate"], "SPED 001");
+    // Die Telemetrie mit dem Kennzeichen aus dem alten Spielstand findet den Lkw
+    let (_, b) = f
+        .beat(&f.fahrer, json!({ "plate": "MÜ AB 123 XYZ ABCDEF" }))
+        .await;
+    assert_eq!(n(&b["leased_truck_id"]), a);
+    // Noch einmal dasselbe: kein zweiter Eintrag bei den früheren
+    let (s, r) = f
+        .checkin(
+            &f.fahrer,
+            a,
+            json!({ "odometer_km": 1200, "plate": "MÜ AB 123 XYZ ABCDEF" }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!(
+        f.truck_as(&f.chef, a).await["old_plates"],
+        json!(["MÜ AB 123 XYZ ABCDEF"])
+    );
+    // Ein gültiges Kennzeichen vom Spiel kommt in der gespeicherten Form
+    f.checkout(&f.fahrer, a).await;
+    let (s, r) = f
+        .checkin(
+            &f.fahrer,
+            a,
+            json!({ "odometer_km": 1300, "plate": "ef  xu 577" }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!(
+        (&r["plate"], &r["plate_ignored"]),
+        (&json!("EF XU 577"), &Value::Null)
+    );
+}
+
+/// Ein Lkw mit einem Kennzeichen aus der Zeit vor der Prüfung, das sich nicht als eigenes
+/// setzen lässt: Ausleihen lehnt der Server ab, bevor eine Leihe entsteht. Steckt er schon in
+/// einer Leihe, darf der Chef das Kennzeichen trotzdem ändern.
+#[tokio::test]
+async fn altes_kennzeichen_das_nicht_passt() {
+    let f = Firma::new().await;
+    let a = f.truck("SPED 001", 1000, full_state(1000)).await;
+    let set_raw = |plate: &str| {
+        let conn = f.db.lock().unwrap();
+        conn.execute(
+            "UPDATE trucks SET plate = ?1 WHERE id = ?2",
+            rusqlite::params![plate, a],
+        )
+        .unwrap();
+    };
+    set_raw("MÜNCHEN 1");
+    let (s, v) = f
+        .post(&f.fahrer, &format!("/api/trucks/{a}/checkout"), json!({}))
+        .await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    let msg = v["error"].as_str().unwrap();
+    assert!(
+        msg.contains("MÜNCHEN 1") && msg.contains("Der Chef ändert es im Dashboard"),
+        "{msg}"
+    );
+    let (s, l) = f.get(&f.chef, &format!("/api/trucks/{a}/lease")).await;
+    assert_eq!(s, StatusCode::CONFLICT, "keine Leihe entstanden: {l}");
+    let (s, v) = f.set_plate(&f.chef, a, "MUC 1").await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    f.checkout(&f.fahrer, a).await;
+
+    // Eine Leihe von vor der Prüfung mit so einem Kennzeichen: Ändern geht
+    set_raw("MÜNCHEN 2");
+    let (s, v) = f.set_plate(&f.chef, a, "MUC 2").await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let (s, l) = f.get(&f.fahrer, &format!("/api/trucks/{a}/lease")).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(l["truck"]["plate"], "MUC 2");
+    // Mit einem gültigen Kennzeichen bleibt es dabei: erst nach der Rückgabe
+    let (s, _) = f.set_plate(&f.chef, a, "MUC 3").await;
+    assert_eq!(s, StatusCode::CONFLICT);
 }

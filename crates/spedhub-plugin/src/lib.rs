@@ -3,6 +3,7 @@
 //! Das Spiel lädt die DLL aus `<Spielordner>\bin\win_x64\plugins\`. Das Plugin meldet
 //! Gameplay-Events (Auftrag abgeliefert, abgebrochen, Strafe, Maut, Fähre, Zug) an den
 //! SpedHub-Server und schickt alle 10 Sekunden einen Herzschlag mit Lkw, Zustand und Auftrag.
+//! Beides nur, solange im Spiel das Firmenprofil aus `plugin.json` aktiv ist.
 //! Ins Spiel schreibt es nichts, es nutzt nur das offizielle Telemetry SDK.
 //!
 //! Aufbau:
@@ -12,6 +13,7 @@
 //! - [`event`]: Übersetzung der Events in Buchungen
 //! - [`ids`]: eindeutige `event_id`s über Neustarts hinweg
 //! - [`outbox`]: Postausgang für Events, die noch nicht beim Server sind
+//! - [`profile`]: aktives ETS2-Profil aus `game.log.txt`, nur das Firmenprofil zählt
 //! - [`send`]: HTTP an den Server
 //! - [`telemetry`]: laufende Werte aus dem Spiel für den Herzschlag
 //! - [`config`]: `plugin.json` und Ablageorte
@@ -35,10 +37,12 @@ pub mod ffi;
 pub mod ids;
 pub mod log;
 pub mod outbox;
+pub mod profile;
 pub mod send;
 pub mod telemetry;
 
 pub use agent::{Agent, HeartbeatStats, Settings, Submitted};
 pub use config::{Config, ConfigError, Paths};
 pub use event::{Booking, GameplayData, translate};
+pub use profile::{ProfileGate, ProfileState};
 pub use telemetry::{Heartbeat, JobInfo, Snapshot, Telemetry};

@@ -146,7 +146,7 @@ jobs:
             echo
             echo "## Dateien"
             echo
-            echo "- \`$SETUP\`: Setup für Windows mit Launcher, Plugin und optional dem Server für lokale Tests"
+            echo "- \`$SETUP\`: Setup für Windows mit Launcher, Plugin, \`spedhub-save.exe\` (auch zum Bauen der Wirtschafts-Mod) und optional dem Server für lokale Tests"
             echo "- \`$SERVER\`: Server für Linux (x86_64, statisch gelinkt), zum Beispiel für den VPS"
             echo "- \`SHA256SUMS.txt\`: Prüfsummen. Der Launcher prüft das Setup damit vor dem Start"
             echo

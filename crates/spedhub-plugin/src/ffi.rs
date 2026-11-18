@@ -12,7 +12,7 @@
 //! Für den Herzschlag abonniert: die Kanäle `truck.odometer`, `truck.wear.engine`,
 //! `truck.wear.transmission`, `truck.wear.cabin`, `truck.wear.chassis`, `truck.wear.wheels`,
 //! `truck.fuel.amount` und `truck.speed`, die Konfigurationen `truck` (`license.plate`,
-//! `fuel.capacity`) und `job` (`cargo`, `source.city`, `destination.city`) und die Ereignisse
+//! `fuel.capacity`, `brand_id`, `id`) und `job` (`cargo`, `source.city`, `destination.city`) und die Ereignisse
 //! `paused` und `started`. Alles davon ist optional: Fehlt etwas im Spiel, bleibt der Wert leer,
 //! und die DLL lädt trotzdem. Eine Stadt in der Nähe liefert das SDK nicht.
 
@@ -168,9 +168,13 @@ fn copy_configuration(agent: &Agent, c: ConfigurationEvent<'_>) {
     if c.is(cfg_ids::TRUCK) {
         let plate = c.string_owned(cfg::LICENSE_PLATE);
         let capacity = c.get(cfg::FUEL_CAPACITY);
-        agent
-            .telemetry()
-            .update(|s| s.set_truck(plate.as_deref(), capacity));
+        // Marke und Modell, damit der Server den Lkw nicht nur am Kennzeichen erkennt
+        let brand = c.string_owned(cfg::BRAND_ID);
+        let model = c.string_owned(cfg::ID);
+        agent.telemetry().update(|s| {
+            s.set_truck(plate.as_deref(), capacity);
+            s.set_truck_model(brand.as_deref(), model.as_deref());
+        });
     } else if c.is(cfg_ids::JOB) {
         let job = c.has_attributes().then(|| {
             JobInfo::new(

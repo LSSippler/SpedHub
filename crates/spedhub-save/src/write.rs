@@ -83,7 +83,7 @@ pub fn write_saves(items: &[(&Path, &Save)]) -> Result<Vec<Written>> {
     Ok(done)
 }
 
-fn write_and_verify(path: &Path, data: &[u8]) -> Result<()> {
+pub(crate) fn write_and_verify(path: &Path, data: &[u8]) -> Result<()> {
     fs::write(path, data).map_err(|e| Error::io(path, &e))?;
     let back = fs::read(path).map_err(|e| Error::io(path, &e))?;
     if back != data {
@@ -130,7 +130,7 @@ fn remove_all(paths: &[PathBuf]) {
     }
 }
 
-fn sibling(path: &Path, suffix: &str) -> PathBuf {
+pub(crate) fn sibling(path: &Path, suffix: &str) -> PathBuf {
     let mut name = path.file_name().unwrap_or_default().to_os_string();
     name.push(".");
     name.push(suffix);

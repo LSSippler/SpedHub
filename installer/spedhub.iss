@@ -71,6 +71,9 @@ Name: "desktopicon"; Description: "Verknüpfung auf dem Desktop"; GroupDescripti
 Source: "{#BinDir}\spedhub-launcher.exe"; DestDir: "{app}"; Components: main; Flags: ignoreversion
 ; Die DLL liegt neben dem Launcher, von dort kopiert --install-plugin sie ins Spiel
 Source: "{#BinDir}\spedhub_plugin.dll"; DestDir: "{app}"; Components: main; Flags: ignoreversion
+; Kommandozeile für Spielstände und zum Bauen der Wirtschafts-Mod, siehe Wirtschafts-Mod.md
+Source: "{#BinDir}\spedhub-save.exe"; DestDir: "{app}"; Components: main; Flags: ignoreversion
+Source: "{#RootDir}\docs\wirtschafts-mod.md"; DestDir: "{app}"; DestName: "Wirtschafts-Mod.md"; Components: main; Flags: ignoreversion
 Source: "{#RootDir}\README.md"; DestDir: "{app}"; Components: main; Flags: ignoreversion
 Source: "{#RootDir}\crates\spedhub-launcher\README.md"; DestDir: "{app}"; DestName: "README-Launcher.md"; Components: main; Flags: ignoreversion
 Source: "{#RootDir}\crates\spedhub-plugin\README.md"; DestDir: "{app}"; DestName: "README-Plugin.md"; Components: main; Flags: ignoreversion

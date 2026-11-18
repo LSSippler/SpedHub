@@ -56,6 +56,17 @@ pub struct Booking {
     pub source_city: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_city: Option<String>,
+    /// Name des ETS2-Profils, das beim Annehmen aktiv war. Das Plugin nimmt nur Ereignisse aus
+    /// dem Firmenprofil an, der Server prüft es noch einmal. Ältere Zeilen im Postausgang haben
+    /// das Feld nicht.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    /// Marke und Modell des Lkw beim Annehmen, aus der Konfiguration `truck` des SDK
+    /// (`brand_id` und `id`). Ältere Zeilen im Postausgang haben die Felder nicht.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub truck_brand: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub truck_model: Option<String>,
 }
 
 impl Booking {
@@ -66,6 +77,23 @@ impl Booking {
             cargo: job.cargo,
             source_city: job.source_city,
             target_city: job.target_city,
+            ..self
+        }
+    }
+
+    /// Hängt Marke und Modell des gefahrenen Lkw an.
+    pub fn with_truck(self, brand: Option<String>, model: Option<String>) -> Booking {
+        Booking {
+            truck_brand: brand,
+            truck_model: model,
+            ..self
+        }
+    }
+
+    /// Hängt den Namen des aktiven Profils an.
+    pub fn with_profile(self, profile: &str) -> Booking {
+        Booking {
+            profile: Some(profile.to_string()),
             ..self
         }
     }
@@ -101,6 +129,9 @@ impl Draft {
             cargo: None,
             source_city: None,
             target_city: None,
+            profile: None,
+            truck_brand: None,
+            truck_model: None,
         }
     }
 

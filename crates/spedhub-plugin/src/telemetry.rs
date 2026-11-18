@@ -6,6 +6,11 @@
 //! einen Mutex, der nur für das Kopieren einzelner Werte gehalten wird.
 //!
 //! Eine Stadt in der Nähe liefert das Telemetry SDK nicht. `near_city` bleibt deshalb leer.
+//!
+//! Marke und Modell des Lkw (`brand_id` und `id` der Konfiguration `truck`) gehen mit jedem
+//! Herzschlag und jeder Buchung mit. Der Server ordnet einen Herzschlag einem Firmen-Lkw nur
+//! zu, wenn Kennzeichen und Modell passen. Wie `id` im Spiel genau aussieht, ist nicht geprüft,
+//! das Plugin schickt es deshalb unverändert, der Server bringt es auf seine Form.
 
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -81,6 +86,10 @@ pub struct Snapshot {
     pub plate: Option<String>,
     /// Tankinhalt bei vollem Tank in Litern, aus der Lkw-Konfiguration
     pub fuel_capacity: Option<f32>,
+    /// Marke des Lkw, `brand_id` aus der Lkw-Konfiguration, etwa `scania`
+    pub truck_brand: Option<String>,
+    /// Modell des Lkw, `id` aus der Lkw-Konfiguration
+    pub truck_model: Option<String>,
     pub odometer_km: Option<f32>,
     pub wear_engine: Option<f32>,
     pub wear_transmission: Option<f32>,
@@ -104,6 +113,8 @@ impl Default for Snapshot {
             paused: true,
             plate: None,
             fuel_capacity: None,
+            truck_brand: None,
+            truck_model: None,
             odometer_km: None,
             wear_engine: None,
             wear_transmission: None,
@@ -123,6 +134,12 @@ impl Snapshot {
     pub fn set_truck(&mut self, plate: Option<&str>, fuel_capacity: Option<f32>) {
         self.plate = plate.map(readable_plate).filter(|p| !p.is_empty());
         self.fuel_capacity = fuel_capacity.filter(|c| c.is_finite() && *c > 0.0);
+    }
+
+    /// Marke und Modell aus der Lkw-Konfiguration. Leer heißt: unbekannt.
+    pub fn set_truck_model(&mut self, brand: Option<&str>, model: Option<&str>) {
+        self.truck_brand = clean(brand);
+        self.truck_model = clean(model);
     }
 
     /// Neue Job-Konfiguration. `None` oder ein leerer Auftrag heißt: keiner. Der letzte nicht
@@ -161,6 +178,8 @@ impl Snapshot {
         };
         Some(Heartbeat {
             plate,
+            truck_brand: self.truck_brand.clone(),
+            truck_model: self.truck_model.clone(),
             odometer_km: positive(self.odometer_km),
             wear: (!wear.is_empty()).then_some(wear),
             fuel_relative,
@@ -171,6 +190,7 @@ impl Snapshot {
                 .filter(|v| v.is_finite())
                 .map(|v| (f64::from(v.abs()) * 3.6).min(1000.0)),
             job: self.job.clone(),
+            profile: None,
         })
     }
 }
@@ -200,6 +220,12 @@ impl Wear {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Heartbeat {
     pub plate: String,
+    /// Marke (`brand_id`). Fehlt sie, bleibt das Feld weg.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub truck_brand: Option<String>,
+    /// Modell (`id`). Ohne Modell ordnet der Server den Herzschlag keinem Firmen-Lkw zu.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub truck_model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub odometer_km: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -216,6 +242,9 @@ pub struct Heartbeat {
     /// Der laufende Auftrag, `null` heißt: keiner
     #[serde(default)]
     pub job: Option<JobInfo>,
+    /// Name des aktiven ETS2-Profils. Setzt der Herzschlag-Thread, wenn es das Firmenprofil ist.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
 }
 
 /// Gemeinsamer Zugriff auf den [`Snapshot`] für Spiel-Thread und Herzschlag-Thread.
@@ -240,6 +269,12 @@ impl Telemetry {
 
     pub fn set_paused(&self, paused: bool) {
         self.update(|s| s.paused = paused);
+    }
+
+    /// Marke und Modell des gefahrenen Lkw, für eine Buchung.
+    pub fn truck(&self) -> (Option<String>, Option<String>) {
+        let s = self.lock();
+        (s.truck_brand.clone(), s.truck_model.clone())
     }
 
     /// Nimmt den letzten Auftrag heraus, wenn er gebucht wird.

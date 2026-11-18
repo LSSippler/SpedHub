@@ -44,6 +44,13 @@ fn alle_testdaten_bleiben_byte_genau() {
         if path.extension().is_none_or(|e| e != "sii") {
             continue;
         }
+        // Die Beispiele für die Wirtschafts-Mod sind keine Spielstände, siehe tests/economy.rs
+        if path
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().starts_with("economy_"))
+        {
+            continue;
+        }
         let bytes = fs::read(&path).unwrap();
         let (save, format) = Save::from_bytes(&bytes).unwrap();
         assert_eq!(format, Format::Text);

@@ -17,7 +17,8 @@ pub enum Outcome {
     /// Gerade nicht möglich (Server weg, Zeitüberschreitung, Serverfehler, Anmeldung
     /// abgelaufen). Später noch einmal.
     Retry(String),
-    /// Der Server lehnt das Event dauerhaft ab (400). Erneut senden hilft nicht.
+    /// Der Server lehnt das Event dauerhaft ab (400 oder 422, zum Beispiel weil es aus einem
+    /// anderen Profil als dem gemeldeten Firmenprofil kommt). Erneut senden hilft nicht.
     Rejected(String),
 }
 
@@ -75,7 +76,8 @@ impl Sender {
 
 impl Sender {
     /// Schickt einen Herzschlag. Ein Fehler heißt nur: Dieser Herzschlag ist verloren. Er wird
-    /// nicht wiederholt und nicht gespeichert.
+    /// nicht wiederholt und nicht gespeichert. Verwirft der Server ihn (`recorded: false`, etwa
+    /// weil er ein anderes Firmenprofil kennt), kommt sein Hinweis als Fehler zurück.
     pub fn heartbeat(
         &self,
         config: &Config,
@@ -98,7 +100,19 @@ impl Sender {
             .read_to_string()
             .unwrap_or_default();
         if (200..300).contains(&status) {
-            Ok(())
+            let answer = serde_json::from_str::<serde_json::Value>(&body).ok();
+            match answer {
+                Some(v)
+                    if v.get("recorded").and_then(serde_json::Value::as_bool) == Some(false) =>
+                {
+                    Err(v
+                        .get("note")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("vom Server verworfen")
+                        .to_string())
+                }
+                _ => Ok(()),
+            }
         } else {
             Err(format!("{status}: {}", server_error(&body)))
         }

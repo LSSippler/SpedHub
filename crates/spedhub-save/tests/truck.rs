@@ -6,8 +6,8 @@ use std::collections::HashSet;
 
 use spedhub_save::{
     DEFAULT_MIN_MATCH, Error, InsertOptions, Save, TruckPackage, check, custom_plate, export_truck,
-    find_package_truck, insert_truck, license_plate, list_trucks, plate_country, plate_text,
-    remove_truck, set_license_plate, set_truck_state, truck_state, write_save,
+    find_package_truck, insert_truck, license_plate, list_trucks, model_key, plate_country,
+    plate_text, remove_truck, set_license_plate, set_truck_state, truck_state, write_save,
 };
 
 const PLAYER: &str = "_nameless.206.3353.6c38";
@@ -611,6 +611,54 @@ fn kennzeichen_beide_formen() {
         Err(Error::InvalidInput(_))
     ));
     assert_eq!(save, before);
+}
+
+// ------------------------------------------------------------------- Modell
+
+#[test]
+fn modell_aus_spielstand_und_telemetrie_ergibt_denselben_schluessel() {
+    // Aus dem Spielstand, wie es im Paket und auf dem Server steht
+    let package = package();
+    assert_eq!(package.model, "scania.s_2016");
+    assert_eq!(
+        model_key(None, &package.model).as_deref(),
+        Some("scania.s_2016")
+    );
+    // Aus der Telemetrie: brand_id und id, in allen Formen, die für id denkbar sind
+    for id in [
+        "scania.s_2016",
+        "vehicle.scania.s_2016",
+        "s_2016",
+        " Scania.S_2016 ",
+        "VEHICLE.scania.s_2016",
+    ] {
+        assert_eq!(
+            model_key(Some("scania"), id).as_deref(),
+            Some("scania.s_2016"),
+            "{id:?}"
+        );
+    }
+    assert_eq!(
+        model_key(Some(" SCANIA "), "s_2016").as_deref(),
+        Some("scania.s_2016")
+    );
+    // Ohne Marke bleibt ein Modell ohne Punkt, wie es ist
+    assert_eq!(model_key(None, "s_2016").as_deref(), Some("s_2016"));
+    assert_eq!(model_key(Some(""), "s_2016").as_deref(), Some("s_2016"));
+    // Eine andere Marke ändert ein Modell mit Punkt nicht
+    assert_eq!(
+        model_key(Some("volvo"), "mercedes.actros").as_deref(),
+        Some("mercedes.actros")
+    );
+    // Verschiedene Modelle bleiben verschieden
+    assert_ne!(
+        model_key(None, "scania.s_2016"),
+        model_key(Some("scania"), "r_2016")
+    );
+    // Leer
+    for empty in ["", "   ", "vehicle.", " vehicle. "] {
+        assert_eq!(model_key(Some("scania"), empty), None, "{empty:?}");
+    }
 }
 
 // ------------------------------------------------------------------- Wiedererkennen

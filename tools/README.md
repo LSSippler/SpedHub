@@ -20,6 +20,7 @@ Ohne Argumente zeigt das Programm die Hilfe. Gelesen wird jedes Format (`ScsC`, 
 | `insert-truck <spielstand> <paket.json> <ausgabe> [--keep-names]` | Lkw aus einem Paket einsetzen und zum aktiven Lkw machen |
 | `remove-truck <spielstand> <kennzeichen> <ausgabe> [--replacement <kennzeichen>]` | Eigenen Lkw mit Zubehör und Statistik entfernen. Beim aktiven Lkw ist ein Ersatz Pflicht |
 | `money <game.sii> [--info <info.sii>] [--set <betrag>]` | Kontostand anzeigen oder in beiden Dateien setzen |
+| `economy-mod <economy_data.sii> [-o <ziel.scs>] [--factor 0.01] [--also <schlüssel>]... [--version <x>] [--compatible 1.62.*] [--icon <bild.jpg>] [--force]` | Wirtschafts-Mod `spedhub_economy.scs` bauen: die Werte für den Erlös mal Faktor, alles andere Byte für Byte gleich. Ohne Datei zeigt der Befehl, wie man sie aus `def.scs` holt |
 
 Kennzeichen werden ohne Markup und ohne Land angegeben, Groß- und Kleinschreibung ist egal: `SPED 001`, `dd ri 772`.
 
@@ -42,6 +43,16 @@ JSON mit Modell, Kennzeichen, Zustand, allen `data_path`-Einträgen und dem Baup
 - Ziel mit eigenem Lkw ohne Auftrag: Der bisherige Lkw zieht in einen freien Stellplatz der Heimatgarage, der neue übernimmt den Platz des Spielers. Ohne freien Stellplatz bricht das Einsetzen mit einer Meldung ab.
 
 Alles andere, zum Beispiel ein laufender Auftrag mit eigenem Lkw, wird abgelehnt.
+
+### Wirtschafts-Mod
+
+`economy-mod` arbeitet nicht am Spielstand, sondern an `def/economy_data.sii` aus dem Archiv `def.scs` des Spiels. Die Datei gehört SCS, du entpackst sie selbst mit dem SCS Extractor. Der Befehl multipliziert alle Werte, die den Auftragserlös bestimmen, mit dem Faktor (Standard 0.01), listet jede Änderung alt -> neu, meldet weitere Schlüssel, die nach Geld klingen, und baut daraus die Mod. Ein vorhandenes Ziel ersetzt er nur mit `--force`.
+
+```powershell
+spedhub-save economy-mod C:\SpedHub\entpackt\def\economy_data.sii -o C:\SpedHub\spedhub_economy.scs
+```
+
+`spedhub-save.exe` installiert das Setup neben den Launcher. Die ganze Anleitung mit Extractor, Mod-Manager, Convoy-Server und Erlösfaktor im Dashboard steht in `docs/wirtschafts-mod.md`. Im Spiel ist die Mod noch nicht geprüft.
 
 ## transplant.py
 

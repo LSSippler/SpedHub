@@ -5,5 +5,5 @@ members = ["server", "crates/spedhub-save", "crates/spedhub-plugin", "crates/spe
 # Eine Versionsnummer für Server, Save-Bibliothek, Plugin, Launcher und Setup. Für ein Release
 # hier erhöhen und den Tag v<Version> pushen, siehe README.md.
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"

@@ -94,6 +94,10 @@ pub struct Member {
     pub stage: Option<i64>,
     #[serde(default)]
     pub cents_per_km: i64,
+    /// Das gemeldete Firmenprofil. Der Server zeigt es dem Chef bei allen, dem Fahrer nur bei
+    /// sich selbst. Ältere Server liefern es nicht.
+    #[serde(default)]
+    pub profile_name: Option<String>,
 }
 
 /// Ein Lkw im Fuhrpark, wie die Liste ihn zeigt.
@@ -277,6 +281,10 @@ pub struct Checkin {
     /// Kennzeichen nach der Rückgabe
     #[serde(default)]
     pub plate: String,
+    /// Das gemeldete Kennzeichen, wenn der Server es nicht übernommen hat, weil es sich nicht
+    /// als eigenes Kennzeichen setzen lässt. Der Lkw behält dann `plate`.
+    #[serde(default)]
+    pub plate_ignored: Option<IgnoredPlate>,
     pub odometer_km: i64,
     pub rev: i64,
     pub driven_km: i64,
@@ -292,6 +300,15 @@ pub struct Checkin {
     /// Über der Schadensgrenze: Der Lkw steht jetzt in der Werkstatt
     #[serde(default)]
     pub in_workshop: bool,
+}
+
+/// Ein Kennzeichen aus dem Spielstand, das der Server bei der Rückgabe nicht übernommen hat.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct IgnoredPlate {
+    pub plate: String,
+    /// Warum, wie `spedhub_save::custom_plate` es sagt
+    #[serde(default)]
+    pub reason: String,
 }
 
 /// Eine Betriebskosten-Buchung des Chefs, die noch mit keinem Lkw verknüpft ist. Daraus wählt
@@ -454,6 +471,16 @@ impl Client {
             .ok_or_else(|| Error::Network("Antwort ohne id".into()))
     }
 
+    /// Vorschlag des Servers für das Kennzeichen eines neuen Firmen-Lkw, etwa `NL 003` (nur
+    /// Chef).
+    pub fn plate_suggestion(&self, company_id: i64) -> Result<String> {
+        let v: Value = self.get(&format!("/api/companies/{company_id}/plate-suggestion"))?;
+        v.get("plate")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| Error::Network("Antwort ohne plate".into()))
+    }
+
     pub fn checkout(&self, truck_id: i64) -> Result<Checkout> {
         self.post(&format!("/api/trucks/{truck_id}/checkout"), &json!({}))
     }
@@ -523,6 +550,16 @@ impl Client {
         Ok(())
     }
 
+    /// Das Firmenprofil beim Server melden. Ab dann bucht der Server für diesen Fahrer nur
+    /// noch Ereignisse aus diesem Profil. `None` löscht es.
+    pub fn set_profile(&self, company_id: i64, profile_name: Option<&str>) -> Result<()> {
+        let _: Value = self.put(
+            &format!("/api/companies/{company_id}/profile"),
+            &json!({ "profile_name": profile_name }),
+        )?;
+        Ok(())
+    }
+
     /// Betriebskosten-Buchungen des Chefs, die noch mit keinem Lkw verknüpft sind, neueste
     /// zuerst. Nur für den Chef.
     pub fn purchase_candidates(&self, company_id: i64) -> Result<Vec<PurchaseCandidate>> {
@@ -555,6 +592,18 @@ impl Client {
             req = req.header("Authorization", &format!("Bearer {t}"));
         }
         read(req.call())
+    }
+
+    fn put<T: DeserializeOwned>(&self, path: &str, body: &impl Serialize) -> Result<T> {
+        self.check_url()?;
+        let mut req = self
+            .agent
+            .put(&format!("{}{path}", self.base))
+            .header(crate::version::HEADER, crate::version::VERSION);
+        if let Some(t) = &self.token {
+            req = req.header("Authorization", &format!("Bearer {t}"));
+        }
+        read(req.send_json(body))
     }
 
     fn post<T: DeserializeOwned>(&self, path: &str, body: &impl Serialize) -> Result<T> {

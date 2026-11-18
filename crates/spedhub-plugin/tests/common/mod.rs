@@ -110,7 +110,7 @@ fn agent() -> ureq::Agent {
         .into()
 }
 
-fn post(url: &str, token: Option<&str>, body: Value) -> Value {
+pub fn post(url: &str, token: Option<&str>, body: Value) -> Value {
     let mut req = agent().post(url);
     if let Some(t) = token {
         req = req.header("Authorization", &format!("Bearer {t}"));
@@ -157,14 +157,75 @@ pub fn ledger(server_url: &str, token: &str, id: i64) -> Vec<Value> {
     v["entries"].as_array().unwrap().clone()
 }
 
-/// `plugin.json` schreiben, wie es später der Launcher tut.
+/// Das Firmenprofil in den Tests.
+pub const COMPANY_PROFILE: &str = "Nordfracht";
+
+/// Wo in den Tests `game.log.txt` liegt.
+pub fn game_log(paths: &Paths) -> PathBuf {
+    paths.dir.join("game.log.txt")
+}
+
+/// `plugin.json` schreiben, wie es der Launcher tut, mit Firmenprofil. Dazu ein
+/// `game.log.txt`, in dem das Spiel das Firmenprofil gewählt hat.
 pub fn write_config(paths: &Paths, server_url: &str, token: &str, company_id: i64) {
+    fs::create_dir_all(&paths.dir).unwrap();
+    fs::write(
+        paths.config(),
+        json!({
+            "server_url": server_url, "token": token, "company_id": company_id,
+            "profile_name": COMPANY_PROFILE, "game_log": game_log(paths)
+        })
+        .to_string(),
+    )
+    .unwrap();
+    fs::write(
+        game_log(paths),
+        "00:00:00.000 : log created\n00:00:12.345 : New profile selected: 'Nordfracht'\n",
+    )
+    .unwrap();
+}
+
+/// `plugin.json` von einem älteren Launcher: ohne Firmenprofil und ohne Pfad zum Log.
+pub fn write_old_config(paths: &Paths, server_url: &str, token: &str, company_id: i64) {
     fs::create_dir_all(&paths.dir).unwrap();
     fs::write(
         paths.config(),
         json!({ "server_url": server_url, "token": token, "company_id": company_id }).to_string(),
     )
     .unwrap();
+}
+
+/// Das Spiel wählt ein Profil: eine Zeile mehr in `game.log.txt`.
+pub fn select_profile(paths: &Paths, name: &str) {
+    use std::io::Write;
+    let mut f = fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(game_log(paths))
+        .unwrap();
+    writeln!(f, "00:10:00.000 : New profile selected: '{name}'").unwrap();
+}
+
+/// Das Firmenprofil beim Server melden, wie es der Launcher tut.
+pub fn report_profile(server_url: &str, token: &str, company_id: i64, name: &str) {
+    let mut res = agent()
+        .put(&format!("{server_url}/api/companies/{company_id}/profile"))
+        .header("Authorization", &format!("Bearer {token}"))
+        .send_json(json!({ "profile_name": name }))
+        .unwrap();
+    assert!(res.status().is_success(), "{}", res.status());
+    let _: Value = res.body_mut().read_json().unwrap();
+}
+
+/// Die abgelehnten Ereignisse der Firma, wie der Chef sie sieht.
+pub fn rejected_events(server_url: &str, token: &str, id: i64) -> Vec<Value> {
+    let mut res = agent()
+        .get(&format!("{server_url}/api/companies/{id}/rejected-events"))
+        .header("Authorization", &format!("Bearer {token}"))
+        .call()
+        .unwrap();
+    let v: Value = res.body_mut().read_json().unwrap();
+    v["entries"].as_array().unwrap().clone()
 }
 
 /// Kurze Pausen, damit die Tests schnell sind.

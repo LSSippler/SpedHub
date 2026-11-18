@@ -1,13 +1,20 @@
 //! Abläufe, die Server und Spielstand zusammenbringen.
 //!
-//! - [`lease_package`]: Bauplan einer laufenden Leihe, aus `leases\` oder vom Server
+//! - [`lease_package`]: Bauplan einer laufenden Leihe, aus `leases\` oder vom Server, mit dem
+//!   Kennzeichen vom Server
+//! - [`return_truck`]: Rückgabe mit dem Kennzeichen aus dem Spielstand, falls es frei ist
 //! - [`sync_and_write`]: Geldabgleich, auf Wunsch zusammen mit dem Einsetzen eines Lkw
+//! - [`profile_to_report`]: muss das Firmenprofil (wieder) beim Server gemeldet werden?
+//! - [`ProfileReport`]: läuft die Meldung schon, oder muss sie nach einem Fehler noch einmal?
 
-use crate::client::{Client, SyncResult};
+use crate::client::{Checkin, Client, Company, SyncResult};
 use crate::error::{Error, Result};
-use crate::savegame::{Deployed, package_from_checkout, prepare_slot, unix_seconds, write_slot};
+use crate::savegame::{
+    Deployed, package_from_checkout, prepare_slot, set_company_plate, unix_seconds, write_slot,
+};
 use crate::settings::AppPaths;
 use crate::system::GameCheck;
+use serde_json::Value;
 use spedhub_save::TruckPackage;
 use std::{path::Path, time::SystemTime};
 
@@ -23,12 +30,18 @@ pub enum PackageSource {
 /// Der Bauplan eines geliehenen Lkw. Liegt er nicht in `leases\`, etwa auf einem anderen
 /// Rechner, holt der Launcher ihn vom Server und legt ihn dort ab. Die lokale Ablage ist nur
 /// ein Zwischenspeicher.
+///
+/// `plate` ist das Kennzeichen des Lkw auf dem Server, wie es im Fuhrpark steht. Es kommt auch
+/// in einen Bauplan aus der Ablage, die von einem älteren Launcher noch das Kennzeichen aus dem
+/// Spielstand des Chefs tragen kann.
 pub fn lease_package(
     client: &Client,
     paths: &AppPaths,
     truck_id: i64,
+    plate: &str,
 ) -> Result<(TruckPackage, PackageSource)> {
-    if let Some(p) = paths.load_lease(truck_id) {
+    if let Some(mut p) = paths.load_lease(truck_id) {
+        set_company_plate(&mut p, plate)?;
         return Ok((p, PackageSource::Local));
     }
     let lease = client.lease(truck_id)?;
@@ -36,6 +49,42 @@ pub fn lease_package(
     // Scheitert das Ablegen, geht es trotzdem weiter: Beim nächsten Mal fragt er wieder.
     let _ = paths.store_lease(truck_id, &package);
     Ok((package, PackageSource::Server))
+}
+
+/// Ergebnis einer Rückgabe.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Returned {
+    pub checkin: Checkin,
+    /// Das Kennzeichen aus dem Spielstand, das der Server nicht übernommen hat, weil ein
+    /// anderer Firmen-Lkw es trägt. Der Lkw behält dann sein Kennzeichen vom Server.
+    pub plate_taken: Option<String>,
+}
+
+/// Lkw zurückgeben. Mit `new_plate` meldet der Launcher das Kennzeichen, das das Spiel dem
+/// Lkw gegeben hat. Trägt das schon ein anderer Firmen-Lkw (409), etwa weil das Spiel das
+/// Wunschkennzeichen eines Profils vergeben hat, geht die Rückgabe ohne neues Kennzeichen
+/// durch: Beim nächsten Einsetzen schreibt der Launcher ohnehin das Kennzeichen vom Server.
+pub fn return_truck(
+    client: &Client,
+    truck_id: i64,
+    odometer_km: i64,
+    state: Option<&Value>,
+    new_plate: Option<&str>,
+) -> Result<Returned> {
+    match client.checkin(truck_id, odometer_km, state, new_plate) {
+        Ok(checkin) => Ok(Returned {
+            checkin,
+            plate_taken: None,
+        }),
+        Err(Error::Server { status: 409, .. }) if new_plate.is_some() => {
+            let checkin = client.checkin(truck_id, odometer_km, state, None)?;
+            Ok(Returned {
+                checkin,
+                plate_taken: new_plate.map(str::to_string),
+            })
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Ergebnis eines Abgleichs mit neuem Speicherplatz.
@@ -97,6 +146,55 @@ pub fn sync_and_write(
     })
 }
 
+/// Das Firmenprofil, das der Launcher dem Server melden soll: der Name des gewählten Profils,
+/// wenn der Server für `user_id` ein anderes oder keins kennt. `None`, wenn nichts zu tun ist
+/// oder kein Profil gewählt ist. Ein gemeldetes Profil löscht der Launcher nie, ohne Wahl
+/// bleibt es beim Server, wie es ist.
+pub fn profile_to_report(company: &Company, user_id: i64, chosen: Option<&str>) -> Option<String> {
+    let chosen = chosen.map(str::trim).filter(|c| !c.is_empty())?;
+    let reported = company
+        .members
+        .iter()
+        .find(|m| m.user_id == user_id)
+        .and_then(|m| m.profile_name.as_deref());
+    (reported != Some(chosen)).then(|| chosen.to_string())
+}
+
+/// Welche Meldung des Firmenprofils gerade läuft oder geklappt hat, je Firma und Name.
+/// Verhindert, dass dieselbe Meldung nach jedem Laden wieder rausgeht, etwa bei einem älteren
+/// Server, der das Profil nicht zurückgibt. Eine fehlgeschlagene Meldung vergisst sie, damit
+/// das nächste Laden sie wiederholt: Bis der Server das Profil kennt, lehnt er Ereignisse aus
+/// dem neuen Profil ab.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ProfileReport {
+    sent: Option<(i64, String)>,
+}
+
+impl ProfileReport {
+    /// Soll diese Meldung jetzt rausgehen? Dann merkt sie sich sie als laufend.
+    pub fn start(&mut self, company_id: i64, name: &str) -> bool {
+        let attempt = Some((company_id, name.to_string()));
+        if self.sent == attempt {
+            return false;
+        }
+        self.sent = attempt;
+        true
+    }
+
+    /// Ergebnis einer Meldung. Bei einem Fehler wird sie vergessen, sofern inzwischen keine
+    /// andere läuft.
+    pub fn finished(&mut self, company_id: i64, name: &str, ok: bool) {
+        if !ok
+            && self
+                .sent
+                .as_ref()
+                .is_some_and(|(c, n)| *c == company_id && n == name)
+        {
+            self.sent = None;
+        }
+    }
+}
+
 /// Kurze Beschreibung des Abgleichs für die Oberfläche.
 pub fn describe(sync: &SyncResult) -> String {
     let euro = |v: i64| format!("{v} €");
@@ -134,4 +232,29 @@ pub fn describe(sync: &SyncResult) -> String {
         euro(sync.advance)
     ));
     parts.join(". ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn profil_meldung_nach_fehler_wiederholen() {
+        let mut r = ProfileReport::default();
+        assert!(r.start(1, "B"));
+        // Läuft schon: nicht noch einmal
+        assert!(!r.start(1, "B"));
+        // Server nicht erreichbar: beim nächsten Laden wieder
+        r.finished(1, "B", false);
+        assert!(r.start(1, "B"));
+        // Geklappt: bleibt gemerkt
+        r.finished(1, "B", true);
+        assert!(!r.start(1, "B"));
+        // Ein anderes Profil oder eine andere Firma geht raus
+        assert!(r.start(1, "C"));
+        assert!(r.start(2, "C"));
+        // Ein später gemeldeter Fehler einer älteren Meldung vergisst die neue nicht
+        r.finished(1, "C", false);
+        assert!(!r.start(2, "C"));
+    }
 }

@@ -114,6 +114,22 @@ jobs:
           path: dist-launcher/
           if-no-files-found: error
 
+      # Kommandozeile für Spielstände und die Wirtschafts-Mod (economy-mod)
+      - name: spedhub-save bauen
+        shell: pwsh
+        run: |
+          cargo build --release -p spedhub-save
+          New-Item -ItemType Directory -Force dist-save | Out-Null
+          Copy-Item target/release/spedhub-save.exe, tools/README.md, docs/wirtschafts-mod.md dist-save/
+          ./dist-save/spedhub-save.exe help
+
+      - name: spedhub-save hochladen
+        uses: actions/upload-artifact@v6
+        with:
+          name: spedhub-save-windows-x64
+          path: dist-save/
+          if-no-files-found: error
+
       - name: Setup bauen
         shell: pwsh
         run: ./installer/build.ps1 -OutDir dist-setup

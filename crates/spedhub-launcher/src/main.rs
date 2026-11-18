@@ -8,9 +8,13 @@ use spedhub_launcher::cli::{self, Command, InstallEnv, InstallOutcome};
 use spedhub_launcher::client::{
     Client, Company, Me, PurchaseCandidate, Truck, format_percent, version_warning,
 };
-use spedhub_launcher::flows::{describe, lease_package, sync_and_write};
+use spedhub_launcher::flows::{
+    ProfileReport, describe, lease_package, profile_to_report, return_truck, sync_and_write,
+};
 use spedhub_launcher::plugin_install::{self, GameSource, PluginStatus};
-use spedhub_launcher::profiles::{Profile, SaveSlot, find_profiles, list_slots};
+use spedhub_launcher::profiles::{
+    Profile, SaveSlot, ets2_dir_of, find_profiles, game_log, list_slots, profile_name_of,
+};
 use spedhub_launcher::savegame::{
     FoundBy, ReturnData, SaveTruck, new_truck_from_save, package_from_checkout, read_for_return,
     trucks_in_save, unix_seconds,
@@ -29,14 +33,16 @@ use std::{
     time::SystemTime,
 };
 
-const UNCONFIRMED: &str = "Hinweis: Ein eingesetzter Lkw lädt im Spiel, das ist bestätigt. \
-Noch nicht bestätigt ist, ob das Spiel den neuen Speicherplatz des Launchers anzeigt und den Kontostand aus dem Geldabgleich übernimmt. \
+const UNCONFIRMED: &str = "Hinweis: Im Spiel bestätigt ist, dass ein eingesetzter Lkw lädt, der neue Speicherplatz des Launchers erscheint und das Spiel den Kontostand aus dem Geldabgleich übernimmt. \
 Der Launcher legt immer einen neuen Speicherplatz an und sichert den alten vorher. \
 Trotzdem gilt: vorher selbst ein Backup des Profils anlegen.";
 
 const STEAM_WARNING: &str = "Achtung: Dieses Profil liegt in steam_profiles und wird mit Steam Cloud abgeglichen. \
 Steam kann einen bearbeiteten Spielstand mit einer älteren Fassung aus der Cloud überschreiben. \
 Besser ein Profil ohne Steam Cloud als Firmenprofil nehmen.";
+
+const NO_PROFILE: &str = "Ohne Firmenprofil meldet das Plugin nichts an den Server. \
+Es zählt nur, was im Firmenprofil passiert.";
 
 const TITLE: &str = "SpedHub";
 
@@ -259,6 +265,14 @@ enum Background {
         dir: Option<PathBuf>,
         then_install: bool,
     },
+    /// Vorschlag des Servers für das Kennzeichen beim Übernehmen, oder warum nicht
+    PlateSuggested(std::result::Result<String, String>),
+    /// Firmenprofil beim Server gemeldet, oder warum nicht
+    ProfileReported {
+        company_id: i64,
+        name: String,
+        result: std::result::Result<(), String>,
+    },
     /// Eine Panic in einer dieser Arbeiten
     Failed(String),
 }
@@ -348,6 +362,8 @@ struct App {
     import_slot: Option<usize>,
     import_trucks: Vec<SaveTruck>,
     import_plate: Option<String>,
+    /// Kennzeichen des Lkw in der Firma, vorbelegt mit dem Vorschlag des Servers
+    import_company_plate: String,
 
     returning: Option<ReturnDialog>,
     linking: Option<LinkDialog>,
@@ -360,6 +376,8 @@ struct App {
     version_warning: Option<String>,
     plugin: PluginView,
     update: UpdateState,
+    /// Laufende oder geklappte Meldung des Firmenprofils, siehe [`ProfileReport`]
+    profile_report: ProfileReport,
     bg_tx: Sender<Background>,
     bg_rx: Receiver<Background>,
 }
@@ -395,6 +413,7 @@ impl App {
             import_slot: None,
             import_trucks: Vec::new(),
             import_plate: None,
+            import_company_plate: String::new(),
             returning: None,
             linking: None,
             message: None,
@@ -404,6 +423,7 @@ impl App {
             version_warning: None,
             plugin,
             update: UpdateState::Checking,
+            profile_report: ProfileReport::default(),
             bg_tx,
             bg_rx,
         };
@@ -453,16 +473,62 @@ impl App {
         }
     }
 
-    /// Schreibt plugin.json für die gewählte Firma.
+    /// Name des gewählten Firmenprofils, wie das Spiel ihn anzeigt.
+    fn profile_name(&self) -> Option<String> {
+        self.settings
+            .profile_dir
+            .as_deref()
+            .and_then(profile_name_of)
+    }
+
+    /// Schreibt plugin.json für die gewählte Firma und das gewählte Firmenprofil.
     fn write_plugin_config(&mut self) {
         let (Some(paths), Some(token), Some(company)) =
             (&self.paths, &self.token, self.settings.company_id)
         else {
             return;
         };
-        if let Err(e) = write_plugin_config(paths, &self.settings.server_url, token, company) {
+        let profile_dir = self.settings.profile_dir.as_deref();
+        let log = self
+            .ets2_dir
+            .as_deref()
+            .or_else(|| profile_dir.and_then(ets2_dir_of))
+            .map(game_log);
+        let name = self.profile_name();
+        if let Err(e) = write_plugin_config(
+            paths,
+            &self.settings.server_url,
+            token,
+            company,
+            name.as_deref(),
+            log.as_deref(),
+        ) {
             self.error(format!("plugin.json ließ sich nicht schreiben: {e}"));
         }
+    }
+
+    /// Meldet das gewählte Firmenprofil beim Server, wenn er ein anderes oder keins kennt.
+    /// Läuft nebenher und sperrt nichts.
+    fn report_profile(&mut self, ctx: &egui::Context) {
+        let (Some(company), Some(me)) = (&self.company, &self.me) else {
+            return;
+        };
+        let name = self.profile_name();
+        let Some(name) = profile_to_report(company, me.user_id, name.as_deref()) else {
+            return;
+        };
+        let company_id = company.id;
+        if !self.profile_report.start(company_id, &name) {
+            return;
+        }
+        let client = self.client();
+        self.background(ctx, move || Background::ProfileReported {
+            result: client
+                .set_profile(company_id, Some(&name))
+                .map_err(|e| e.to_string()),
+            company_id,
+            name,
+        });
     }
 
     /// Startet eine Arbeit im Hintergrund. Eine Panic darin wird zur Fehlermeldung.
@@ -552,8 +618,11 @@ impl App {
                 self.trucks = trucks;
                 if changed {
                     self.save_settings();
+                    // Der Vorschlag für das Kennzeichen gehörte zur alten Firma
+                    self.import_company_plate.clear();
                 }
                 self.write_plugin_config();
+                self.report_profile(ctx);
             }
             Done::Info(text) => {
                 self.info(text);
@@ -576,6 +645,9 @@ impl App {
             Done::SaveTrucks(trucks) => {
                 self.import_plate = None;
                 self.import_trucks = trucks;
+                if self.import_company_plate.trim().is_empty() {
+                    self.suggest_plate(ctx);
+                }
             }
             Done::Imported {
                 text,
@@ -583,6 +655,10 @@ impl App {
                 plate,
                 candidates,
             } => {
+                // Der nächste Lkw bekommt einen neuen Vorschlag
+                self.import_company_plate.clear();
+                self.import_plate = None;
+                self.suggest_plate(ctx);
                 if candidates.is_empty() {
                     self.info(text);
                 } else {
@@ -759,6 +835,32 @@ impl App {
                     Err(e) => self.error(e),
                 }
             }
+            Background::PlateSuggested(result) => match result {
+                // Was der Chef schon eingetragen hat, bleibt
+                Ok(p) if self.import_company_plate.trim().is_empty() => {
+                    self.import_company_plate = p;
+                }
+                Ok(_) => {}
+                Err(e) => self.error(format!(
+                    "Kein Vorschlag für das Kennzeichen vom Server ({e}). Bitte selbst eins eintragen"
+                )),
+            },
+            Background::ProfileReported {
+                company_id,
+                name,
+                result,
+            } => {
+                self.profile_report
+                    .finished(company_id, &name, result.is_ok());
+                match result {
+                    Ok(()) => self.info(format!(
+                        "Firmenprofil {name} beim Server gemeldet. Gebucht wird nur, was in diesem Profil passiert"
+                    )),
+                    Err(e) => self.error(format!(
+                        "Das Firmenprofil {name} ließ sich dem Server nicht melden: {e}. Bis das klappt, lehnt der Server Aufträge aus diesem Profil ab. Der Launcher versucht es beim nächsten Aktualisieren wieder"
+                    )),
+                }
+            }
             Background::Failed(e) => {
                 self.plugin.installing = false;
                 match std::mem::replace(&mut self.update, UpdateState::Current) {
@@ -890,10 +992,10 @@ impl App {
         let paths = self.paths.clone();
         let client = self.client();
         let company = self.company.as_ref().map(|c| c.id);
-        let truck_id = truck.id;
+        let (truck_id, plate) = (truck.id, truck.plate.clone());
         self.run(ctx, "Lkw wird in den Spielstand geschrieben", move || {
             // Liegt der Bauplan nicht auf diesem Rechner, kommt er vom Server
-            let package = package_for(&client, paths.as_ref(), truck_id)?;
+            let package = package_for(&client, paths.as_ref(), truck_id, &plate)?;
             deploy(&client, company, &profile, Some(&package), paths.as_ref()).map(Done::Info)
         });
     }
@@ -929,7 +1031,7 @@ impl App {
         self.run(ctx, "Spielstand wird gelesen", move || {
             // Der Bauplan hilft, den Lkw ohne Kennzeichen wiederzuerkennen. Ohne ihn geht es
             // nur über das Kennzeichen.
-            let package = package_for(&client, paths.as_ref(), truck_id).ok();
+            let package = package_for(&client, paths.as_ref(), truck_id, &plate).ok();
             // Lässt sich der Spielstand nicht lesen, bleibt die Eingabe von Hand.
             let (data, problem) = match read_for_return(&profile, &plate, package.as_ref()) {
                 Ok(d) => (d, None),
@@ -963,13 +1065,24 @@ impl App {
         let client = self.client();
         let paths = self.paths.clone();
         self.run(ctx, "Lkw wird zurückgegeben", move || {
-            let r = client.checkin(truck_id, km, state.as_ref(), new_plate.as_deref())?;
+            let returned = return_truck(&client, truck_id, km, state.as_ref(), new_plate.as_deref())?;
+            let r = returned.checkin;
             if let Some(p) = &paths {
                 p.remove_lease(truck_id);
             }
-            let renamed = match &new_plate {
-                Some(p) => format!(". Neues Kennzeichen {p}, das alte merkt sich der Server"),
-                None => String::new(),
+            let renamed = match (&new_plate, &returned.plate_taken, &r.plate_ignored) {
+                (_, Some(p), _) => format!(
+                    ". Das Spiel hat ihm das Kennzeichen {p} gegeben, das ein anderer Firmen-Lkw trägt. Er behält {}",
+                    r.plate
+                ),
+                (Some(_), None, Some(i)) => format!(
+                    ". Das Spiel hat ihm das Kennzeichen {} gegeben, das sich nicht als eigenes setzen lässt ({}). Er behält {}",
+                    i.plate, i.reason, r.plate
+                ),
+                (Some(p), None, None) => {
+                    format!(". Neues Kennzeichen {p}, das alte merkt sich der Server")
+                }
+                (None, None, _) => String::new(),
             };
             let mut text = format!(
                 "{plate} ist zurückgegeben, {} km gefahren{renamed}. Schaden {} %",
@@ -1009,6 +1122,17 @@ impl App {
         });
     }
 
+    /// Holt den Vorschlag des Servers für das Kennzeichen des nächsten übernommenen Lkw.
+    fn suggest_plate(&mut self, ctx: &egui::Context) {
+        let Some(company) = self.company.as_ref().filter(|c| c.is_chef()).map(|c| c.id) else {
+            return;
+        };
+        let client = self.client();
+        self.background(ctx, move || {
+            Background::PlateSuggested(client.plate_suggestion(company).map_err(|e| e.to_string()))
+        });
+    }
+
     fn load_save_trucks(&mut self, ctx: &egui::Context) {
         let Some(slot) = self.import_slot.and_then(|i| self.import_slots.get(i)) else {
             return;
@@ -1027,16 +1151,21 @@ impl App {
         ) else {
             return;
         };
+        let company_plate = self.import_company_plate.trim().to_string();
+        if company_plate.is_empty() {
+            self.error("Bitte das Kennzeichen in der Firma eintragen");
+            return;
+        }
         let game = slot.game();
         let client = self.client();
         self.run(ctx, "Lkw wird übernommen", move || {
-            let truck = new_truck_from_save(&game, &plate)?;
+            let truck = new_truck_from_save(&game, &plate, &company_plate)?;
             let truck_id = client.add_truck(company, &truck)?;
             // Ohne Kandidaten (oder wenn die Abfrage scheitert) gibt es nichts zu verknüpfen
             let candidates = client.purchase_candidates(company).unwrap_or_default();
             Ok(Done::Imported {
                 text: format!(
-                    "{} ({}, {} km) ist jetzt im Fuhrpark",
+                    "{} ({}, {} km) ist jetzt im Fuhrpark. Beim Einsetzen bekommt er dieses Kennzeichen",
                     truck.plate, truck.model, truck.odometer_km
                 ),
                 truck_id,
@@ -1183,6 +1312,9 @@ impl App {
                 self.import_slot = None;
                 self.import_trucks.clear();
                 self.save_settings();
+                // Das Plugin meldet nur aus dem Firmenprofil, Plugin und Server müssen es wissen
+                self.write_plugin_config();
+                self.report_profile(ui.ctx());
             }
             if ui.button("Profile neu suchen").clicked() {
                 self.profiles = self
@@ -1198,6 +1330,9 @@ impl App {
                 |d| format!("Keine Profile gefunden unter {}", d.display()),
             );
             ui.label(place);
+        }
+        if self.settings.profile_dir.is_none() {
+            ui.colored_label(egui::Color32::from_rgb(200, 120, 0), NO_PROFILE);
         }
         if self.profile().is_some_and(|p| p.steam_cloud) {
             ui.colored_label(egui::Color32::from_rgb(200, 120, 0), STEAM_WARNING);
@@ -1474,7 +1609,18 @@ impl App {
                         format!("{} ({model}{extra})", t.plate),
                     );
                 }
-                let ready = self.import_plate.is_some() && self.busy.is_none();
+                ui.horizontal(|ui| {
+                    ui.label("Kennzeichen in der Firma");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.import_company_plate)
+                            .char_limit(16)
+                            .desired_width(120.0),
+                    );
+                });
+                ui.weak("Mit diesem Kennzeichen setzt der Launcher den Lkw in die Spielstände der Fahrer. Vorgeschlagen ist das nächste freie der Firma. Erlaubt sind A bis Z, Ziffern, Leerzeichen, Punkt und Bindestrich");
+                let ready = self.import_plate.is_some()
+                    && !self.import_company_plate.trim().is_empty()
+                    && self.busy.is_none();
                 if ui
                     .add_enabled(ready, egui::Button::new("Lkw übernehmen"))
                     .clicked()
@@ -1655,14 +1801,16 @@ fn profile_label(p: &Profile) -> String {
     }
 }
 
-/// Bauplan eines geliehenen Lkw: aus `leases\` oder vom Server.
+/// Bauplan eines geliehenen Lkw: aus `leases\` oder vom Server, mit dem Kennzeichen vom
+/// Server (`plate`, wie im Fuhrpark).
 fn package_for(
     client: &Client,
     paths: Option<&AppPaths>,
     truck_id: i64,
+    plate: &str,
 ) -> Result<spedhub_save::TruckPackage> {
     match paths {
-        Some(p) => lease_package(client, p, truck_id).map(|(package, _)| package),
+        Some(p) => lease_package(client, p, truck_id, plate).map(|(package, _)| package),
         None => package_from_checkout(&client.lease(truck_id)?.truck),
     }
 }

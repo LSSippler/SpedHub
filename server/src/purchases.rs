@@ -26,6 +26,13 @@
 //! Gutschrift für einen Abgleich von vor der Freigabe gibt also kein Geld ins Budget zurück,
 //! das nie davon abgezogen war. Das Budget wird dadurch nie zu groß, höchstens zu klein.
 //!
+//! Storniert der Chef eigene Betriebskosten (siehe [`crate::reversal`]), gibt das Storno das
+//! Budget wieder frei, aber nur, wenn die stornierte Buchung es verbraucht hatte: nach der
+//! Freigabe gebucht, ihr Abgleich nach der Freigabe, und das Storno kommt vor dem Schließen.
+//! Die Firma hat das Geld dann zurück, im Spiel steht es dem Chef wieder zur Verfügung.
+//! Betriebskosten, die ein Abgleich selbst bucht, tragen seit dem Storno ebenfalls ihren
+//! Abgleich in `sync_id`. Weil der Abgleich nach der Freigabe kommt, ändert das nichts.
+//!
 //! Kein Doppelabzug: Der Abgleich schreibt Lohnkonto + Vorschuss + Rest. Gibt der Chef im Spiel
 //! X aus, fehlen beim nächsten Abgleich X gegenüber dem geschriebenen Stand, die Firma bucht X
 //! Betriebskosten (einmal), und der Rest sinkt um X. Was danach geschrieben wird, enthält nur
@@ -66,8 +73,9 @@ impl Budget {
 }
 
 /// Netto-Betriebskosten eines Nutzers in der Firmenkasse mit Buchungs-id in `(from, to]`,
-/// positiv. Ohne `to` bis jetzt. Spät gebuchte Beträge (mit `sync_id`) zählen nur, wenn ihr
-/// Abgleich nach `sync_from` liegt.
+/// positiv. Ohne `to` bis jetzt. Beträge mit `sync_id` zählen nur, wenn ihr Abgleich nach
+/// `sync_from` liegt. Ein Storno von Betriebskosten zählt, wenn die stornierte Buchung selbst
+/// gezählt hat, und gibt das Budget so wieder frei.
 fn net_costs(
     conn: &Connection,
     company_id: i64,
@@ -76,11 +84,15 @@ fn net_costs(
     to: Option<i64>,
 ) -> rusqlite::Result<i64> {
     conn.query_row(
-        "SELECT COALESCE(-SUM(amount), 0) FROM ledger
-         WHERE company_id = ?1 AND account = 'firma' AND user_id = ?2
-           AND kind IN ('betriebskosten', 'betriebskosten_korrektur')
-           AND id > ?3 AND (?4 IS NULL OR id <= ?4)
-           AND (sync_id IS NULL OR sync_id > ?5)",
+        "SELECT COALESCE(-SUM(l.amount), 0) FROM ledger l
+         LEFT JOIN ledger o ON o.id = l.reverses_id
+         WHERE l.company_id = ?1 AND l.account = 'firma' AND l.user_id = ?2
+           AND l.id > ?3 AND (?4 IS NULL OR l.id <= ?4)
+           AND ((l.kind IN ('betriebskosten', 'betriebskosten_korrektur')
+                 AND (l.sync_id IS NULL OR l.sync_id > ?5))
+                OR (l.kind = 'storno'
+                    AND o.kind IN ('betriebskosten', 'betriebskosten_korrektur')
+                    AND o.id > ?3 AND (o.sync_id IS NULL OR o.sync_id > ?5)))",
         params![company_id, user_id, from, to, sync_from],
         |r| r.get(0),
     )
