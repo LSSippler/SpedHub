@@ -72,12 +72,13 @@ Nach einem Absturz gibt es keinen Spielstand mit dem letzten Stand. Dafür gibt 
 
 ### Online und Herzschlag
 
-Das Plugin schickt alle 10 Sekunden einen Herzschlag an `POST /api/companies/{id}/heartbeat`, solange das Spiel läuft und nicht pausiert ist: Kennzeichen, Kilometerstand, Verschleiß, Tank, Geschwindigkeit und den laufenden Auftrag aus der Job-Konfiguration des SDK. Eine Stadt in der Nähe liefert das SDK nicht. Herzschläge gehen nie in den Postausgang, ein verlorener wird nicht nachgeschickt.
+Das Plugin schickt alle 10 Sekunden einen Herzschlag an `POST /api/companies/{id}/heartbeat`, solange das Spiel läuft und nicht pausiert ist: Kennzeichen, Marke und Modell (`brand_id` und `id` der Konfiguration `truck`), Kilometerstand, Verschleiß, Tank, Geschwindigkeit und den laufenden Auftrag aus der Job-Konfiguration des SDK. Eine Stadt in der Nähe liefert das SDK nicht. Herzschläge gehen nie in den Postausgang, ein verlorener wird nicht nachgeschickt.
 
 - Online ist, wer sich in den letzten 30 Sekunden gemeldet hat. Der Server hält nur den letzten Herzschlag je Fahrer und Firma (`presence`).
-- Das Kennzeichen wird ohne Markup und Land mit den aktuellen und den alten Kennzeichen des Fuhrparks verglichen. Passen mehrere Lkw, gewinnt der eigene geliehene, auch über ein altes Kennzeichen, das inzwischen ein anderer Lkw trägt.
+- Ein Herzschlag gehört zu einem Firmen-Lkw nur, wenn Kennzeichen und Modell passen. Kennzeichen können kollidieren, ein eigener Lkw des Fahrers kann wie ein Firmen-Lkw heißen. Passt nur das Kennzeichen, ist es kein Firmen-Lkw: kein letzter bekannter Zustand, keine Markierung. Ohne Modell (älteres Plugin) wird nichts zugeordnet.
+- Das Kennzeichen wird ohne Markup und Land mit den aktuellen und den alten Kennzeichen des Fuhrparks verglichen, das Modell über `spedhub_save::model_key` mit dem aus dem Spielstand (klein, ohne `vehicle.`, Marke davor, wenn das Modell keinen Punkt hat). Welche Form `id` im Spiel hat, ist nicht geprüft. Passen mehrere Lkw, gewinnt der eigene geliehene, auch über ein altes Kennzeichen, das inzwischen ein anderer Lkw trägt.
 - Fährt der Fahrer seinen geliehenen Firmen-Lkw, wird der Herzschlag zum letzten bekannten Zustand des Lkw (`trucks.last_*`). Nur gemeldete Werte überschreiben den Zustand vom Ausleihen, ein Kilometerstand unter dem vom Ausleihen zählt nicht.
-- Fährt er einen Firmen-Lkw, den er nicht geliehen hat, sieht der Chef eine Markierung. Zurückgeschrieben wird nichts, der Spielstand bleibt Sache des Launchers.
+- Fährt er einen Firmen-Lkw (Kennzeichen und Modell passen), den er nicht geliehen hat, sieht der Chef eine Markierung. Zurückgeschrieben wird nichts, der Spielstand bleibt Sache des Launchers.
 - Im Fuhrpark sehen alle, ob ein verliehener Lkw gerade gefahren wird.
 
 ### Nur das Firmenprofil zählt
@@ -213,7 +214,8 @@ So liegt ein Firmen-Lkw auf dem Server (`trucks.package` und `trucks.state`):
 
 - **Bauplan:** die `vehicle`-Unit und alle Zubehör-Units als Text. Beim Einsetzen bekommen sie neue, eindeutige Unit-Namen.
 - **Zustand:** Kilometerstand, Wartungs-Kilometer, Verschleiß je Bauteil, Tank.
-- **Kennzeichen:** eindeutig je Lkw und Firma, aber nicht dauerhaft: Das Spiel kann es ersetzen (im Spiel bestätigt). Der Launcher meldet das neue Kennzeichen bei der Rückgabe, der Server behält die alten in `old_plates`. So lässt sich auch Telemetrie mit einem alten Kennzeichen noch zuordnen. Im Spielstand erkennt SpedHub den Lkw über Modell und Teile wieder, nicht über das Kennzeichen.
+- **Kennzeichen:** eindeutig je Lkw und Firma. Der Chef legt es beim Anlegen fest, oder der Server schlägt eins vor (Kürzel der Firma und nächste freie Nummer, etwa `NL 001`), und der Chef kann es ändern, wenn der Lkw nicht verliehen ist. Beim Einsetzen schreibt der Launcher das Kennzeichen vom Server als selbst vergebenes Kennzeichen in den Spielstand (`NL 001|_germany`, Land aus dem Bauplan), nicht das Kennzeichen im Bauplan. Das stammt aus dem Spielstand, aus dem der Chef den Lkw übernommen hat, und hat im Spiel einem Actros das Kennzeichen eines anderen Firmen-Lkw gebracht. Dauerhaft ist das Kennzeichen trotzdem nicht: Das Spiel kann es ersetzen (im Spiel bestätigt). Der Launcher meldet das neue Kennzeichen bei der Rückgabe, der Server behält die alten in `old_plates`. So lässt sich auch Telemetrie mit einem alten Kennzeichen noch zuordnen. Im Spielstand erkennt SpedHub den Lkw über Modell und Teile wieder, nicht über das Kennzeichen allein.
+- **Modell:** aus dem `data_path`, etwa `scania.s_2016`. Zusammen mit dem Kennzeichen erkennt der Server einen Firmen-Lkw im Herzschlag, siehe Online und Herzschlag.
 - **Abhängigkeiten:** alle `data_path`-Einträge. Daraus ergibt sich, welche DLCs und Mods ein Fahrer braucht.
 - **Revision:** steigt bei jeder Rückgabe und bei jeder Reparatur in der Werkstatt.
 
@@ -232,7 +234,8 @@ Bestätigt ist mit 1.62: Ein mit `spedhub-save` eingesetzter Lkw lädt als eigen
 
 | Test | Frage |
 |---|---|
-| Kennzeichen | Warum ersetzt das Spiel das Kennzeichen, bei jedem Laden oder nur einmal? |
+| Kennzeichen | Warum ersetzt das Spiel das Kennzeichen, bei jedem Laden oder nur einmal? Behält es ein vom Launcher gesetztes Firmen-Kennzeichen (`NL 001\|_germany`) nach dem Laden und nach dem nächsten Autosave? Prüfschritte in `docs/save-format.md`, "Kennzeichen" |
+| Modell im Herzschlag | Welche Form hat `id` in der Konfiguration `truck` (`scania.s_2016`, `vehicle.scania.s_2016` oder `s_2016`)? Steht im Dashboard bei einem geliehenen Firmen-Lkw "wird gerade gefahren"? |
 | Einsetzen neben eigene Lkw | Lädt ein Spielstand, in dem der bisherige eigene Lkw in einen freien Stellplatz gezogen ist? |
 | Save-Cache | Übernimmt das laufende Spiel einen geänderten Spielstand zuverlässig, auch beim zweiten Mal? Seit 1.50 gibt es einen Datei-Cache, der alte Versionen liefern kann |
 | Kontostand mit Budget | Übernimmt das Spiel den beim Geldabgleich geschriebenen Kontostand auch mit dem Rest eines Anschaffungsbudgets beim Chef? Ohne Budget ist es bestätigt |

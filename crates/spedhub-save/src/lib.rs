@@ -37,6 +37,6 @@ pub use state::TruckState;
 pub use truck::{
     DEFAULT_MIN_MATCH, InsertOptions, InsertReport, PackageMatch, PackageUnit, RemoveReport,
     TruckInfo, TruckPackage, export_truck, find_package_truck, insert_truck, license_plate,
-    list_trucks, remove_truck, set_license_plate, set_truck_state, truck_state,
+    list_trucks, model_key, remove_truck, set_license_plate, set_truck_state, truck_state,
 };
 pub use write::{Written, write_save, write_saves};

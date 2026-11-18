@@ -4,7 +4,7 @@ Das Plugin meldet Gameplay-Events aus Euro Truck Simulator 2 an den SpedHub-Serv
 
 Gemeldet wird nur, solange im Spiel das Firmenprofil aktiv ist, siehe [Nur das Firmenprofil](#nur-das-firmenprofil).
 
-Im Spiel bestätigt (ETS2 1.62): Das Spiel lädt die DLL (Log "SpedHub: aktiv"), Herzschläge kommen beim Server an, `job.delivered` kommt mit Fracht, Start- und Zielstadt, Strecke und Zeitpunkt an. Noch nicht im Spiel geprüft ist, ob die Kanäle für den Herzschlag die erwarteten Einheiten liefern, welches Format `license.plate` genau hat und alles zur Erkennung des Profils (siehe dort).
+Im Spiel bestätigt (ETS2 1.62): Das Spiel lädt die DLL (Log "SpedHub: aktiv"), Herzschläge kommen beim Server an, `job.delivered` kommt mit Fracht, Start- und Zielstadt, Strecke und Zeitpunkt an. Noch nicht im Spiel geprüft ist, ob die Kanäle für den Herzschlag die erwarteten Einheiten liefern, welches Format `license.plate` genau hat, welche Form `id` in der Konfiguration `truck` hat (siehe [Marke und Modell](#marke-und-modell)) und alles zur Erkennung des Profils (siehe dort).
 
 ## Was gemeldet wird
 
@@ -21,6 +21,8 @@ Wer was zahlt, regelt der Server, siehe `server/README.md`, Abschnitt Buchungsre
 
 Zu jedem Event geht außerdem `occurred_at` mit: wann es im Spiel passiert ist, als Systemzeit dieses Rechners in Unix-Sekunden (UTC). Das Plugin hält den Zeitpunkt fest, sobald das Spiel das Event meldet, nicht erst beim Senden, und er bleibt im Postausgang erhalten. Damit ordnet der Server ein Event dem richtigen Geldabgleich zu, auch wenn es wegen eines Ausfalls erst Stunden später ankommt. Zeilen im Postausgang von älteren Fassungen haben das Feld nicht. Sie zählen beim Server im ersten Geldabgleich nach ihrem Empfang.
 
+Zu jedem Event gehen außerdem `truck_brand` und `truck_model` mit, Marke und Modell des Lkw beim Annehmen, siehe [Marke und Modell](#marke-und-modell). Zeilen im Postausgang von älteren Fassungen haben die Felder nicht und lesen sich weiter.
+
 Ebenso geht `profile` mit: der Name des ETS2-Profils, das beim Annehmen aktiv war. Das ist immer das Firmenprofil, aus anderen Profilen nimmt das Plugin nichts an. Zeilen im Postausgang von älteren Fassungen haben das Feld nicht und lesen sich weiter. Hat der Launcher dem Server ein Firmenprofil gemeldet, lehnt der Server sie ab, weil sich nicht sagen lässt, aus welchem Profil sie kamen.
 
 ## Herzschlag
@@ -30,6 +32,8 @@ Alle 10 Sekunden, solange das Spiel läuft und nicht pausiert ist, ein Kennzeich
 | Feld | Quelle im SDK |
 |---|---|
 | `plate` | Konfiguration `truck`, `license.plate`. Markup wie `<img src=...>` und ein Land hinter `\|` nimmt das Plugin heraus |
+| `truck_brand` | Konfiguration `truck`, `brand_id` (etwa `scania`). Fehlt sie, bleibt das Feld weg |
+| `truck_model` | Konfiguration `truck`, `id`, unverändert bis auf Leerraum. Fehlt es, bleibt das Feld weg, und der Server ordnet den Herzschlag keinem Firmen-Lkw zu |
 | `odometer_km` | Kanal `truck.odometer` |
 | `wear` | Kanäle `truck.wear.engine`, `.transmission`, `.cabin`, `.chassis`, `.wheels`, je 0 bis 1 |
 | `fuel_liters` | Kanal `truck.fuel.amount` |
@@ -44,6 +48,19 @@ Pausiert ist das Spiel laut SDK am Anfang und nach dem Ereignis `paused`, es lä
 Herzschläge kommen nie in den Postausgang. Ist der Server nicht erreichbar, ist der Herzschlag verloren, der nächste kommt 10 Sekunden später. Im Log steht nur der erste Fehler und wann sie wieder ankommen. Ein eigener Thread schickt sie, mit demselben Zeitlimit von 3 Sekunden, ein hängender Herzschlag hält also keine Buchung auf.
 
 Fracht und Städte für `job_delivered`: Das Plugin merkt sich die letzte nicht leere Job-Konfiguration. Das SDK kann sie vor oder nach dem Event `job.delivered` leeren, deshalb gilt die letzte nicht leere. Sie wird mit dem abgelieferten Auftrag gebucht und danach vergessen, ebenso bei einem abgebrochenen Auftrag. Zeilen im Postausgang von älteren Fassungen haben die Felder nicht und lesen sich weiter.
+
+## Marke und Modell
+
+Kennzeichen können zwischen Lkw kollidieren: Im Spiel bekam ein eingesetzter Firmen-Lkw das Kennzeichen eines anderen Firmen-Lkw, und ein eigener Lkw des Fahrers kann zufällig wie ein Firmen-Lkw heißen. Deshalb meldet das Plugin zu jedem Herzschlag und jedem Ereignis Marke und Modell aus der Konfiguration `truck` des SDK:
+
+| Feld | Attribut im SDK | Laut SDK |
+|---|---|---|
+| `truck_brand` | `brand_id` | Marke für die Konfiguration, nur Zeichen eines C-Bezeichners, etwa `scania` |
+| `truck_model` | `id` | "Name for internal use by code", Zeichen eines C-Bezeichners und Punkte |
+
+Die anzeigbaren Namen (`brand`, `name`) sind in der Sprache des Spiels und taugen nicht zum Vergleich, sie gehen nicht mit. Das Plugin schickt beide Werte unverändert, nur ohne Steuerzeichen und höchstens 64 Zeichen. Der Server bringt sie auf denselben Schlüssel wie das Modell aus dem Spielstand (`spedhub_save::model_key`, etwa `scania.s_2016`) und ordnet einen Herzschlag einem Firmen-Lkw nur zu, wenn Kennzeichen und Modell passen.
+
+Im Spiel nicht geprüft ist, welche Form `id` hat: `scania.s_2016`, `vehicle.scania.s_2016` oder nur `s_2016` neben `brand_id` werden alle verstanden. Hat sie eine ganz andere Form, passt kein Herzschlag zu einem Firmen-Lkw. Online ist der Fahrer dann trotzdem, nur gibt es keinen letzten bekannten Zustand und keine Markierung "fährt fremden Lkw". Prüfen im Spiel: Mit einem geliehenen Firmen-Lkw fahren und im Dashboard unter Fahrer nachsehen, ob hinter dem Kennzeichen das Modell steht und im Fuhrpark "wird gerade gefahren". Das gemeldete `truck_model` steht im Kassenbuch nach dem nächsten Ereignis (`GET /api/companies/{id}/ledger`, Feld `truck_model`).
 
 ## Nur das Firmenprofil
 
@@ -154,6 +171,7 @@ Der Token steht nur in `plugin.json`, nie im Log.
 ## Wie es arbeitet
 
 - Das Spiel ruft das Plugin auf seinem Haupt-Thread auf. Dort wird das Event übersetzt, das aktive Profil geprüft (nur die neuen Bytes von `game.log.txt`), und aus dem Firmenprofil bekommt es eine `event_id`, den Zeitpunkt `occurred_at` und den Profilnamen `profile` und wandert in eine Warteschlange. Kein Netz, geschrieben wird nichts.
+- Marke und Modell nimmt das Plugin beim Annehmen eines Ereignisses aus dem Snapshot, also vom Lkw, der gerade gefahren wird.
 - Kanäle und Konfigurationen kopiert der Spiel-Thread in einen Snapshot hinter einem Mutex, der nur für das Kopieren gehalten wird. Der Herzschlag-Thread liest ihn alle 10 Sekunden.
 - Ein eigener Thread schreibt jedes Event zuerst in den Postausgang und schickt es dann an `POST /api/companies/{id}/events`.
 - Ist der Server nicht erreichbar, bleibt das Event im Postausgang. Der Thread versucht es nach 5 Sekunden wieder, dann mit wachsender Pause bis zu 5 Minuten, und beim nächsten Spielstart sowieso. Doppelt senden schadet nicht, der Server bucht jede `event_id` nur einmal.
@@ -178,8 +196,8 @@ Der Token steht nur in `plugin.json`, nie im Log.
 | `src/send.rs` | HTTP an den Server |
 | `src/config.rs` | `plugin.json` und Ablageorte |
 | `src/log.rs` | Log mit Rotation |
-| `tests/logic.rs` | Übersetzung, IDs, Konfiguration, Log, Postausgang, Herzschlag aus dem Snapshot, Kennzeichen, Profilname aus dem Log, Lesen in Stücken und nach neuem Spielstart, Ereignisse aus anderem oder unbekanntem Profil, alte `plugin.json` |
-| `tests/server.rs` | Senden an einen echten spedhub-server, Ausfall, Neustart, doppeltes Senden, Herzschlag, Pause, Fracht und Städte, Version im Header, nur aus dem Firmenprofil, Profilwechsel im laufenden Spiel, vom Server abgelehnte und verworfene Meldungen |
+| `tests/logic.rs` | Übersetzung, IDs, Konfiguration, Log, Postausgang, Herzschlag aus dem Snapshot, Kennzeichen, Marke und Modell in Herzschlag und Buchung (auch alte Zeilen ohne), Profilname aus dem Log, Lesen in Stücken und nach neuem Spielstart, Ereignisse aus anderem oder unbekanntem Profil, alte `plugin.json` |
+| `tests/server.rs` | Senden an einen echten spedhub-server, Ausfall, Neustart, doppeltes Senden, Herzschlag, Zuordnung zum geliehenen Lkw nur mit passendem Modell, Pause, Fracht und Städte, Version im Header, nur aus dem Firmenprofil, Profilwechsel im laufenden Spiel, vom Server abgelehnte und verworfene Meldungen |
 
 Außer `ffi.rs` lässt sich alles ohne Spiel testen:
 

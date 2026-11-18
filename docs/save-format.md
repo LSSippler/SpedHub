@@ -31,9 +31,12 @@ Zweiter Test mit ETS2 1.62, frisches Profil, Launcher 0.2.0:
 - **Das Plugin lädt** (Log: "SpedHub: aktiv"). Herzschläge kommen beim Server an, `job.delivered` kommt mit Fracht, Start- und Zielstadt, Strecke und Zeitpunkt an.
 - **Kennzeichen können zwischen Lkw kollidieren.** Ein eingesetzter Actros (DD RI 772) bekam im Spiel das Kennzeichen `"BZ PM 1411|_germany"`. Das ist das Wunschkennzeichen aus einem anderen Profil desselben Spielers, also das Kennzeichen eines anderen Firmen-Lkw. Ein Kennzeichen allein identifiziert einen Firmen-Lkw deshalb nicht, es muss zusammen mit dem Modell passen.
 
+  Vermutliche Ursache, im Code nachvollzogen: Der Bauplan eines Firmen-Lkw (`TruckPackage.license_plate`) trägt das Kennzeichen aus dem Spielstand, aus dem der Chef ihn übernommen hat, und der Launcher hat bis November 2026 genau dieses Kennzeichen eingesetzt (`package_from_checkout` übernahm nur Zustand und Kilometerstand vom Server, nicht `trucks.plate`). Stammte der Bauplan aus einem Spielstand, in dem der Lkw das Wunschkennzeichen des Profils trug, kam dieses Kennzeichen in jeden Spielstand, in den der Lkw eingesetzt wurde, auch wenn auf dem Server ein anderes stand. Seitdem setzt der Launcher beim Einsetzen das Kennzeichen vom Server, siehe [Kennzeichen](#kennzeichen). Ob das Spiel selbst Kennzeichen durch das Wunschkennzeichen ersetzt, ist damit nicht ausgeschlossen und offen.
+
 Noch offen dazu:
 
 - Warum das Spiel das Kennzeichen ersetzt und ob es das bei jedem Laden tut oder nur einmal.
+- Ob das Spiel ein vom Launcher gesetztes Firmen-Kennzeichen (`NL 001|_germany`) behält, nach dem Laden und nach dem nächsten Autosave. Prüfschritte stehen unter [Kennzeichen](#kennzeichen).
 
 `testdata/nach_spiel_neues_kennzeichen.sii` bildet das nach: `erwartet_nach_einsetzen.sii` mit neuen Unit-Namen, einem Kennzeichen mit Markup und 425 km mehr.
 
@@ -179,6 +182,12 @@ Das Spiel kann ein selbst vergebenes Kennzeichen durch eins mit Markup ersetzen 
 
 Zum Suchen und Vergleichen nimmt `spedhub-save` den Text vor dem `|`, ersetzt jedes Markup-Tag durch ein Leerzeichen und vergleicht ohne Rücksicht auf Groß- und Kleinschreibung. Aus dem ersten Beispiel wird so `DD RI 772`. Neu gesetzte Kennzeichen sind immer selbst vergebene, mit Großbuchstaben, Ziffern, Leerzeichen, Punkt und Bindestrich, höchstens 16 Zeichen.
 
+**Kennzeichen der Firmen-Lkw.** Jeder Firmen-Lkw hat auf dem Server ein eigenes Kennzeichen (`trucks.plate`), das der Chef beim Anlegen festlegt oder das der Server vorschlägt (Kürzel der Firma und Nummer, etwa `NL 001`). Beim Einsetzen setzt der Launcher dieses Kennzeichen ins Paket, bevor `insert_truck` läuft: als selbst vergebenes Kennzeichen `<TEXT>|_<land>` mit dem Land aus dem Kennzeichen im Bauplan (`custom_plate` und `plate_country`). Aus `DD<...>RI 772|germany` im Bauplan und `NL 001` auf dem Server wird `NL 001|_germany`. Der Bauplan selbst bleibt, wie er ist. Lässt sich das Kennzeichen vom Server nicht so setzen (andere Zeichen, mehr als 16), bricht das Einsetzen mit einer Meldung ab, der Chef ändert es dann im Dashboard. Ein Firmen-Lkw von vor dieser Fassung bekommt beim nächsten Einsetzen sein Kennzeichen vom Server, umgebaut wird nichts.
+
+Weil auch dann ein Kennzeichen kollidieren kann (das Spiel ersetzt es, oder ein eigener Lkw des Fahrers heißt zufällig gleich), zählt es nirgends allein: Der Server ordnet einen Herzschlag nur zu, wenn auch das Modell passt, und die Rückgabe nimmt einen Lkw über das Kennzeichen nur, wenn sein Modell zum Bauplan passt, sonst sucht sie über die Teile.
+
+Noch im Spiel zu prüfen: Behält das Spiel das gesetzte Kennzeichen? Dazu einen Lkw mit Firmen-Kennzeichen (etwa `NL 001`) einsetzen lassen, den neuen Speicherplatz laden, im Lkw-Manager und am Lkw das Kennzeichen ansehen und im Log des Plugins (Herzschlag, Dashboard unter Fahrer) das gemeldete Kennzeichen notieren. Dann einen Autosave abwarten (oder speichern), im Spielstand `license_plate` der `vehicle`-Unit lesen (`spedhub-save decode`) und prüfen, ob dort weiter `"NL 001|_germany"` steht. Dasselbe nach einem zweiten Laden. Wird es ersetzt, das neue Kennzeichen notieren und ob es das Wunschkennzeichen des Profils ist.
+
 ## Lkw wiedererkennen
 
 Weil das Spiel Unit-Namen und Kennzeichen ersetzt, findet `spedhub_save::find_package_truck` den Lkw zu einem Paket ohne beides:
@@ -189,6 +198,8 @@ Weil das Spiel Unit-Namen und Kennzeichen ersetzt, findet `spedhub_save::find_pa
 - Die `data_path`-Listen stimmen zu mindestens 80 Prozent überein (`DEFAULT_MIN_MATCH`). Gemessen wird der Anteil der gemeinsamen Einträge an allen Einträgen beider Listen, jeder Eintrag einmal. Getauschte, fehlende und zusätzliche Teile zählen so gleich. Der Test-Scania hat 74 verschiedene Teile. Mit drei getauschten sind es 92 Prozent, bei 80 Prozent verträgt er bis zu acht.
 
 Passen mehrere, gewinnt die größte Übereinstimmung. Liegen die besten gleichauf, etwa bei zwei baugleichen Lkw, ist das ein Fehler (`AmbiguousTruck`) und kein Raten.
+
+Das Modell kommt aus dem `data_path` der Form `/def/vehicle/truck/<modell>/data.sii`, etwa `scania.s_2016`. Mit der Telemetrie vergleicht SpedHub über `spedhub_save::model_key`: klein geschrieben, ohne Präfix `vehicle.`, und hat das Modell keinen Punkt, kommt die Marke (`brand_id`) davor. So ergeben `scania.s_2016` aus dem Spielstand und `brand_id` `scania` mit `id` `s_2016`, `scania.s_2016` oder `vehicle.scania.s_2016` aus dem SDK denselben Schlüssel. Welche Form `id` im Spiel hat, ist nicht geprüft.
 
 ## Lkw einsetzen
 
@@ -270,7 +281,8 @@ Im Spiel bestätigt (ETS2 1.62): Der neue Speicherplatz erscheint und lädt. Der
 Offen ist noch, ob das Spiel nach `file_time` sortiert.
 ## Offen
 
-- Warum das Spiel Kennzeichen ersetzt und ob es das bei jedem Laden tut, siehe [Im Spiel bestätigt](#im-spiel-bestätigt).
+- Warum das Spiel Kennzeichen ersetzt und ob es das bei jedem Laden tut, siehe [Im Spiel bestätigt](#im-spiel-bestätigt). Ob es ein vom Launcher gesetztes Firmen-Kennzeichen behält, siehe [Kennzeichen](#kennzeichen).
+- Ob `id` aus der Konfiguration `truck` der Telemetrie dieselbe Modellkennung ist wie im Spielstand (`scania.s_2016`, mit oder ohne `vehicle.`, oder nur `s_2016` neben `brand_id`), siehe `spedhub_save::model_key`.
 - Was mit `truck_profit_logs` passiert, wenn das Log leer ist: Der Lkw-Manager rechnet laut Community-Quellen Kilometer aus dem Log und nicht aus dem Tacho.
 - Wie ein Spielstand aussieht, in dem der Spieler gar keinen Lkw hat und auch keinen Auftrag fährt.
 - Einsetzen in ein Profil, das schon eigene Lkw hat, und Entfernen des aktiven Lkw mit Ersatz: so gebaut wie oben beschrieben, im Spiel nicht geprüft.

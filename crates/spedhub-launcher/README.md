@@ -80,11 +80,11 @@ Mit Adminrechten kann der Launcher unter einem anderen Konto laufen, wenn ein St
 1. **Anmelden:** Server-Adresse (Standard `http://127.0.0.1:8787`), Name und Passwort. Mit "Konto anlegen" gibt es ein neues Konto. Die Anmeldung bleibt gespeichert.
 2. **Firma wählen:** oben in der Leiste. Eine Firma gründen oder ihr beitreten geht bisher nur im Dashboard.
 3. **Firmenprofil wählen:** das ETS2-Profil, in dem du für die Firma fährst. Der Launcher sucht unter `Dokumente\Euro Truck Simulator 2\profiles` und `steam_profiles`. Liegt das Profil unter `steam_profiles`, erscheint eine Warnung: Steam Cloud kann einen bearbeiteten Spielstand mit einer älteren Fassung überschreiben. Am besten nimmst du ein eigenes Profil ohne Steam Cloud. Nur was in diesem Profil passiert, zählt für die Firma (siehe Firmenprofil). Ohne gewähltes Profil meldet das Plugin nichts.
-4. **Ausleihen:** Der Server vergibt den Lkw. Der Launcher setzt ihn sofort in den neuesten Spielstand des Profils ein, gleicht dabei das Geld ab (siehe unten) und legt das Ergebnis als neuen Speicherplatz `SpedHub: <Kennzeichen>` an. Im Spiel diesen Speicherplatz laden.
+4. **Ausleihen:** Der Server vergibt den Lkw. Der Launcher setzt ihn sofort in den neuesten Spielstand des Profils ein, mit dem Kennzeichen, das der Lkw in der Firma hat (siehe Kennzeichen), gleicht dabei das Geld ab (siehe unten) und legt das Ergebnis als neuen Speicherplatz `SpedHub: <Kennzeichen>` an. Im Spiel diesen Speicherplatz laden.
 5. **In Spielstand schreiben:** dasselbe noch einmal, zum Beispiel wenn beim Ausleihen das Spiel lief. Liegt der Bauplan nicht auf diesem Rechner, holt der Launcher ihn vom Server.
 6. **Geld abgleichen:** Liest Kontostand und Erfahrungspunkte aus dem neuesten Spielstand, meldet sie dem Server und legt einen neuen Speicherplatz `SpedHub: Geldabgleich` mit dem Kontostand an, den der Server nennt: dein Lohnkonto plus den Betriebsvorschuss der Firma.
-7. **Zurückgeben:** Der Launcher liest Kilometerstand und Zustand des Lkw aus dem neuesten Spielstand und meldet sie dem Server. Er sucht den Lkw zuerst über das Kennzeichen. Das Spiel kann das Kennzeichen aber ersetzen. Findet er es nicht, erkennt er den Lkw über Modell, Teile und Kilometerstand wieder und meldet das neue Kennzeichen mit. Dafür braucht er den Bauplan, aus `leases\` oder vom Server. Passen zwei Lkw gleich gut, sagt er das und rät nicht. Erst wenn beides nichts findet, gibst du den Kilometerstand von Hand ein.
-8. **Lkw in den Fuhrpark übernehmen** (nur Chef): Spielstand wählen, Lkw wählen, übernehmen. Der Lkw kommt mit Bauplan, Kilometerstand und Zustand auf den Server. Danach bietet der Launcher an, den Kauf zu verknüpfen (siehe unten).
+7. **Zurückgeben:** Der Launcher liest Kilometerstand und Zustand des Lkw aus dem neuesten Spielstand und meldet sie dem Server. Er sucht den Lkw zuerst über das Kennzeichen, und nur einen mit dem Modell aus dem Bauplan: Ein eigener Lkw mit zufällig gleichem Kennzeichen zählt nicht. Das Spiel kann das Kennzeichen aber ersetzen. Findet er so keinen, oder haben zwei Lkw das Kennzeichen, erkennt er den Lkw über Modell, Teile und Kilometerstand wieder und meldet das neue Kennzeichen mit. Trägt das neue Kennzeichen schon ein anderer Firmen-Lkw, gibt er ohne neues Kennzeichen zurück und sagt das. Dafür braucht er den Bauplan, aus `leases\` oder vom Server. Passen zwei Lkw gleich gut, sagt er das und rät nicht. Erst wenn beides nichts findet, gibst du den Kilometerstand von Hand ein.
+8. **Lkw in den Fuhrpark übernehmen** (nur Chef): Spielstand wählen, Lkw wählen, Kennzeichen in der Firma festlegen, übernehmen. Das Feld ist mit dem Vorschlag des Servers vorbelegt (Kürzel der Firma und nächste freie Nummer, etwa `NL 003`) und lässt sich ändern. Das Kennzeichen aus dem Spielstand wird nicht das Firmen-Kennzeichen, es kann einem anderen Lkw gehören, etwa das Wunschkennzeichen eines Profils. Der Lkw kommt mit Bauplan, Kilometerstand und Zustand auf den Server. Danach bietet der Launcher an, den Kauf zu verknüpfen (siehe unten).
 9. **Spiel starten:** öffnet `steam://rungameid/227300`.
 
 Läuft das Spiel, schreibt der Launcher nichts in den Spielstand und sagt das auch.
@@ -92,6 +92,14 @@ Läuft das Spiel, schreibt der Launcher nichts in den Spielstand und sagt das au
 Über dem Fuhrpark zeigt der Launcher dein Lohnkonto, offenen Lohn, Level, Firmenkilometer und Lohnstufe. Im Fuhrpark steht bei einem verliehenen Lkw "fährt gerade" mit der Geschwindigkeit, wenn das Plugin des Ausleihers gerade Herzschläge mit genau diesem Lkw schickt.
 
 Die Spalte "Schaden" zeigt den Schaden jedes Lkw in Prozent, so wie der Server ihn aus dem Zustand der letzten Rückgabe rechnet, dazu den dauerhaften Verschleiß, etwa `12,5 %, dauerhaft 3 %`. Liegt ein Lkw nach der Rückgabe über der Schadensgrenze der Firma, steht er "in der Werkstatt" und "Ausleihen" ist ausgegraut, bis der Chef ihn im Dashboard reparieren lässt. Nach der Rückgabe sagt der Launcher, wie viel Schaden der Lkw hat, ob er in die Werkstatt muss und was du an Haftung für neuen Schaden aus dem Lohnkonto zahlst, wenn die Firma eine Haftung eingestellt hat. Details in `server/README.md`, Abschnitt "Schaden und Werkstatt".
+
+## Kennzeichen
+
+Jeder Firmen-Lkw hat auf dem Server ein eigenes Kennzeichen. Beim Einsetzen setzt der Launcher es ins Paket, bevor der Lkw in den Spielstand geht (`savegame::set_company_plate`, in `package_from_checkout` und `flows::lease_package`): als selbst vergebenes Kennzeichen `<TEXT>|_<land>`, mit dem Land aus dem Kennzeichen im Bauplan. Aus `NL 001` auf dem Server wird `NL 001|_germany`. Das gilt auch für einen Bauplan aus `leases\` von einem älteren Launcher. Der Bauplan selbst bleibt, wie er ist.
+
+Vorher hat der Launcher das Kennzeichen aus dem Bauplan eingesetzt, also das aus dem Spielstand, aus dem der Chef den Lkw übernommen hat. So kam beim Test im Spiel ein Actros mit dem Kennzeichen eines anderen Firmen-Lkw in den Spielstand (siehe `docs/save-format.md`, "Kennzeichen").
+
+Lässt sich das Kennzeichen vom Server nicht setzen (andere Zeichen als A bis Z, Ziffern, Leerzeichen, Punkt und Bindestrich, oder mehr als 16), bricht das Einsetzen mit einer Meldung ab. Der Chef ändert es dann im Dashboard ("Kennzeichen ändern"). Ob das Spiel ein so gesetztes Kennzeichen behält, ist im Spiel noch nicht geprüft.
 
 ## Firmenprofil
 
@@ -168,9 +176,9 @@ Die Deinstallation fragt "Anmeldung, Einstellungen und Backups behalten?", Stand
 | `src/update.rs` | GitHub-Releases abfragen, Setup laden und gegen `SHA256SUMS.txt` prüfen |
 | `src/version.rs` | Versionen lesen und vergleichen |
 | `src/client.rs` | Client für den Server |
-| `src/flows.rs` | Bauplan aus der Ablage oder vom Server, Geldabgleich mit neuem Speicherplatz, ob das Firmenprofil gemeldet werden muss |
+| `src/flows.rs` | Bauplan aus der Ablage oder vom Server mit dem Kennzeichen vom Server, Rückgabe mit neuem Kennzeichen, falls frei, Geldabgleich mit neuem Speicherplatz, ob das Firmenprofil gemeldet werden muss |
 | `src/profiles.rs` | Profile, Hex-Namen, Name zum Profilordner, Pfad zu `game.log.txt`, Speicherplätze |
-| `src/savegame.rs` | Lkw übernehmen, einsetzen, Kontostand setzen, für die Rückgabe lesen, über `spedhub-save` |
+| `src/savegame.rs` | Lkw übernehmen, Kennzeichen der Firma ins Paket setzen, einsetzen, Kontostand setzen, für die Rückgabe lesen, über `spedhub-save` |
 | `src/settings.rs` | `launcher.json`, `plugin.json`, Ablage der Baupläne |
 | `src/system.rs` | Windows-Anbindung: Dokumente-Ordner, laufendes Spiel, Steam, DPAPI, Registry, MessageBox, Ordnerdialog, Neustart mit Adminrechten |
 

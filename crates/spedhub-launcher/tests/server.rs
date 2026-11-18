@@ -6,13 +6,16 @@ use common::*;
 use serde_json::json;
 use spedhub_launcher::Error;
 use spedhub_launcher::client::Client;
-use spedhub_launcher::flows::{PackageSource, describe, lease_package, sync_and_write};
+use spedhub_launcher::flows::{
+    PackageSource, describe, lease_package, return_truck, sync_and_write,
+};
 use spedhub_launcher::savegame::{
     SYNC_SLOT_NAME, deploy_truck, new_truck_from_save, package_from_checkout, read_for_return,
 };
 use spedhub_launcher::settings::AppPaths;
 use spedhub_save::{
-    Save, info_money, info_name, money, set_money, set_truck_state, truck_state, write_save,
+    Save, info_money, info_name, list_trucks, money, set_license_plate, set_money, set_truck_state,
+    truck_state, write_save,
 };
 use std::{
     fs,
@@ -95,7 +98,7 @@ fn uebernehmen_ausleihen_einsetzen_zurueckgeben() {
 
     // 1. Chef übernimmt den Scania aus seinem Spielstand in den Fuhrpark
     let quelle = docs.nordfracht.join("save").join("1").join("game.sii");
-    let new = new_truck_from_save(&quelle, "SPED 001").unwrap();
+    let new = new_truck_from_save(&quelle, "SPED 001", "SPED 001").unwrap();
     let truck_id = chef.add_truck(company, &new).unwrap();
     let e = fahrer.add_truck(company, &new).unwrap_err();
     assert_eq!(e.to_string(), "Server: Das darf nur der Chef");
@@ -198,7 +201,10 @@ fn rueckgabe_mit_neuem_kennzeichen_vom_spiel() {
     let company = firma["id"].as_i64().unwrap();
     let quelle = docs.nordfracht.join("save").join("1").join("game.sii");
     let truck_id = chef
-        .add_truck(company, &new_truck_from_save(&quelle, "SPED 001").unwrap())
+        .add_truck(
+            company,
+            &new_truck_from_save(&quelle, "SPED 001", "SPED 001").unwrap(),
+        )
         .unwrap();
 
     // Ausleihen und einsetzen, so wie die Oberfläche es tut: Paket ablegen, dann schreiben
@@ -570,7 +576,7 @@ fn einsetzen_und_abgleich_in_einem_schritt() {
         .chef
         .add_truck(
             s.company,
-            &new_truck_from_save(&quelle, "SPED 001").unwrap(),
+            &new_truck_from_save(&quelle, "SPED 001", "SPED 001").unwrap(),
         )
         .unwrap();
     let checkout = s.fahrer.checkout(truck_id).unwrap();
@@ -612,7 +618,7 @@ fn bauplan_vom_server_wenn_hier_keiner_liegt() {
         .chef
         .add_truck(
             s.company,
-            &new_truck_from_save(&quelle, "SPED 001").unwrap(),
+            &new_truck_from_save(&quelle, "SPED 001", "SPED 001").unwrap(),
         )
         .unwrap();
     let checkout = s.fahrer.checkout(truck_id).unwrap();
@@ -621,15 +627,21 @@ fn bauplan_vom_server_wenn_hier_keiner_liegt() {
     // Ein anderer Rechner: leere Ablage, der Bauplan kommt vom Server und wird abgelegt
     let other_pc = AppPaths::new(dir.join("anderer-rechner"));
     assert!(other_pc.load_lease(truck_id).is_none());
-    let (p, from) = lease_package(&s.fahrer, &other_pc, truck_id).unwrap();
+    let (p, from) = lease_package(&s.fahrer, &other_pc, truck_id, "SPED 001").unwrap();
     assert_eq!(from, PackageSource::Server);
     assert_eq!(p, expected);
     assert_eq!(other_pc.load_lease(truck_id), Some(expected.clone()));
-    let (_, from) = lease_package(&s.fahrer, &other_pc, truck_id).unwrap();
+    let (_, from) = lease_package(&s.fahrer, &other_pc, truck_id, "SPED 001").unwrap();
     assert_eq!(from, PackageSource::Local);
 
     // Die Chefin darf auch, ein Kollege nicht
-    let (p, _) = lease_package(&s.chef, &AppPaths::new(dir.join("chef")), truck_id).unwrap();
+    let (p, _) = lease_package(
+        &s.chef,
+        &AppPaths::new(dir.join("chef")),
+        truck_id,
+        "SPED 001",
+    )
+    .unwrap();
     assert_eq!(p, expected);
     let mut kollege = Client::new(&url);
     let t = kollege.register("Kollege", "geheim1234").unwrap().token;
@@ -638,7 +650,13 @@ fn bauplan_vom_server_wenn_hier_keiner_liegt() {
         &t,
         json!({ "invite_code": s.invite }),
     );
-    let e = lease_package(&kollege, &AppPaths::new(dir.join("kollege")), truck_id).unwrap_err();
+    let e = lease_package(
+        &kollege,
+        &AppPaths::new(dir.join("kollege")),
+        truck_id,
+        "SPED 001",
+    )
+    .unwrap_err();
     assert_eq!(
         e.to_string(),
         "Server: Den Lkw hat jemand anderes ausgeliehen"
@@ -721,11 +739,18 @@ fn fuhrpark_zeigt_ob_der_lkw_gerade_gefahren_wird() {
     assert!(!t.driving);
     assert_eq!(t.speed_kmh, None);
 
-    // Herzschlag, wie ihn das Plugin schickt
+    // Herzschlag, wie ihn das Plugin schickt: mit Marke und Modell. Ohne Modell gehört er zu
+    // keinem Firmen-Lkw.
     post_raw(
         &format!("{url}/api/companies/{}/heartbeat", s.company),
         s.fahrer.token().unwrap(),
         json!({ "plate": "SPED 001", "speed_kmh": 85.0 }),
+    );
+    assert!(!s.chef.trucks(s.company).unwrap()[0].driving);
+    post_raw(
+        &format!("{url}/api/companies/{}/heartbeat", s.company),
+        s.fahrer.token().unwrap(),
+        json!({ "plate": "SPED 001", "speed_kmh": 85.0, "truck_brand": "scania", "truck_model": "s_2016" }),
     );
     let t = &s.chef.trucks(s.company).unwrap()[0];
     assert!(t.driving);
@@ -747,7 +772,7 @@ fn rueckgabe_mit_viel_verschleiss_bringt_den_lkw_in_die_werkstatt() {
         .chef
         .add_truck(
             s.company,
-            &new_truck_from_save(&quelle, "SPED 001").unwrap(),
+            &new_truck_from_save(&quelle, "SPED 001", "SPED 001").unwrap(),
         )
         .unwrap();
     let before = s.fahrer.trucks(s.company).unwrap().remove(0);
@@ -889,7 +914,10 @@ fn uebernommenen_lkw_als_kauf_verknuepfen() {
     let quelle = docs.nordfracht.join("save").join("1").join("game.sii");
     let truck_id = s
         .chef
-        .add_truck(company, &new_truck_from_save(&quelle, "SPED 001").unwrap())
+        .add_truck(
+            company,
+            &new_truck_from_save(&quelle, "SPED 001", "SPED 001").unwrap(),
+        )
         .unwrap();
     let candidates = s.chef.purchase_candidates(company).unwrap();
     assert_eq!(candidates.len(), 1);
@@ -1185,4 +1213,140 @@ fn send_event(url: &str, token: &str, company: i64, id: &str, profile: &str) -> 
         .unwrap()
         .status()
         .as_u16()
+}
+
+#[test]
+fn uebernehmen_mit_vorschlag_und_einsetzen_mit_kennzeichen_der_firma() {
+    let dir = temp_dir("firmen-kennzeichen");
+    let s = setup(&dir);
+    let docs = documents("firmen-kennzeichen-docs");
+    let app = AppPaths::new(dir.join("SpedHub"));
+
+    // Die Chefin übernimmt den Scania (im Spielstand SPED 001) mit dem Vorschlag des Servers
+    let suggestion = s.chef.plate_suggestion(s.company).unwrap();
+    assert_eq!(
+        suggestion, "NOR 001",
+        "Kürzel von Nordfracht und die erste Nummer"
+    );
+    let e = s.fahrer.plate_suggestion(s.company).unwrap_err();
+    assert_eq!(e.to_string(), "Server: Das darf nur der Chef");
+    let quelle = docs.nordfracht.join("save").join("1").join("game.sii");
+    let new = new_truck_from_save(&quelle, "SPED 001", &suggestion).unwrap();
+    assert_eq!(new.plate, "NOR 001");
+    let truck_id = s.chef.add_truck(s.company, &new).unwrap();
+    assert_eq!(s.chef.plate_suggestion(s.company).unwrap(), "NOR 002");
+    // Ein zweiter Firmen-Lkw, dessen Kennzeichen das Spiel gleich vergeben wird
+    let other = s
+        .chef
+        .add_truck(
+            s.company,
+            &new_truck_from_save(&quelle, "DD RI 772", "BZ PM 1411").unwrap(),
+        )
+        .unwrap();
+    let trucks = s.fahrer.trucks(s.company).unwrap();
+    let mine = trucks.iter().find(|t| t.id == truck_id).unwrap();
+    assert_eq!(
+        (mine.plate.as_str(), mine.model.as_str()),
+        ("NOR 001", "scania.s_2016")
+    );
+
+    // Der Fahrer leiht ihn. Im Paket steht danach das Kennzeichen der Firma, mit Land.
+    let checkout = s.fahrer.checkout(truck_id).unwrap();
+    assert_eq!(checkout.truck.plate, "NOR 001");
+    let package = package_from_checkout(&checkout.truck).unwrap();
+    assert_eq!(package.license_plate, "NOR 001|_germany");
+    // Ein Bauplan in der Ablage von einem älteren Launcher, noch mit SPED 001: bekommt es auch
+    let mut old = package.clone();
+    old.license_plate = "SPED 001|_germany".into();
+    app.store_lease(truck_id, &old).unwrap();
+    let (p, from) = lease_package(&s.fahrer, &app, truck_id, &checkout.truck.plate).unwrap();
+    assert_eq!(from, PackageSource::Local);
+    assert_eq!(p.license_plate, "NOR 001|_germany");
+
+    // Einsetzen mit Geldabgleich: Im neuen Speicherplatz trägt der Lkw NOR 001
+    let o = sync_and_write(
+        &s.fahrer,
+        s.company,
+        &docs.nordfracht,
+        Some(&p),
+        &app.backups(),
+        &FakeGame::closed(),
+        SystemTime::now(),
+    )
+    .unwrap();
+    assert_eq!(o.deployed.name, "SpedHub: NOR 001");
+    let game_sii = o.deployed.slot_dir.join("game.sii");
+    let (save, _) = Save::read(&game_sii).unwrap();
+    let plates: Vec<String> = list_trucks(&save)
+        .unwrap()
+        .into_iter()
+        .map(|t| t.plate)
+        .collect();
+    assert_eq!(plates, vec!["NOR 001|_germany".to_string()]);
+    let back = read_for_return(&docs.nordfracht, "NOR 001", Some(&p))
+        .unwrap()
+        .unwrap();
+    assert_eq!(back.found_by, spedhub_launcher::savegame::FoundBy::Plate);
+
+    // Das Spiel gibt ihm das Kennzeichen des anderen Firmen-Lkw, wie im Test im Spiel
+    let (mut save, _) = Save::read(&game_sii).unwrap();
+    set_license_plate(&mut save, Some("NOR 001"), "BZ PM 1411", None).unwrap();
+    let mut state = truck_state(&save, None).unwrap();
+    state.odometer += 100;
+    set_truck_state(&mut save, None, &state).unwrap();
+    write_save(&game_sii, &save).unwrap();
+    fs::File::options()
+        .write(true)
+        .open(&game_sii)
+        .unwrap()
+        .set_modified(SystemTime::now())
+        .unwrap();
+    let back = read_for_return(&docs.nordfracht, "NOR 001", Some(&p))
+        .unwrap()
+        .unwrap();
+    assert_eq!(back.new_plate.as_deref(), Some("BZ PM 1411"));
+    // Die Rückgabe geht trotzdem durch, der Lkw behält sein Kennzeichen
+    let r = return_truck(
+        &s.fahrer,
+        truck_id,
+        back.odometer_km,
+        Some(&back.state),
+        back.new_plate.as_deref(),
+    )
+    .unwrap();
+    assert_eq!(r.plate_taken.as_deref(), Some("BZ PM 1411"));
+    assert_eq!(r.checkin.plate, "NOR 001");
+    assert_eq!(r.checkin.driven_km, 100);
+    let trucks = s.chef.trucks(s.company).unwrap();
+    let t = trucks.iter().find(|t| t.id == truck_id).unwrap();
+    assert_eq!(t.plate, "NOR 001");
+    assert!(t.old_plates.is_empty());
+    assert!(t.leased_by.is_none());
+    assert_eq!(
+        trucks.iter().find(|t| t.id == other).unwrap().plate,
+        "BZ PM 1411"
+    );
+    // Beim nächsten Einsetzen ist es wieder NOR 001
+    let again = s.fahrer.checkout(truck_id).unwrap();
+    assert_eq!(
+        package_from_checkout(&again.truck).unwrap().license_plate,
+        "NOR 001|_germany"
+    );
+    // Ein freies neues Kennzeichen vom Spiel übernimmt der Server wie bisher
+    let r = return_truck(
+        &s.fahrer,
+        truck_id,
+        back.odometer_km,
+        None,
+        Some("EF XU 577"),
+    )
+    .unwrap();
+    assert_eq!(
+        (r.plate_taken, r.checkin.plate.as_str()),
+        (None, "EF XU 577")
+    );
+    // Andere Fehler bleiben Fehler
+    let e = return_truck(&s.fahrer, truck_id, back.odometer_km, None, Some("XY 1")).unwrap_err();
+    assert_eq!(e.to_string(), "Server: Der Lkw ist gar nicht verliehen");
+    let _ = fs::remove_dir_all(dir);
 }

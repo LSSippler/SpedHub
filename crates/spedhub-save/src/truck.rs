@@ -957,6 +957,43 @@ fn model_from_path(path: &str) -> Option<&str> {
     (!m.is_empty() && !m.contains('/')).then_some(m)
 }
 
+/// Das Modell eines Lkw als Schlüssel zum Vergleichen, gleich aus beiden Quellen:
+///
+/// - aus dem Spielstand: [`TruckPackage::model`] (aus dem `data_path`), etwa `scania.s_2016`,
+///   so steht es auch auf dem Server (`trucks.model`). Dann ist `brand` leer.
+/// - aus der Telemetrie: Konfiguration `truck` des SDK mit `brand_id` (`brand`, etwa `scania`)
+///   und `id` (`model`).
+///
+/// Klein geschrieben, ohne Leerraum am Rand und ohne Präfix `vehicle.`. Hat das Modell danach
+/// keinen Punkt, kommt die Marke davor: `brand` `scania` und `model` `s_2016` ergeben
+/// `scania.s_2016`. Leer heißt `None`.
+///
+/// Annahme, im Spiel nicht geprüft: `id` aus der Telemetrie ist dieselbe Kennung wie im
+/// Spielstand, als `scania.s_2016`, `vehicle.scania.s_2016` oder nur `s_2016`. Das SDK sagt
+/// dazu nur "Name for internal use by code, limited to C-identifier characters and dots".
+/// Stimmt die Annahme nicht, passt kein Herzschlag zu einem Firmen-Lkw, zugeordnet wird dann
+/// nichts. Falsch zugeordnet wird nie.
+pub fn model_key(brand: Option<&str>, model: &str) -> Option<String> {
+    let model = model.trim().to_lowercase();
+    let model = model
+        .strip_prefix(v::MODEL_ID_PREFIX)
+        .unwrap_or(&model)
+        .trim();
+    if model.is_empty() {
+        return None;
+    }
+    if model.contains('.') {
+        return Some(model.to_string());
+    }
+    match brand
+        .map(|b| b.trim().to_lowercase())
+        .filter(|b| !b.is_empty())
+    {
+        Some(brand) => Some(format!("{brand}.{model}")),
+        None => Some(model.to_string()),
+    }
+}
+
 fn single_model(models: BTreeSet<String>, unit: &str) -> Result<String> {
     let mut it = models.into_iter();
     match (it.next(), it.next()) {

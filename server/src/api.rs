@@ -4,7 +4,7 @@ use crate::{
     db::{Db, insert_default_wage_levels},
     error::{ApiError, ApiResult},
     levels::{WageLevel, standing, wage_levels},
-    payroll,
+    payroll, plates,
     presence::{self, HeartbeatReq},
     profiles,
     purchases::{self, Budget},
@@ -20,7 +20,7 @@ use axum::{
     extract::{FromRef, FromRequestParts, Path, Query, State},
     http::{HeaderMap, header::AUTHORIZATION, request::Parts},
     response::Html,
-    routing::{get, post, put},
+    routing::{get, patch, post, put},
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -72,6 +72,10 @@ pub fn router_with(db: Db, clock: Clock) -> Router {
             "/api/companies/{id}/trucks",
             get(list_trucks).post(add_truck),
         )
+        .route(
+            "/api/companies/{id}/plate-suggestion",
+            get(plate_suggestion),
+        )
         .route("/api/companies/{id}/wage-levels", put(set_wage_levels))
         .route("/api/companies/{id}/events", post(post_event))
         .route("/api/companies/{id}/profile", put(set_profile))
@@ -111,6 +115,7 @@ pub fn router_with(db: Db, clock: Clock) -> Router {
             "/api/companies/{id}/unexplained/{entry}/close",
             post(close_unexplained),
         )
+        .route("/api/trucks/{id}", patch(update_truck))
         .route("/api/trucks/{id}/checkout", post(checkout))
         .route("/api/trucks/{id}/checkin", post(checkin))
         .route("/api/trucks/{id}/lease", get(get_lease))
@@ -612,6 +617,7 @@ async fn get_company(
             if p.online(now) {
                 m["online"] = json!(true);
                 m["plate"] = json!(p.plate);
+                m["model"] = p.model();
                 m["near_city"] = p.near_city();
                 m["speed_kmh"] = p.speed_kmh();
                 m["job"] = p.job();
@@ -831,7 +837,10 @@ async fn set_wage_levels(
 
 #[derive(Deserialize)]
 struct NewTruck {
-    plate: String,
+    /// Kennzeichen in der Firma. Fehlt es oder ist es leer, schlägt der Server eins vor, siehe
+    /// [`crate::plates`].
+    #[serde(default)]
+    plate: Option<String>,
     model: String,
     #[serde(default)]
     package: String,
@@ -840,6 +849,9 @@ struct NewTruck {
     state: Option<Value>,
 }
 
+/// Lkw anlegen. Ohne Kennzeichen bekommt er den Vorschlag des Servers. Ein Kennzeichen muss
+/// sich als selbst vergebenes Kennzeichen in den Spielstand schreiben lassen, sonst 400. Trägt
+/// ein aktiver Lkw der Firma es schon, 409.
 async fn add_truck(
     State(db): State<Db>,
     State(clock): State<Clock>,
@@ -847,13 +859,14 @@ async fn add_truck(
     Path(company_id): Path<i64>,
     Json(b): Json<NewTruck>,
 ) -> ApiResult<Json<Value>> {
-    let plate = b.plate.trim();
     let model = b.model.trim();
-    if plate.is_empty() || model.is_empty() {
-        return Err(ApiError::bad(
-            "Kennzeichen und Modell dürfen nicht leer sein",
-        ));
+    if model.is_empty() {
+        return Err(ApiError::bad("Das Modell darf nicht leer sein"));
     }
+    let wanted = match b.plate.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        Some(p) => Some(plates::company_plate(p).map_err(|e| ApiError::bad(&e))?),
+        None => None,
+    };
     if b.odometer_km < 0 {
         return Err(ApiError::bad("Der Kilometerstand darf nicht negativ sein"));
     }
@@ -862,8 +875,17 @@ async fn add_truck(
     let mut conn = db.lock().unwrap();
     let tx = conn.transaction()?;
     require_chef(&tx, company_id, user.id)?;
+    let (plate, suggested) = match wanted {
+        Some(p) => (p, false),
+        None => (plates::suggest(&tx, company_id)?, true),
+    };
     // Ein ausgemusterter oder verkaufter Lkw gibt sein Kennzeichen ab
-    free_retired_plate(&tx, company_id, plate, now)?;
+    free_retired_plate(&tx, company_id, &plate, now)?;
+    if plates::active_holder(&tx, company_id, &plate, None)?.is_some() {
+        return Err(ApiError::conflict(
+            "Das Kennzeichen gibt es in der Firma schon",
+        ));
+    }
     match tx.execute(
         "INSERT INTO trucks (company_id, plate, model, package, odometer_km, state, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -889,7 +911,110 @@ async fn add_truck(
     tx.commit()?;
     Ok(Json(json!({
         "id": id, "plate": plate, "model": model,
-        "odometer_km": b.odometer_km, "rev": 1
+        "odometer_km": b.odometer_km, "rev": 1, "plate_suggested": suggested
+    })))
+}
+
+/// Vorschlag für das Kennzeichen eines neuen Lkw: Kürzel der Firma und die nächste freie
+/// Nummer, siehe [`crate::plates`]. Nur der Chef, er legt Lkw an.
+async fn plate_suggestion(
+    State(db): State<Db>,
+    user: AuthUser,
+    Path(company_id): Path<i64>,
+) -> ApiResult<Json<Value>> {
+    let conn = db.lock().unwrap();
+    require_chef(&conn, company_id, user.id)?;
+    let name: String = conn.query_row(
+        "SELECT name FROM companies WHERE id = ?1",
+        [company_id],
+        |r| r.get(0),
+    )?;
+    Ok(Json(json!({
+        "plate": plates::suggest(&conn, company_id)?,
+        "prefix": plates::company_prefix(&name)
+    })))
+}
+
+#[derive(Deserialize)]
+struct TruckPatch {
+    /// Neues Kennzeichen in der Firma
+    plate: Option<String>,
+}
+
+/// Kennzeichen eines Lkw ändern, etwa wenn zwei Firmen-Lkw durch Zufall gleich heißen. Nur der
+/// Chef, nicht während einer Leihe (der Spielstand des Fahrers hat dann noch das alte) und
+/// nicht bei ausgemusterten oder verkauften Lkw, sonst 409. Das alte Kennzeichen kommt zu den
+/// früheren. Beim nächsten Einsetzen schreibt der Launcher das neue in den Spielstand.
+async fn update_truck(
+    State(db): State<Db>,
+    State(clock): State<Clock>,
+    user: AuthUser,
+    Path(truck_id): Path<i64>,
+    Json(b): Json<TruckPatch>,
+) -> ApiResult<Json<Value>> {
+    let now = clock.now();
+    let mut conn = db.lock().unwrap();
+    let tx = conn.transaction()?;
+    let company_id = plates::truck_company(&tx, truck_id)?
+        .ok_or_else(|| ApiError::not_found("Diesen Lkw gibt es nicht"))?;
+    require_chef(&tx, company_id, user.id)?;
+    let raw = b.plate.as_deref().map(str::trim).unwrap_or_default();
+    if raw.is_empty() {
+        return Err(ApiError::bad("Das Kennzeichen fehlt"));
+    }
+    let plate = plates::company_plate(raw).map_err(|e| ApiError::bad(&e))?;
+    let (current, retired): (String, Option<String>) = tx.query_row(
+        "SELECT plate, retired_reason FROM trucks WHERE id = ?1",
+        [truck_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    if let Some(reason) = retired {
+        return Err(retired_error(&reason, "bekommt kein neues Kennzeichen"));
+    }
+    let holder: Option<String> = tx
+        .query_row(
+            "SELECT u.name FROM leases l JOIN users u ON u.id = l.user_id
+             WHERE l.truck_id = ?1 AND l.returned_at IS NULL",
+            [truck_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if let Some(name) = holder {
+        return Err(ApiError::conflict(&format!(
+            "Der Lkw ist gerade an {name} verliehen. Das Kennzeichen lässt sich erst nach der Rückgabe ändern"
+        )));
+    }
+    if plate != current {
+        free_retired_plate(&tx, company_id, &plate, now)?;
+        if plates::active_holder(&tx, company_id, &plate, Some(truck_id))?.is_some() {
+            return Err(ApiError::conflict(&format!(
+                "Das Kennzeichen {plate} hat in der Firma schon ein anderer Lkw"
+            )));
+        }
+        match tx.execute(
+            "UPDATE trucks SET plate = ?1 WHERE id = ?2",
+            params![plate, truck_id],
+        ) {
+            Ok(_) => {}
+            Err(e) if is_unique_violation(&e) => {
+                return Err(ApiError::conflict(&format!(
+                    "Das Kennzeichen {plate} hat in der Firma schon ein anderer Lkw"
+                )));
+            }
+            Err(e) => return Err(e.into()),
+        }
+        tx.execute(
+            "INSERT INTO truck_plates (truck_id, plate, replaced_at) VALUES (?1, ?2, ?3)",
+            params![truck_id, current, now],
+        )?;
+    }
+    let old_plates: Vec<String> = tx
+        .prepare("SELECT plate FROM truck_plates WHERE truck_id = ?1 ORDER BY replaced_at, rowid")?
+        .query_map([truck_id], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    tx.commit()?;
+    Ok(Json(json!({
+        "id": truck_id, "plate": plate, "old_plates": old_plates, "changed": plate != current
     })))
 }
 
@@ -1528,7 +1653,8 @@ fn retire_truck(
 
 /// Herzschlag aus dem Spiel, alle 10 Sekunden, solange das Spiel läuft und nicht pausiert ist.
 /// Speichert, wer mit welchem Lkw wo fährt, und beim eigenen geliehenen Lkw den letzten
-/// bekannten Zustand. Siehe [`crate::presence`].
+/// bekannten Zustand. Ein Firmen-Lkw ist es nur, wenn Kennzeichen und Modell passen. Siehe
+/// [`crate::presence`].
 async fn heartbeat(
     State(db): State<Db>,
     State(clock): State<Clock>,
@@ -1592,6 +1718,12 @@ struct EventReq {
     /// Firmenprofil gemeldet, muss es genau dieses sein.
     #[serde(default)]
     profile: Option<String>,
+    /// Marke und Modell des Lkw, mit dem es passiert ist, aus der Konfiguration `truck` des SDK
+    /// (`brand_id` und `id`). Nur zum Nachsehen, gebucht wird unabhängig davon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    truck_brand: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    truck_model: Option<String>,
 }
 
 /// Ereignis aus dem Spiel buchen. Die Regeln:
@@ -1711,6 +1843,9 @@ async fn post_event(
     };
     let (cargo, source_city, target_city) =
         (text(&b.cargo), text(&b.source_city), text(&b.target_city));
+    // Der Lkw gehört zu jedem Ereignis
+    let truck_brand = presence::clean_text(b.truck_brand.as_deref(), presence::TEXT_MAX);
+    let truck_model = presence::clean_text(b.truck_model.as_deref(), presence::TEXT_MAX);
     let now = clock.now();
     // Nur ein Zeitpunkt vom Client kann einen alten Abgleich korrigieren. Ohne ihn ist das
     // Ereignis nach jedem bisherigen Abgleich angekommen und zählt im nächsten Fenster.
@@ -1730,8 +1865,8 @@ async fn post_event(
     tx.execute(
         "INSERT INTO ledger (company_id, account, user_id, kind, amount, event_id, note, created_at,
                              game_amount, distance_km, occurred_at, cargo, source_city, target_city,
-                             profile)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                             profile, truck_brand, truck_model)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
         params![
             company_id,
             account,
@@ -1747,7 +1882,9 @@ async fn post_event(
             cargo,
             source_city,
             target_city,
-            profile
+            profile,
+            truck_brand,
+            truck_model
         ],
     )?;
     let balance = company_balance(&tx, company_id)?;
@@ -1883,7 +2020,7 @@ async fn get_ledger(
                 l.game_amount, l.distance_km, l.payroll_id, l.occurred_at, l.event_id,
                 l.cargo, l.source_city, l.target_city, pl.truck_id, tr.plate, l.profile,
                 l.reverses_id, r.id, r.created_at, r.note, ru.name, o.kind, o.created_at,
-                bu.name
+                bu.name, l.truck_brand, l.truck_model
          FROM ledger l LEFT JOIN users u ON u.id = l.user_id
          LEFT JOIN purchase_links pl ON pl.ledger_id = l.id
          LEFT JOIN trucks tr ON tr.id = pl.truck_id
@@ -1921,6 +2058,9 @@ async fn get_ledger(
                 "truck_plate": r.get::<_, Option<String>>(17)?,
                 // Aus diesem ETS2-Profil hat das Plugin das Ereignis gemeldet
                 "profile": r.get::<_, Option<String>>(18)?,
+                // Mit diesem Lkw (Marke und Modell aus der Telemetrie), leer ohne Angabe
+                "truck_brand": r.get::<_, Option<String>>(27)?,
+                "truck_model": r.get::<_, Option<String>>(28)?,
                 // Storno: was diese Buchung storniert (Art und Zeitpunkt des Originals) und wer
                 "reverses_id": r.get::<_, Option<i64>>(19)?,
                 "reverses_kind": r.get::<_, Option<String>>(24)?,

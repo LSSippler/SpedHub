@@ -235,6 +235,8 @@ const zustand = { token: speicher.get("token"), ich: null, firmaId: null, firma:
                   laeufe: [], ungeklaert: [], abgelehnt: [], offen: new Set(),
                   // Verkaufen oder ausmustern: { id, art: "verkauf" | "ausmustern" }
                   abgang: null, abgaengeOffen: false,
+                  // Kennzeichen ändern: id des Lkw. Vorschlag des Servers für den nächsten Lkw (nur Chef)
+                  umbenennen: null, vorschlag: null,
                   // Kassenbuch: Buchung, die gerade als Lkw-Kauf verknüpft wird
                   verknuepfen: null,
                   // Kassenbuch: Zeitraum (lokale Tage wie "2026-11-16", leer heißt offen) und
@@ -487,14 +489,16 @@ async function ladeFirma() {
     api("GET", "/api/companies/" + id + "/payrolls?limit=60" + bereich),
   ]);
   const chef = firma.your_role === "chef";
-  const [ungeklaert, abgelehnt] = chef ? await Promise.all([
+  const [ungeklaert, abgelehnt, vorschlag] = chef ? await Promise.all([
     api("GET", "/api/companies/" + id + "/unexplained").then((r) => r.entries),
     api("GET", "/api/companies/" + id + "/rejected-events?limit=50").then((r) => r.entries),
-  ]) : [[], []];
+    api("GET", "/api/companies/" + id + "/plate-suggestion").then((r) => r.plate),
+  ]) : [[], [], null];
   // Inzwischen eine andere Firma oder ein anderer Zeitraum: Diese Antwort ist veraltet
   if (id !== zustand.firmaId || bereich !== bereichAnfrage()) return;
   zustand.firma = firma; zustand.lkw = lkw.trucks; zustand.buch = buch;
   zustand.laeufe = laeufe.payrolls; zustand.ungeklaert = ungeklaert; zustand.abgelehnt = abgelehnt;
+  zustand.vorschlag = vorschlag;
   // Was inzwischen storniert ist, fällt aus der Auswahl
   for (const e of buch.entries) if (!e.reversible) zustand.auswahl.delete(e.id);
   for (const l of laeufe.payrolls) for (const x of l.lines) if (x.reversed_by != null) zustand.auswahl.delete(x.entry_id);
@@ -503,6 +507,7 @@ async function ladeFirma() {
 async function oeffneFirma(id) {
   clearInterval(takt);
   zustand.firmaId = id; zustand.rueckgabe = null; zustand.abgang = null; zustand.verknuepfen = null;
+  zustand.umbenennen = null;
   zustand.auswahl = new Map(); zustand.filter = { von: "", bis: "" }; zustand.buchStand = null;
   await ladeFirma();
   speicher.set("firma", String(id));
@@ -541,7 +546,7 @@ function zeichneDaten() {
   if (!zustand.firma || !$("fuhrpark")) return;
   zeigeKopf();
   // Wo gerade jemand etwas eingibt, wird nicht neu gezeichnet
-  if (zustand.rueckgabe == null && zustand.abgang == null) zeichneFuhrpark();
+  if (zustand.rueckgabe == null && zustand.abgang == null && zustand.umbenennen == null) zeichneFuhrpark();
   zeichneFahrer();
   if (zustand.verknuepfen == null) zeichneBuch();
   zeichneBudget();
@@ -549,6 +554,7 @@ function zeichneDaten() {
   zeichneMeinProfil();
   fuelleFahrerwahl();
   fuelleKennzeichen();
+  fuelleVorschlag();
 }
 
 // ---- Fuhrpark
@@ -617,8 +623,9 @@ function lkwZeile(t, chef) {
       melde(t.plate + " ist repariert" + (r.cost ? ", " + euro(r.cost) + " aus der Firmenkasse" : "") + ". Der Lkw ist wieder frei.");
     }, e.target) }, "Reparieren lassen, " + euro(t.repair_cost)));
   }
-  // Verkaufen und ausmustern: nur der Chef, nur wenn der Lkw nicht verliehen ist
+  // Kennzeichen ändern, verkaufen und ausmustern: nur der Chef, nur wenn der Lkw nicht verliehen ist
   if (chef && !bei) {
+    knoepfe.push(h("button", { class: "leise", onclick: () => { zustand.umbenennen = t.id; zeichneFuhrpark(); } }, "Kennzeichen ändern"));
     for (const [art, text] of [["verkauf", "Verkaufen"], ["ausmustern", "Ausmustern"]]) {
       knoepfe.push(h("button", { class: "leise", onclick: () => { zustand.abgang = { id: t.id, art }; zeichneFuhrpark(); } }, text));
     }
@@ -643,17 +650,39 @@ function lkwZeile(t, chef) {
     ? h("span", { class: "stand weg" }, meiner ? "bei dir" : "bei " + bei.name, " seit " + wann(bei.since))
     : t.in_workshop ? h("span", { class: "stand werkstatt" }, "in der Werkstatt")
     : h("span", { class: "stand frei" }, "frei");
-  const offen = zustand.rueckgabe === t.id || (zustand.abgang && zustand.abgang.id === t.id);
+  const offen = zustand.rueckgabe === t.id || (zustand.abgang && zustand.abgang.id === t.id) || zustand.umbenennen === t.id;
   const zeile = h("div", { class: "lkw" },
     h("div", {}, h("span", { class: "kz" }, h("span", {}, t.plate))),
     h("div", {},
       h("div", { class: "modell" }, modellName(t.model)),
       h("div", { class: "klein" }, km(t.odometer_km), ", ", stand),
-      schaden, werkstatt, faehrt, fremd),
+      schaden, werkstatt, faehrt, fremd,
+      t.old_plates.length ? h("div", { class: "klein blass" }, "früher " + t.old_plates.join(", ")) : null),
     h("div", { class: "knoepfe" }, offen ? null : knoepfe));
   if (zustand.rueckgabe === t.id) zeile.append(baueRueckgabe(t));
+  if (zustand.umbenennen === t.id) zeile.append(baueKennzeichen(t));
   if (zustand.abgang && zustand.abgang.id === t.id) zeile.append(baueAbgang(t, zustand.abgang.art));
   return zeile;
+}
+
+/** Kennzeichen ändern (nur Chef), etwa wenn zwei Lkw durch Zufall gleich heißen. */
+function baueKennzeichen(t) {
+  const neu = h("input", { required: true, maxlength: 16, value: t.plate });
+  const zu = () => { zustand.umbenennen = null; zeichneFuhrpark(); };
+  setTimeout(() => neu.select(), 0);
+  return h("div", { class: "rueckgabe" },
+    h("p", { class: "klein" }, "Der Launcher schreibt das neue Kennzeichen beim nächsten Einsetzen in den Spielstand. "
+      + "Das alte steht danach bei den früheren Kennzeichen. Erlaubt sind A bis Z, Ziffern, Leerzeichen, Punkt und Bindestrich, höchstens 16 Zeichen."),
+    formular(async () => {
+        const r = await api("PATCH", "/api/trucks/" + t.id, { plate: neu.value });
+        zustand.umbenennen = null;
+        await auffrischen();
+        melde(r.changed ? t.plate + " heißt jetzt " + r.plate + "." : "Das Kennzeichen bleibt " + r.plate + ".");
+      },
+      h("div", { class: "zeile" },
+        feld("Neues Kennzeichen", neu),
+        h("button", {}, "Kennzeichen ändern"),
+        h("button", { type: "button", class: "leise", onclick: zu }, "Abbrechen"))));
 }
 
 /** Verkaufen (mit Erlös) oder ausmustern (mit Bestätigung). */
@@ -741,7 +770,7 @@ function baueRueckgabe(t) {
 function unterwegs(m) {
   if (!m.online) return null;
   const teile = [];
-  if (m.plate) teile.push(h("div", {}, "Lkw " + m.plate
+  if (m.plate) teile.push(h("div", {}, "Lkw " + m.plate + (m.model ? " (" + modellName(m.model) + ")" : "")
     + (m.speed_kmh != null ? ", " + Math.round(m.speed_kmh) + " km/h" : "")));
   if (m.near_city) teile.push(h("div", { class: "klein" }, "bei " + m.near_city));
   if (m.job) {
@@ -1111,7 +1140,27 @@ function fuelleKennzeichen() {
   liste.replaceChildren(...meine.concat(rest).map((t) => h("option", { value: t.plate })));
   liste.dataset.stand = neu;
   const feldKz = $("herzschlag-kz");
-  if (feldKz && !feldKz.value && meine.length) feldKz.value = meine[0].plate;
+  if (feldKz && !feldKz.value && meine.length) {
+    feldKz.value = meine[0].plate;
+    modellZumKennzeichen();
+  }
+}
+
+/** Im Testbereich: das Modell des Lkw mit dem eingetragenen Kennzeichen, wie es das Plugin meldet. */
+function modellZumKennzeichen() {
+  const kz = $("herzschlag-kz"), modell = $("herzschlag-modell");
+  if (!kz || !modell) return;
+  const t = zustand.lkw.find((x) => !x.retired && x.plate.toUpperCase() === kz.value.trim().toUpperCase());
+  if (t) modell.value = t.model;
+}
+
+/** Im Büro: das Kennzeichen für den nächsten Lkw, vorbelegt mit dem Vorschlag des Servers. */
+function fuelleVorschlag() {
+  const kz = $("neu-kz");
+  if (!kz || !zustand.vorschlag) return;
+  // Was der Chef selbst eingetragen hat, bleibt
+  if (document.activeElement !== kz && (kz.value === "" || kz.value === kz.dataset.vorschlag)) kz.value = zustand.vorschlag;
+  kz.dataset.vorschlag = zustand.vorschlag;
 }
 
 function baueBuero() {
@@ -1124,7 +1173,8 @@ function baueBuero() {
   const grenze = h("input", { type: "number", min: 0, max: 100, value: f0.damage_limit, required: true });
   const satz = h("input", { type: "number", min: 0, max: 1000000, value: f0.repair_rate, required: true });
   const haftung = h("input", { type: "number", min: 0, max: 100, value: f0.liability_percent, required: true });
-  const kz = h("input", { required: true, maxlength: 12, placeholder: "SPED 001" });
+  const kz = h("input", { maxlength: 16, placeholder: "SPED 001" });
+  kz.id = "neu-kz";
   const modell = h("input", { required: true, placeholder: "scania.s_2016" });
   const stand = h("input", { type: "number", min: 0, value: 0, required: true });
   const wer = h("select", {});
@@ -1199,12 +1249,13 @@ function baueBuero() {
         h("div", { id: "abgelehnt" })),
       h("div", { class: "blatt" },
         h("h3", {}, "Lkw anlegen"),
+        h("p", { class: "klein" }, "Jeder Lkw bekommt ein eigenes Kennzeichen in der Firma, mit dem der Launcher ihn in die Spielstände setzt. "
+          + "Vorgeschlagen ist das nächste freie aus dem Kürzel der Firma. Leer lassen nimmt den Vorschlag."),
         formular(async (f) => {
-            await api("POST", "/api/companies/" + id + "/trucks", { plate: kz.value, model: modell.value, odometer_km: Number(stand.value) });
-            const name = kz.value;
+            const r = await api("POST", "/api/companies/" + id + "/trucks", { plate: kz.value, model: modell.value, odometer_km: Number(stand.value) });
             f.reset();
             await auffrischen();
-            melde(name + " steht jetzt im Fuhrpark.");
+            melde(r.plate + " steht jetzt im Fuhrpark.");
           },
           feld("Kennzeichen", kz),
           feld("Modell, so wie es im Spiel heißt", modell),
@@ -1344,6 +1395,9 @@ function baueTestbuchung() {
 
   const hbKz = h("input", { required: true, maxlength: 64, list: "kennzeichen", placeholder: "SPED 001" });
   hbKz.id = "herzschlag-kz";
+  hbKz.addEventListener("change", modellZumKennzeichen);
+  const hbModell = h("input", { maxlength: 64, placeholder: "scania.s_2016" });
+  hbModell.id = "herzschlag-modell";
   const hbKm = h("input", { type: "number", min: 0, step: "any" });
   const hbTempo = h("input", { type: "number", min: 0, max: 1000, step: "any", value: 85 });
   const hbStadt = h("input", { maxlength: 64 });
@@ -1386,10 +1440,12 @@ function baueTestbuchung() {
       },
       h("div", { class: "zeile" }, feld("Kontostand im Spiel", geld), feld("Erfahrungspunkte", xp), h("button", {}, "Abgleichen"))),
     h("h3", { style: "margin-top: 1.5rem" }, "Herzschlag senden"),
-    h("p", { class: "klein blass" }, "Tut so, als liefe dein Spiel: Du bist 30 Sekunden online. Ist das Kennzeichen dein geliehener Lkw, gilt der Stand als sein letzter bekannter Zustand. Sonst schickt das Plugin alle 10 Sekunden einen. Fracht, Von und Nach leer heißt: kein Auftrag."),
+    h("p", { class: "klein blass" }, "Tut so, als liefe dein Spiel: Du bist 30 Sekunden online. Passen Kennzeichen und Modell zu deinem geliehenen Lkw, gilt der Stand als sein letzter bekannter Zustand. Ohne Modell gehört der Herzschlag zu keinem Firmen-Lkw. Sonst schickt das Plugin alle 10 Sekunden einen. Fracht, Von und Nach leer heißt: kein Auftrag."),
     h("datalist", { id: "kennzeichen" }),
     formular(async () => {
         const daten = { plate: hbKz.value };
+        // Wie das Plugin: Modell aus der Konfiguration des Lkw
+        if (hbModell.value.trim()) daten.truck_model = hbModell.value;
         if (meinProfil()) daten.profile = meinProfil();
         if (hbKm.value !== "") daten.odometer_km = Number(hbKm.value);
         if (hbTempo.value !== "") daten.speed_kmh = Number(hbTempo.value);
@@ -1403,8 +1459,8 @@ function baueTestbuchung() {
           ? "Herzschlag gesendet. Der Stand gilt als letzter bekannter Zustand deines Lkw."
           : "Herzschlag gesendet. Du bist jetzt 30 Sekunden online.");
       },
-      h("div", { class: "zeile" }, feld("Kennzeichen", hbKz), feld("Kilometerstand", hbKm), feld("Geschwindigkeit in km/h", hbTempo),
-        feld("Stadt in der Nähe", hbStadt)),
+      h("div", { class: "zeile" }, feld("Kennzeichen", hbKz), feld("Modell", hbModell), feld("Kilometerstand", hbKm),
+        feld("Geschwindigkeit in km/h", hbTempo), feld("Stadt in der Nähe", hbStadt)),
       h("div", { class: "zeile", style: "margin-top: .75rem" }, feld("Fracht", hbFracht), feld("Von", hbVon), feld("Nach", hbNach),
         h("button", {}, "Herzschlag senden"))),
     chef ? h("div", {},

@@ -94,6 +94,11 @@ pub mod vehicle {
     /// Aus `data_path` dieser Form ergibt sich das Modell.
     pub const MODEL_PATH_PREFIX: &str = "/def/vehicle/truck/";
     pub const MODEL_PATH_SUFFIX: &str = "/data.sii";
+    /// Präfix vor dem Modell, wenn das Spiel es als Kennung schreibt, etwa in
+    /// `game_progress.owned_trucks[]` (`"vehicle.scania.s_2016"`). Ob die Telemetrie (`id` der
+    /// Konfiguration `truck`) es auch trägt, ist im Spiel nicht geprüft, siehe
+    /// [`crate::truck::model_key`].
+    pub const MODEL_ID_PREFIX: &str = "vehicle.";
 
     pub const ODOMETER: &str = "odometer";
     pub const ODOMETER_FLOAT_PART: &str = "odometer_float_part";

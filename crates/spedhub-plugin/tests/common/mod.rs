@@ -110,7 +110,7 @@ fn agent() -> ureq::Agent {
         .into()
 }
 
-fn post(url: &str, token: Option<&str>, body: Value) -> Value {
+pub fn post(url: &str, token: Option<&str>, body: Value) -> Value {
     let mut req = agent().post(url);
     if let Some(t) = token {
         req = req.header("Authorization", &format!("Bearer {t}"));

@@ -45,7 +45,8 @@ CREATE TABLE IF NOT EXISTS trucks (
     UNIQUE (company_id, plate)
 );
 -- Frühere Kennzeichen eines Lkw. Das Spiel kann das Kennzeichen ersetzen, der Launcher meldet
--- das neue bei der Rückgabe. Über die alten lässt sich Telemetrie noch zuordnen.
+-- das neue bei der Rückgabe, und der Chef kann es ändern. Über die alten lässt sich Telemetrie
+-- noch zuordnen, und ein Vorschlag für ein neues Kennzeichen nimmt keins davon.
 CREATE TABLE IF NOT EXISTS truck_plates (
     truck_id     INTEGER NOT NULL REFERENCES trucks(id),
     plate        TEXT NOT NULL,
@@ -165,7 +166,7 @@ CREATE TABLE IF NOT EXISTS unexplained (
 );
 -- Wer gerade fährt: der letzte Herzschlag je Fahrer und Firma. Das ist Zustand, kein Journal,
 -- jede Meldung überschreibt die vorige. `data` hält alle gemeldeten Werte als JSON. `truck_id`
--- ist der Firmen-Lkw, zu dem das Kennzeichen passt, `own_lease` = 1, wenn der Fahrer ihn
+-- ist der Firmen-Lkw, zu dem Kennzeichen und Modell passen, `own_lease` = 1, wenn der Fahrer ihn
 -- gerade geliehen hat.
 CREATE TABLE IF NOT EXISTS presence (
     company_id  INTEGER NOT NULL REFERENCES companies(id),
@@ -323,6 +324,11 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     // sie nicht inzwischen durch Ereignisse erklärt sind. Eine spätere Korrektur des Fensters
     // bucht sie nicht wieder an, siehe `reconcile::rebook`.
     ("sync_points", "costs_waived", "INTEGER NOT NULL DEFAULT 0"),
+    // Marke und Modell des Lkw, mit dem das Ereignis passiert ist, wie das Plugin sie aus der
+    // Konfiguration `truck` des SDK kennt (`brand_id` und `id`). Leer bei älteren Plugins, beim
+    // Dashboard und bei allen anderen Buchungen.
+    ("ledger", "truck_brand", "TEXT"),
+    ("ledger", "truck_model", "TEXT"),
 ];
 
 /// Fünf Lohnstufen von 40 bis 80 Cent je Kilometer: (Level im Spiel, Firmenkilometer, Cent je km).

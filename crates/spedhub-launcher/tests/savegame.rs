@@ -8,7 +8,7 @@ use spedhub_launcher::client::LeasedTruck;
 use spedhub_launcher::profiles::list_slots;
 use spedhub_launcher::savegame::{
     FoundBy, deploy_truck, new_truck_from_save, package_from_checkout, read_for_return,
-    trucks_in_save,
+    set_company_plate, trucks_in_save,
 };
 use spedhub_save::{Save, TruckPackage, check, export_truck, list_trucks, plate_text};
 use std::{
@@ -38,7 +38,7 @@ fn lkw_aus_dem_spielstand_fuer_den_fuhrpark() {
             .active
     );
 
-    let t = new_truck_from_save(&testdata(QUELLE), "sped 001").unwrap();
+    let t = new_truck_from_save(&testdata(QUELLE), "sped 001", "SPED 001").unwrap();
     assert_eq!(t.plate, "SPED 001");
     assert_eq!(t.model, "scania.s_2016");
     assert_eq!(t.odometer_km, 3865);
@@ -47,11 +47,11 @@ fn lkw_aus_dem_spielstand_fuer_den_fuhrpark() {
     assert_eq!(p.units.len(), 76);
 
     // Ein Lkw mit Kennzeichen vom Spiel
-    let t = new_truck_from_save(&testdata(QUELLE), "DD RI 772").unwrap();
+    let t = new_truck_from_save(&testdata(QUELLE), "DD RI 772", "DD RI 772").unwrap();
     assert_eq!(t.plate, "DD RI 772");
 
     assert!(matches!(
-        new_truck_from_save(&testdata(QUELLE), "XX 1"),
+        new_truck_from_save(&testdata(QUELLE), "XX 1", "NOR 001"),
         Err(Error::Save(spedhub_save::Error::TruckNotFound(_)))
     ));
 }
@@ -306,4 +306,139 @@ fn rueckgabe_raet_nicht_bei_zwei_gleichen_lkw() {
         "{e:?}"
     );
     assert!(e.to_string().contains("gleich gut"));
+}
+
+/// Was der Server beim Ausleihen zu einem Paket liefert, mit seinem Kennzeichen.
+fn leased(package: &TruckPackage, plate: &str) -> LeasedTruck {
+    LeasedTruck {
+        id: 7,
+        plate: plate.into(),
+        model: package.model.clone(),
+        package: package.to_json().unwrap(),
+        odometer_km: i64::from(package.state.odometer),
+        rev: 1,
+        state: serde_json::to_value(&package.state).unwrap(),
+    }
+}
+
+#[test]
+fn einsetzen_setzt_das_kennzeichen_vom_server() {
+    let docs = documents("server-kennzeichen");
+    let backups = docs.ets2.parent().unwrap().join("backups");
+    // Im Bauplan steht das Kennzeichen aus dem Spielstand des Chefs, der Server sagt NOR 007
+    let base = package();
+    assert_eq!(base.license_plate, "SPED 001|_germany");
+    let p = package_from_checkout(&leased(&base, "nor  007")).unwrap();
+    assert_eq!(
+        p.license_plate, "NOR 007|_germany",
+        "selbst vergeben, Land aus dem Bauplan"
+    );
+    assert_eq!(p.units, base.units, "der Bauplan selbst bleibt");
+
+    let d = deploy_truck(&docs.nordfracht, &p, &backups, &FakeGame::closed(), now()).unwrap();
+    assert_eq!(d.name, "SpedHub: NOR 007");
+    let (game, _) = Save::read(d.slot_dir.join("game.sii")).unwrap();
+    assert!(check(&game).is_ok());
+    let trucks = list_trucks(&game).unwrap();
+    assert_eq!(trucks.len(), 1);
+    assert_eq!(trucks[0].plate, "NOR 007|_germany");
+    assert!(spedhub_save::plate::is_custom_plate(&trucks[0].plate));
+    assert!(!trucks.iter().any(|t| plate_text(&t.plate) == "SPED 001"));
+
+    // Die Rückgabe findet ihn über das Kennzeichen vom Server
+    let r = read_for_return(&docs.nordfracht, "NOR 007", Some(&p))
+        .unwrap()
+        .unwrap();
+    assert_eq!(r.found_by, FoundBy::Plate);
+    assert_eq!(r.new_plate, None);
+    assert_eq!(r.odometer_km, 3865);
+
+    // Ein Lkw mit Kennzeichen vom Spiel: Das Land kommt ohne Unterstrich, gesetzt wird es mit
+    let (quelle, _) = Save::read(testdata(QUELLE)).unwrap();
+    let actros = export_truck(&quelle, Some("DD RI 772")).unwrap();
+    assert!(actros.license_plate.ends_with("RI 772|germany"));
+    let mut a = actros.clone();
+    set_company_plate(&mut a, "NOR 008").unwrap();
+    assert_eq!(a.license_plate, "NOR 008|_germany");
+}
+
+#[test]
+fn kennzeichen_vom_server_das_sich_nicht_setzen_laesst() {
+    let base = package();
+    // Ein ausgemusterter Lkw heißt etwa "SPED 001 (Lkw 7)", ein Kennzeichen vom Spiel kann
+    // Zeichen haben, die sich nicht selbst vergeben lassen
+    for bad in [
+        "SPED 001 (Lkw 7)",
+        "MÜNCHEN 1",
+        "VIEL ZU LANGES KENNZEICHEN",
+    ] {
+        let e = package_from_checkout(&leased(&base, bad))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("Dashboard ändern"), "{bad}: {e}");
+    }
+    // Ohne Land im Bauplan
+    let mut p = base.clone();
+    p.license_plate = "SPED 001".into();
+    let e = set_company_plate(&mut p, "NOR 1").unwrap_err().to_string();
+    assert!(e.contains("kein Land"), "{e}");
+    assert_eq!(p.license_plate, "SPED 001", "unverändert");
+}
+
+#[test]
+fn uebernehmen_mit_kennzeichen_der_firma() {
+    // Das Kennzeichen aus dem Spielstand wird nicht das Firmen-Kennzeichen
+    let t = new_truck_from_save(&testdata(QUELLE), "SPED 001", " nor 003 ").unwrap();
+    assert_eq!(t.plate, "NOR 003");
+    assert_eq!(t.model, "scania.s_2016");
+    // Der Bauplan bleibt, wie er im Spielstand war
+    let p = TruckPackage::from_json(&t.package).unwrap();
+    assert_eq!(p.license_plate, "SPED 001|_germany");
+    // Ein Kennzeichen, das sich nicht einsetzen ließe, gar nicht erst anlegen
+    let e = new_truck_from_save(&testdata(QUELLE), "SPED 001", "MÜNCHEN 1")
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("MÜNCHEN 1"), "{e}");
+}
+
+#[test]
+fn rueckgabe_nimmt_kein_kennzeichen_mit_fremdem_modell() {
+    let docs = documents("fremdes-modell");
+    // Neuester Spielstand: die Quelle mit Actros DD RI 772, DAF DD TN 190 und Scania SPED 001
+    add_slot(&docs.nordfracht, "autosave", QUELLE, Some(INFO), 0);
+    let scania = package();
+
+    // Der Server kennt den Scania als DD RI 772: Den Actros mit diesem Kennzeichen nimmt die
+    // Rückgabe nicht, über die Teile findet sie den Scania
+    let r = read_for_return(&docs.nordfracht, "DD RI 772", Some(&scania))
+        .unwrap()
+        .unwrap();
+    assert_eq!(r.found_by, FoundBy::Parts { share: 1.0 });
+    assert_eq!(r.new_plate.as_deref(), Some("SPED 001"));
+    assert_eq!(r.odometer_km, 3865);
+    // Ohne Paket gibt es nur das Kennzeichen, dann wie bisher der Lkw mit dem Kennzeichen
+    let r = read_for_return(&docs.nordfracht, "DD RI 772", None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(r.found_by, FoundBy::Plate);
+    assert_ne!(r.odometer_km, 3865, "der Actros");
+
+    // Zwei Lkw mit demselben Kennzeichen, einer davon das Modell aus dem Paket: über die Teile
+    let (mut save, _) = Save::read(testdata(QUELLE)).unwrap();
+    let actros = "_nameless.206.398b.d488";
+    save.set(actros, "license_plate", "\"SPED 001|_germany\"")
+        .unwrap();
+    let dir = add_slot(&docs.nordfracht, "autosave", QUELLE, Some(INFO), 0);
+    spedhub_save::write_save(dir.join("game.sii"), &save).unwrap();
+    let r = read_for_return(&docs.nordfracht, "SPED 001", Some(&scania))
+        .unwrap()
+        .unwrap();
+    assert_eq!(r.found_by, FoundBy::Parts { share: 1.0 });
+    assert_eq!(r.new_plate, None);
+    assert_eq!(r.odometer_km, 3865);
+    let e = read_for_return(&docs.nordfracht, "SPED 001", None).unwrap_err();
+    assert!(
+        matches!(e, Error::Save(spedhub_save::Error::AmbiguousPlate(_))),
+        "{e:?}"
+    );
 }

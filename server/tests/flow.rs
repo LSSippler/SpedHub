@@ -525,6 +525,7 @@ async fn dashboard_wird_ausgeliefert() {
     assert!(html.contains("Kassenbuch"));
     assert!(html.contains(r#"betriebskosten_korrektur: "Betriebskosten, Korrektur""#));
     assert!(html.contains("Herzschlag senden") && html.contains("Passwort ändern"));
+    assert!(html.contains("Kennzeichen ändern") && html.contains("plate-suggestion"));
 }
 
 #[tokio::test]
@@ -2422,7 +2423,20 @@ impl Firma {
             .await
     }
 
-    async fn beat(&self, token: &str, body: Value) -> (StatusCode, Value) {
+    /// Herzschlag wie vom Plugin, mit Marke und Modell der Lkw aus [`Firma::truck`]
+    /// (`scania` und `s_2016`, zusammen `scania.s_2016`), wenn `body` kein `truck_model` hat.
+    /// Genau so, wie er ist, geht er mit [`Firma::beat_raw`].
+    async fn beat(&self, token: &str, mut body: Value) -> (StatusCode, Value) {
+        if let Some(o) = body.as_object_mut()
+            && !o.contains_key("truck_model")
+        {
+            o.insert("truck_brand".into(), json!("scania"));
+            o.insert("truck_model".into(), json!("s_2016"));
+        }
+        self.beat_raw(token, body).await
+    }
+
+    async fn beat_raw(&self, token: &str, body: Value) -> (StatusCode, Value) {
         self.post(
             token,
             &format!("/api/companies/{}/heartbeat", self.id),
@@ -2715,7 +2729,7 @@ async fn altes_kennzeichen_des_eigenen_lkw_schlaegt_aktuelles_eines_anderen() {
     // Der Chef gibt das frei gewordene Kennzeichen einem neuen Lkw A
     let a = f.truck("SPED 001", 5000, full_state(5000)).await;
 
-    // Der Launcher setzt B mit dem Kennzeichen aus dem Bauplan ein, also wieder "SPED 001"
+    // B fährt noch mit "SPED 001", etwa aus einem Spielstand von vor der Rückgabe
     f.checkout(&f.fahrer, b).await;
     f.clock.advance(10);
     let seen = f.clock.now();
@@ -6039,4 +6053,489 @@ async fn alte_datenbank_bekommt_storno() {
     }
     drop(f);
     let _ = std::fs::remove_file(&path);
+}
+
+// ------------------------------------------------------------ Kennzeichen und Modell
+
+impl Firma {
+    /// Lkw mit eigenem Modell anlegen (als Chef), liefert die ID
+    async fn truck_model(&self, plate: &str, model: &str) -> i64 {
+        let (s, t) = self
+            .post(
+                &self.chef,
+                &format!("/api/companies/{}/trucks", self.id),
+                json!({ "plate": plate, "model": model, "odometer_km": 1000, "state": full_state(1000) }),
+            )
+            .await;
+        assert_eq!(s, StatusCode::OK, "{t}");
+        n(&t["id"])
+    }
+
+    async fn suggestion(&self, token: &str) -> (StatusCode, Value) {
+        self.get(
+            token,
+            &format!("/api/companies/{}/plate-suggestion", self.id),
+        )
+        .await
+    }
+
+    async fn suggested(&self) -> String {
+        let (s, v) = self.suggestion(&self.chef).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        v["plate"].as_str().unwrap().to_string()
+    }
+
+    async fn add(&self, body: Value) -> (StatusCode, Value) {
+        self.post(
+            &self.chef,
+            &format!("/api/companies/{}/trucks", self.id),
+            body,
+        )
+        .await
+    }
+
+    async fn set_plate(&self, token: &str, truck: i64, plate: &str) -> (StatusCode, Value) {
+        call(
+            &self.app,
+            "PATCH",
+            &format!("/api/trucks/{truck}"),
+            Some(token),
+            Some(json!({ "plate": plate })),
+        )
+        .await
+    }
+
+    /// Wen der Chef als fremd gefahren sieht: (id, Kennzeichen) oder nichts
+    async fn foreign(&self) -> Option<(i64, String)> {
+        let m = self.member_as(&self.chef, self.fahrer_id).await;
+        m.get("foreign_truck")
+            .map(|t| (n(&t["id"]), t["plate"].as_str().unwrap().to_string()))
+    }
+}
+
+#[tokio::test]
+async fn zwei_firmen_lkw_mit_gleichem_kennzeichen_und_anderem_modell() {
+    let f = Firma::new().await;
+    // Scania A fuhr als "SPED 001", das Spiel hat es ersetzt, die Rückgabe brachte "EF XU 577"
+    let a = f.truck("SPED 001", 1000, full_state(1000)).await;
+    f.checkout(&f.fahrer, a).await;
+    let (s, _) = f
+        .checkin(
+            &f.fahrer,
+            a,
+            json!({ "odometer_km": 1100, "plate": "EF XU 577" }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    // Volvo B trägt "SPED 001" jetzt als aktuelles Kennzeichen
+    let b = f.truck_model("SPED 001", "volvo.fh16_2012").await;
+    let volvo = json!({ "truck_brand": "volvo", "truck_model": "fh16_2012" });
+    let with = |plate: &str, model: &Value| {
+        let mut body = model.clone();
+        body["plate"] = json!(plate);
+        body["speed_kmh"] = json!(70);
+        body
+    };
+
+    // Mit dem Modell des Volvo: B, als fremd gefahren markiert (niemand hat ihn geliehen)
+    let (s, r) = f.beat(&f.fahrer, with("SPED 001", &volvo)).await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!(f.foreign().await, Some((b, "SPED 001".into())));
+    // Mit dem Modell des Scania und demselben Text, auch mit Markup und Land: A über sein
+    // altes Kennzeichen, obwohl das aktuelle von B gleich lautet
+    f.beat(
+        &f.fahrer,
+        json!({ "plate": "<offset hshift=4>sped<img src=/x.mat> 001|_germany", "speed_kmh": 70 }),
+    )
+    .await;
+    assert_eq!(f.foreign().await, Some((a, "EF XU 577".into())));
+    assert_eq!(f.truck_as(&f.chef, b).await["foreign_drivers"], json!([]));
+    assert_eq!(
+        f.truck_as(&f.chef, a).await["foreign_drivers"][0]["user_id"],
+        f.fahrer_id
+    );
+
+    // Der Fahrer leiht A: Herzschlag mit Scania wird letzter Zustand von A
+    f.checkout(&f.fahrer, a).await;
+    f.clock.advance(10);
+    let seen = f.clock.now();
+    let (_, r) = f
+        .beat(
+            &f.fahrer,
+            json!({ "plate": "SPED 001", "odometer_km": 1150.0, "speed_kmh": 70 }),
+        )
+        .await;
+    assert_eq!(n(&r["leased_truck_id"]), a);
+    assert_eq!(f.truck_row(a).2, Some(seen));
+    assert_eq!(f.truck_row(a).3, Some(1150));
+    assert!(f.foreign().await.is_none());
+    assert_eq!(f.truck_as(&f.chef, a).await["driving"], true);
+
+    // Mit dem Volvo, obwohl er A geliehen hat: B ist gemeint, A bleibt unberührt
+    f.clock.advance(10);
+    let (_, r) = f
+        .beat(
+            &f.fahrer,
+            json!({ "plate": "SPED 001", "odometer_km": 9999.0, "truck_brand": "volvo",
+                    "truck_model": "volvo.fh16_2012" }),
+        )
+        .await;
+    assert!(r["leased_truck_id"].is_null(), "{r}");
+    assert_eq!(f.truck_row(a).2, Some(seen), "kein neuer letzter Zustand");
+    assert_eq!(f.truck_row(a).3, Some(1150));
+    assert_eq!(f.truck_row(b).2, None);
+    assert_eq!(f.foreign().await, Some((b, "SPED 001".into())));
+    assert_eq!(f.truck_as(&f.chef, a).await["driving"], false);
+}
+
+#[tokio::test]
+async fn herzschlag_mit_fremdem_modell_ist_kein_firmen_lkw() {
+    let f = Firma::new().await;
+    // Der Fall aus dem Spiel: Der eigene Lkw des Fahrers hat dasselbe Kennzeichen wie ein
+    // Firmen-Lkw, ist aber ein anderes Modell
+    let t = f.truck("SPED 001", 1000, full_state(1000)).await;
+    let frei = f.truck("SPED 002", 1000, full_state(1000)).await;
+    f.checkout(&f.fahrer, t).await;
+    let daf = |plate: &str| {
+        json!({ "plate": plate, "odometer_km": 5000.0, "speed_kmh": 80,
+                "truck_brand": "daf", "truck_model": "xf_euro6",
+                "wear": { "engine": 0.5 } })
+    };
+
+    let (s, r) = f.beat(&f.fahrer, daf("SPED 001")).await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!(r["recorded"], true);
+    assert!(r["leased_truck_id"].is_null(), "kein Firmen-Lkw");
+    // Kein letzter Zustand, keine Fahrt im Fuhrpark, keine Markierung
+    assert_eq!(f.truck_row(t).2, None);
+    assert_eq!(f.truck_row(t).4, None);
+    let l = f.truck_as(&f.chef, t).await;
+    assert_eq!(l["driving"], false);
+    assert_eq!(l["foreign_drivers"], json!([]));
+    assert!(l["last_known"].is_null());
+    // Online ist er trotzdem, mit Kennzeichen und Modell, aber ohne Firmen-Lkw
+    let m = f.member_as(&f.chef, f.fahrer_id).await;
+    assert_eq!(m["online"], true);
+    assert_eq!(m["plate"], "SPED 001");
+    assert_eq!(m["model"], "daf.xf_euro6");
+    assert!(m["truck_id"].is_null());
+    assert!(m.get("foreign_truck").is_none(), "{m}");
+
+    // Ein nicht geliehener Firmen-Lkw mit fremdem Modell: auch keine Markierung
+    f.beat(&f.fahrer, daf("SPED 002")).await;
+    assert!(f.foreign().await.is_none());
+    assert_eq!(
+        f.truck_as(&f.chef, frei).await["foreign_drivers"],
+        json!([])
+    );
+
+    // Ohne letzten Zustand nimmt der Chef nicht ohne Kilometerstand zurück
+    let (s, _) = f.checkin(&f.chef, t, json!({})).await;
+    assert_eq!(s, StatusCode::CONFLICT);
+
+    // Mit dem richtigen Modell passt es
+    let (_, r) = f.beat(&f.fahrer, json!({ "plate": "SPED 001" })).await;
+    assert_eq!(n(&r["leased_truck_id"]), t);
+}
+
+#[tokio::test]
+async fn herzschlag_ohne_modell_gehoert_zu_keinem_lkw() {
+    let f = Firma::new().await;
+    let t = f.truck("SPED 001", 1000, full_state(1000)).await;
+    let frei = f.truck("SPED 002", 1000, full_state(1000)).await;
+    f.checkout(&f.fahrer, t).await;
+    // Ein älteres Plugin schickt kein Modell, oder nur die Marke
+    for body in [
+        json!({ "plate": "SPED 001", "odometer_km": 1200.0 }),
+        json!({ "plate": "SPED 001", "odometer_km": 1200.0, "truck_brand": "scania" }),
+        json!({ "plate": "SPED 001", "odometer_km": 1200.0, "truck_model": "  " }),
+    ] {
+        let (s, r) = f.beat_raw(&f.fahrer, body.clone()).await;
+        assert_eq!(s, StatusCode::OK, "{body} {r}");
+        assert_eq!(r["recorded"], true);
+        assert!(r["leased_truck_id"].is_null(), "{body}");
+        assert_eq!(f.truck_row(t).2, None, "{body}");
+        let m = f.member_as(&f.chef, f.fahrer_id).await;
+        assert_eq!(m["online"], true);
+        assert!(m["model"].is_null() && m["truck_id"].is_null(), "{m}");
+        assert!(m.get("foreign_truck").is_none(), "{m}");
+    }
+    f.beat_raw(&f.fahrer, json!({ "plate": "SPED 002" })).await;
+    assert!(f.foreign().await.is_none());
+    assert_eq!(
+        f.truck_as(&f.chef, frei).await["foreign_drivers"],
+        json!([])
+    );
+    assert_eq!(f.truck_as(&f.chef, t).await["driving"], false);
+    // Zu lange Angaben sind kein Fehler, sie werden gekürzt wie andere Texte
+    let (s, _) = f
+        .beat_raw(
+            &f.fahrer,
+            json!({ "plate": "SPED 001", "truck_model": "x".repeat(100) }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn kennzeichen_vorschlag_aus_kuerzel_und_naechster_nummer() {
+    // Die Firma heißt "Nordfracht": Kürzel NOR
+    let f = Firma::new().await;
+    let (s, v) = f.suggestion(&f.chef).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v, json!({ "plate": "NOR 001", "prefix": "NOR" }));
+    // Nur der Chef legt Lkw an und bekommt Vorschläge
+    let (s, _) = f.suggestion(&f.fahrer).await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+
+    // Anlegen ohne Kennzeichen: der Vorschlag
+    let (s, t) = f.add(json!({ "model": "scania.s_2016" })).await;
+    assert_eq!(s, StatusCode::OK, "{t}");
+    assert_eq!(
+        (t["plate"].clone(), t["plate_suggested"].clone()),
+        (json!("NOR 001"), json!(true))
+    );
+    let (_, t2) = f
+        .add(json!({ "plate": "", "model": "scania.s_2016" }))
+        .await;
+    assert_eq!(t2["plate"], "NOR 002");
+    assert_eq!(f.suggested().await, "NOR 003");
+
+    // Vergebene Nummern werden übersprungen, auch von Hand vergebene
+    f.add(json!({ "plate": "nor 003", "model": "scania.s_2016" }))
+        .await;
+    f.add(json!({ "plate": "NOR 005", "model": "scania.s_2016" }))
+        .await;
+    assert_eq!(f.suggested().await, "NOR 004");
+
+    // Ein früheres Kennzeichen zählt als vergeben: NOR 004 bekommt bei der Rückgabe ein neues
+    let (_, t4) = f.add(json!({ "model": "scania.s_2016" })).await;
+    assert_eq!(t4["plate"], "NOR 004");
+    let t4 = n(&t4["id"]);
+    f.checkout(&f.fahrer, t4).await;
+    f.checkin(
+        &f.fahrer,
+        t4,
+        json!({ "odometer_km": 10, "plate": "EF XU 577" }),
+    )
+    .await;
+    assert_eq!(f.suggested().await, "NOR 006");
+
+    // Auch Kennzeichen ausgemusterter und verkaufter Lkw
+    let (_, t6) = f.add(json!({ "model": "scania.s_2016" })).await;
+    assert_eq!(t6["plate"], "NOR 006");
+    let (s, _) = f.retire(&f.chef, n(&t6["id"])).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(f.suggested().await, "NOR 007");
+    let (_, t7) = f.add(json!({ "model": "volvo.fh16_2012" })).await;
+    f.sell(&f.chef, n(&t7["id"]), 0).await;
+    assert_eq!(f.suggested().await, "NOR 008");
+    // Der Vorschlag ist ein gültiges Kennzeichen zum Einsetzen
+    let plate = f.suggested().await;
+    assert_eq!(
+        spedhub_save::plate_text(&spedhub_save::custom_plate(&plate, "germany").unwrap()),
+        plate
+    );
+}
+
+#[tokio::test]
+async fn kennzeichen_beim_anlegen_pruefen() {
+    let f = Firma::new().await;
+    // Nur, was sich als eigenes Kennzeichen in den Spielstand schreiben lässt
+    for bad in [
+        "MÜNCHEN 1",
+        "SPED 001|_germany",
+        "A_B 1",
+        "<img src=/a.mat>AB",
+        "ABCDEFGHIJKLMNOPQ",
+    ] {
+        let (s, v) = f
+            .add(json!({ "plate": bad, "model": "scania.s_2016" }))
+            .await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{bad}: {v}");
+        assert!(v["error"].as_str().unwrap().contains("Kennzeichen"), "{v}");
+    }
+    let (s, v) = f.add(json!({ "plate": "SPED 001", "model": " " })).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    assert_eq!(v["error"], "Das Modell darf nicht leer sein");
+    assert_eq!(f.ledger().await.len(), 0);
+    let (_, l) = f
+        .get(&f.chef, &format!("/api/companies/{}/trucks", f.id))
+        .await;
+    assert_eq!(l["trucks"], json!([]), "nichts angelegt");
+
+    // Klein geschrieben und mit doppeltem Leerraum: so, wie es im Spiel steht
+    let (s, t) = f
+        .add(json!({ "plate": " sped  1-a. ", "model": "scania.s_2016" }))
+        .await;
+    assert_eq!(s, StatusCode::OK, "{t}");
+    assert_eq!(t["plate"], "SPED 1-A.");
+    assert_eq!(t["plate_suggested"], false);
+    let (s, t) = f
+        .add(json!({ "plate": "ABCDEFGHIJKLMNOP", "model": "scania.s_2016" }))
+        .await;
+    assert_eq!(s, StatusCode::OK, "16 Zeichen gehen: {t}");
+    // Eindeutig je Firma, auch in anderer Schreibweise
+    let (s, v) = f
+        .add(json!({ "plate": "Sped 1-a.", "model": "volvo.fh16_2012" }))
+        .await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    assert_eq!(v["error"], "Das Kennzeichen gibt es in der Firma schon");
+}
+
+#[tokio::test]
+async fn chef_aendert_das_kennzeichen() {
+    let f = Firma::new().await;
+    let a = f.truck("SPED 001", 1000, full_state(1000)).await;
+    let b = f.truck("SPED 002", 1000, full_state(1000)).await;
+
+    // Nur der Chef, nur mit gültigem Kennzeichen
+    let (s, _) = f.set_plate(&f.fahrer, a, "NOR 100").await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    let (s, v) = f.set_plate(&f.chef, a, "NÖR 1").await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    let (s, v) = f.set_plate(&f.chef, a, " ").await;
+    assert_eq!(
+        (s, v["error"].clone()),
+        (StatusCode::BAD_REQUEST, json!("Das Kennzeichen fehlt"))
+    );
+    let (s, _) = f.set_plate(&f.chef, 999, "NOR 100").await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    // Das Kennzeichen eines anderen aktiven Lkw: 409
+    let (s, v) = f.set_plate(&f.chef, a, "sped 002").await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    assert_eq!(
+        v["error"],
+        "Das Kennzeichen SPED 002 hat in der Firma schon ein anderer Lkw"
+    );
+
+    // Während einer Leihe nicht: Im Spielstand des Fahrers steht noch das alte
+    f.checkout(&f.fahrer, a).await;
+    let (s, v) = f.set_plate(&f.chef, a, "NOR 100").await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    assert_eq!(
+        v["error"],
+        "Der Lkw ist gerade an Fahrer verliehen. Das Kennzeichen lässt sich erst nach der Rückgabe ändern"
+    );
+    f.checkin(&f.fahrer, a, json!({ "odometer_km": 1100 }))
+        .await;
+
+    // Geändert: das alte kommt zu den früheren
+    let (s, v) = f.set_plate(&f.chef, a, "nor 100").await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(
+        v,
+        json!({ "id": a, "plate": "NOR 100", "old_plates": ["SPED 001"], "changed": true })
+    );
+    let l = f.truck_as(&f.fahrer, a).await;
+    assert_eq!(l["plate"], "NOR 100");
+    assert_eq!(l["old_plates"], json!(["SPED 001"]));
+    // Dasselbe noch einmal ändert nichts
+    let (_, v) = f.set_plate(&f.chef, a, "NOR 100").await;
+    assert_eq!(v["changed"], false);
+    assert_eq!(v["old_plates"], json!(["SPED 001"]));
+    // Beim Ausleihen kommt das neue mit, das der Launcher in den Spielstand schreibt
+    let (_, out) = f
+        .post(&f.fahrer, &format!("/api/trucks/{a}/checkout"), json!({}))
+        .await;
+    assert_eq!(out["truck"]["plate"], "NOR 100");
+    // Ein Herzschlag mit dem alten Kennzeichen gehört weiter zu A
+    let (_, r) = f.beat(&f.fahrer, json!({ "plate": "SPED 001" })).await;
+    assert_eq!(n(&r["leased_truck_id"]), a);
+    let (_, r) = f.beat(&f.fahrer, json!({ "plate": "NOR 100" })).await;
+    assert_eq!(n(&r["leased_truck_id"]), a);
+    f.checkin(&f.fahrer, a, json!({ "odometer_km": 1200 }))
+        .await;
+    // Das frei gewordene Kennzeichen darf B bekommen
+    let (s, v) = f.set_plate(&f.chef, b, "SPED 001").await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["old_plates"], json!(["SPED 002"]));
+
+    // Das Kennzeichen eines ausgemusterten Lkw wandert, ausgemusterte ändern es nicht mehr
+    f.retire(&f.chef, b).await;
+    let (s, v) = f.set_plate(&f.chef, b, "NOR 200").await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    assert_eq!(
+        v["error"],
+        "Der Lkw ist ausgemustert und bekommt kein neues Kennzeichen"
+    );
+    let (s, _) = f.set_plate(&f.chef, a, "SPED 001").await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(
+        f.truck_as(&f.chef, b).await["plate"],
+        format!("SPED 001 (Lkw {b})")
+    );
+    assert_eq!(
+        f.truck_as(&f.chef, a).await["old_plates"],
+        json!(["SPED 001", "NOR 100"])
+    );
+}
+
+#[tokio::test]
+async fn ereignis_speichert_marke_und_modell() {
+    let f = Firma::new().await;
+    let (s, r) = f
+        .post(
+            &f.fahrer,
+            &format!("/api/companies/{}/events", f.id),
+            json!({ "event_id": "job-1", "type": "job_delivered", "amount": 1000, "distance_km": 300,
+                    "truck_brand": " scania ", "truck_model": "vehicle.scania.s_2016" }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    let (s, _) = f
+        .post(
+            &f.fahrer,
+            &format!("/api/companies/{}/events", f.id),
+            json!({ "event_id": "maut-1", "type": "tollgate", "amount": 10,
+                    "truck_brand": "volvo", "truck_model": "x".repeat(100) }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    f.event(&f.fahrer, "alt-1", "fined", 50, None).await;
+    let l = f.ledger().await;
+    let by = |id: &str| l.iter().find(|e| e["event_id"] == id).unwrap().clone();
+    let job = by("job-1");
+    assert_eq!(
+        (job["truck_brand"].clone(), job["truck_model"].clone()),
+        (json!("scania"), json!("vehicle.scania.s_2016"))
+    );
+    // Bei jeder Art, gekürzt wie andere Texte
+    assert_eq!(by("maut-1")["truck_brand"], "volvo");
+    assert_eq!(by("maut-1")["truck_model"], "x".repeat(64));
+    // Ohne Angabe, etwa vom älteren Plugin oder aus dem Dashboard: leer
+    let old = by("alt-1");
+    assert!(
+        old["truck_brand"].is_null() && old["truck_model"].is_null(),
+        "{old}"
+    );
+    // Andere Buchungen haben keins
+    assert!(
+        l.iter()
+            .filter(|e| e["event_id"].is_null())
+            .all(|e| e["truck_model"].is_null())
+    );
+
+    // Ein abgelehntes Ereignis behält beides in seinem Inhalt
+    call(
+        &f.app,
+        "PUT",
+        &format!("/api/companies/{}/profile", f.id),
+        Some(&f.fahrer),
+        Some(json!({ "profile_name": "Nordfracht" })),
+    )
+    .await;
+    let (s, _) = f
+        .post(
+            &f.fahrer,
+            &format!("/api/companies/{}/events", f.id),
+            json!({ "event_id": "privat-1", "type": "fined", "amount": 10, "profile": "Privat",
+                    "truck_brand": "daf", "truck_model": "xf_euro6" }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+    let (_, r) = f
+        .get(&f.chef, &format!("/api/companies/{}/rejected-events", f.id))
+        .await;
+    assert_eq!(r["entries"][0]["payload"]["truck_model"], "xf_euro6");
 }

@@ -910,3 +910,103 @@ fn alte_zeilen_im_postausgang_ohne_profil() {
     assert!(line.contains(r#""profile":"Müller Logistik""#), "{line}");
     assert_eq!(serde_json::from_str::<Booking>(&line).unwrap(), new);
 }
+
+// ------------------------------------------------------------------- Marke und Modell
+
+#[test]
+fn marke_und_modell_gehen_mit_dem_herzschlag() {
+    let mut s = Snapshot {
+        paused: false,
+        ..Default::default()
+    };
+    s.set_truck(Some("SPED 001|_germany"), Some(800.0));
+    // Noch keine Marke und kein Modell: Die Felder fehlen im Herzschlag
+    let hb = s.heartbeat().unwrap();
+    assert_eq!(
+        (hb.truck_brand.as_deref(), hb.truck_model.as_deref()),
+        (None, None)
+    );
+    let v = serde_json::to_value(&hb).unwrap();
+    assert!(
+        v.get("truck_brand").is_none() && v.get("truck_model").is_none(),
+        "{v}"
+    );
+
+    // Wie aus der Konfiguration `truck`: brand_id und id, unverändert bis auf Leerraum
+    s.set_truck_model(Some(" scania "), Some("vehicle.scania.s_2016"));
+    let hb = s.heartbeat().unwrap();
+    assert_eq!(hb.truck_brand.as_deref(), Some("scania"));
+    assert_eq!(hb.truck_model.as_deref(), Some("vehicle.scania.s_2016"));
+    let v = serde_json::to_value(&hb).unwrap();
+    assert_eq!(v["truck_brand"], "scania");
+    assert_eq!(v["truck_model"], "vehicle.scania.s_2016");
+    assert_eq!(
+        serde_json::from_value::<spedhub_plugin::Heartbeat>(v).unwrap(),
+        hb
+    );
+
+    // Leere Konfiguration (kein Lkw): beides weg
+    s.set_truck_model(Some(""), None);
+    assert_eq!((s.truck_brand.clone(), s.truck_model.clone()), (None, None));
+}
+
+#[test]
+fn marke_und_modell_gehen_mit_der_buchung_und_alte_zeilen_lesen_sich() {
+    let dir = temp_dir("modell");
+    let paths = Paths::new(&dir);
+    // Server nie erreichbar: alles bleibt im Postausgang
+    write_config(&paths, "http://127.0.0.1:1", "token", 7);
+    // Eine Zeile von einem älteren Plugin ohne Marke und Modell
+    fs::write(
+        paths.outbox(),
+        r#"{"company_id":7,"booking":{"event_id":"alt-1-1","type":"tollgate","amount":5,"note":"Maut","occurred_at":1795000000,"profile":"Nordfracht"}}"#
+            .to_string()
+            + "\n",
+    )
+    .unwrap();
+    let agent = Agent::start(&paths, fast()).unwrap();
+    agent
+        .telemetry()
+        .update(|s| s.set_truck_model(Some("scania"), Some("s_2016")));
+    let toll = GameplayData {
+        pay_amount: Some(40),
+        ..data("player.tollgate.paid")
+    };
+    assert!(matches!(
+        agent.submit(&toll),
+        spedhub_plugin::Submitted::Queued(_)
+    ));
+    // Ein anderer Lkw: die nächste Buchung trägt dessen Modell
+    agent
+        .telemetry()
+        .update(|s| s.set_truck_model(Some("volvo"), Some("volvo.fh16_2012")));
+    assert!(matches!(
+        agent.submit(&toll),
+        spedhub_plugin::Submitted::Queued(_)
+    ));
+    wait_until("Events im Postausgang", || {
+        read_entries(&paths.outbox()).len() == 3
+    });
+    agent.shutdown();
+
+    let (outbox, _) = Outbox::open(paths.outbox(), paths.rejected());
+    let e = outbox.entries();
+    assert_eq!(e[0].booking.event_id, "alt-1-1");
+    assert_eq!(
+        (
+            e[0].booking.truck_brand.clone(),
+            e[0].booking.truck_model.clone()
+        ),
+        (None, None)
+    );
+    assert_eq!(e[1].booking.truck_brand.as_deref(), Some("scania"));
+    assert_eq!(e[1].booking.truck_model.as_deref(), Some("s_2016"));
+    assert_eq!(e[2].booking.truck_model.as_deref(), Some("volvo.fh16_2012"));
+    // Die alte Zeile schreibt sich ohne die Felder, die neue mit
+    let line = serde_json::to_string(&e[0]).unwrap();
+    assert!(!line.contains("truck_"), "{line}");
+    let line = serde_json::to_string(&e[1]).unwrap();
+    assert!(line.contains(r#""truck_model":"s_2016""#), "{line}");
+    assert_eq!(serde_json::from_str::<Entry>(&line).unwrap(), e[1]);
+    let _ = fs::remove_dir_all(dir);
+}

@@ -389,10 +389,11 @@ use std::{
     },
 };
 
-/// Das Spiel läuft mit einem Lkw: Kennzeichen bekannt, nicht pausiert.
+/// Das Spiel läuft mit einem Lkw: Kennzeichen, Marke und Modell bekannt, nicht pausiert.
 fn driving(agent: &Agent, plate: &str) {
     agent.telemetry().update(|s| {
         s.set_truck(Some(plate), Some(800.0));
+        s.set_truck_model(Some("scania"), Some("scania.s_2016"));
         s.odometer_km = Some(1234.5);
         s.speed_ms = Some(23.0);
         s.fuel_liters = Some(400.0);
@@ -427,6 +428,7 @@ fn herzschlag_kommt_beim_server_an_und_zeigt_online() {
     wait_until("online", || member(&url, &token, company)["online"] == true);
     let m = member(&url, &token, company);
     assert_eq!(m["plate"], "EF XU 577");
+    assert_eq!(m["model"], "scania.s_2016");
     let speed = m["speed_kmh"].as_f64().unwrap();
     assert!((speed - 82.8).abs() < 0.01, "{speed}");
     assert_eq!(
@@ -889,5 +891,59 @@ fn vom_server_wegen_profil_abgelehntes_ereignis_blockiert_den_postausgang_nicht(
     let log = read_log(&paths);
     assert_eq!(log.matches("Server lehnt alt-1 ab").count(), 1, "{log}");
     assert!(!log.contains("bleiben im Postausgang"), "{log}");
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn herzschlag_mit_modell_gehoert_zum_geliehenen_lkw_mit_fremdem_modell_nicht() {
+    let dir = temp_dir("modell");
+    let server = TestServer::start(&dir.join("server.db"));
+    let url = server.url();
+    let (token, company) = create_company(&url, "Mara");
+    let paths = Paths::new(dir.join("SpedHub"));
+    write_config(&paths, &url, &token, company);
+    // Die Chefin hat einen Scania in der Firma und ihn geliehen
+    let truck = post(
+        &format!("{url}/api/companies/{company}/trucks"),
+        Some(&token),
+        serde_json::json!({ "plate": "SPED 001", "model": "scania.s_2016", "odometer_km": 1000 }),
+    )["id"]
+        .as_i64()
+        .unwrap();
+    post(
+        &format!("{url}/api/trucks/{truck}/checkout"),
+        Some(&token),
+        serde_json::json!({}),
+    );
+
+    let agent = Agent::start(&paths, fast()).unwrap();
+    // Im Spiel: derselbe Scania, Modell wie es die Konfiguration `truck` liefern könnte
+    driving(&agent, "SPED 001|_germany");
+    agent
+        .telemetry()
+        .update(|s| s.set_truck_model(Some("scania"), Some("vehicle.scania.s_2016")));
+    wait_until("dem Lkw zugeordnet", || {
+        member(&url, &token, company)["truck_id"].as_i64() == Some(truck)
+    });
+
+    // Ein Ereignis trägt Marke und Modell bis ins Kassenbuch
+    queued(agent.submit(&all_events()[3]));
+    wait_until("gebucht", || ledger(&url, &token, company).len() == 1);
+    let e = &ledger(&url, &token, company)[0];
+    assert_eq!(e["truck_brand"], "scania");
+    assert_eq!(e["truck_model"], "vehicle.scania.s_2016");
+
+    // Ein anderer Lkw mit demselben Kennzeichen: kein Firmen-Lkw mehr
+    agent
+        .telemetry()
+        .update(|s| s.set_truck_model(Some("daf"), Some("daf.xf_euro6")));
+    wait_until("fremdes Modell gemeldet", || {
+        member(&url, &token, company)["model"] == "daf.xf_euro6"
+    });
+    let m = member(&url, &token, company);
+    assert_eq!(m["online"], true);
+    assert!(m["truck_id"].is_null(), "{m}");
+    assert!(m.get("foreign_truck").is_none(), "{m}");
+    agent.shutdown();
     let _ = fs::remove_dir_all(dir);
 }

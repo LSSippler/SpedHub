@@ -1,14 +1,19 @@
 //! Abläufe, die Server und Spielstand zusammenbringen.
 //!
-//! - [`lease_package`]: Bauplan einer laufenden Leihe, aus `leases\` oder vom Server
+//! - [`lease_package`]: Bauplan einer laufenden Leihe, aus `leases\` oder vom Server, mit dem
+//!   Kennzeichen vom Server
+//! - [`return_truck`]: Rückgabe mit dem Kennzeichen aus dem Spielstand, falls es frei ist
 //! - [`sync_and_write`]: Geldabgleich, auf Wunsch zusammen mit dem Einsetzen eines Lkw
 //! - [`profile_to_report`]: muss das Firmenprofil (wieder) beim Server gemeldet werden?
 
-use crate::client::{Client, Company, SyncResult};
+use crate::client::{Checkin, Client, Company, SyncResult};
 use crate::error::{Error, Result};
-use crate::savegame::{Deployed, package_from_checkout, prepare_slot, unix_seconds, write_slot};
+use crate::savegame::{
+    Deployed, package_from_checkout, prepare_slot, set_company_plate, unix_seconds, write_slot,
+};
 use crate::settings::AppPaths;
 use crate::system::GameCheck;
+use serde_json::Value;
 use spedhub_save::TruckPackage;
 use std::{path::Path, time::SystemTime};
 
@@ -24,12 +29,18 @@ pub enum PackageSource {
 /// Der Bauplan eines geliehenen Lkw. Liegt er nicht in `leases\`, etwa auf einem anderen
 /// Rechner, holt der Launcher ihn vom Server und legt ihn dort ab. Die lokale Ablage ist nur
 /// ein Zwischenspeicher.
+///
+/// `plate` ist das Kennzeichen des Lkw auf dem Server, wie es im Fuhrpark steht. Es kommt auch
+/// in einen Bauplan aus der Ablage, die von einem älteren Launcher noch das Kennzeichen aus dem
+/// Spielstand des Chefs tragen kann.
 pub fn lease_package(
     client: &Client,
     paths: &AppPaths,
     truck_id: i64,
+    plate: &str,
 ) -> Result<(TruckPackage, PackageSource)> {
-    if let Some(p) = paths.load_lease(truck_id) {
+    if let Some(mut p) = paths.load_lease(truck_id) {
+        set_company_plate(&mut p, plate)?;
         return Ok((p, PackageSource::Local));
     }
     let lease = client.lease(truck_id)?;
@@ -37,6 +48,42 @@ pub fn lease_package(
     // Scheitert das Ablegen, geht es trotzdem weiter: Beim nächsten Mal fragt er wieder.
     let _ = paths.store_lease(truck_id, &package);
     Ok((package, PackageSource::Server))
+}
+
+/// Ergebnis einer Rückgabe.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Returned {
+    pub checkin: Checkin,
+    /// Das Kennzeichen aus dem Spielstand, das der Server nicht übernommen hat, weil ein
+    /// anderer Firmen-Lkw es trägt. Der Lkw behält dann sein Kennzeichen vom Server.
+    pub plate_taken: Option<String>,
+}
+
+/// Lkw zurückgeben. Mit `new_plate` meldet der Launcher das Kennzeichen, das das Spiel dem
+/// Lkw gegeben hat. Trägt das schon ein anderer Firmen-Lkw (409), etwa weil das Spiel das
+/// Wunschkennzeichen eines Profils vergeben hat, geht die Rückgabe ohne neues Kennzeichen
+/// durch: Beim nächsten Einsetzen schreibt der Launcher ohnehin das Kennzeichen vom Server.
+pub fn return_truck(
+    client: &Client,
+    truck_id: i64,
+    odometer_km: i64,
+    state: Option<&Value>,
+    new_plate: Option<&str>,
+) -> Result<Returned> {
+    match client.checkin(truck_id, odometer_km, state, new_plate) {
+        Ok(checkin) => Ok(Returned {
+            checkin,
+            plate_taken: None,
+        }),
+        Err(Error::Server { status: 409, .. }) if new_plate.is_some() => {
+            let checkin = client.checkin(truck_id, odometer_km, state, None)?;
+            Ok(Returned {
+                checkin,
+                plate_taken: new_plate.map(str::to_string),
+            })
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Ergebnis eines Abgleichs mit neuem Speicherplatz.

@@ -4,7 +4,12 @@
 //! ist, wer sich in den letzten [`ONLINE_SECS`] Sekunden gemeldet hat. Der letzte Herzschlag
 //! je Fahrer und Firma liegt in `presence`, jede Meldung überschreibt die vorige.
 //!
-//! Passt das Kennzeichen zu einem Firmen-Lkw, den der Fahrer gerade geliehen hat, wird der
+//! Ein Herzschlag gehört zu einem Firmen-Lkw nur, wenn Kennzeichen und Modell passen (siehe
+//! [`find_truck`]). Kennzeichen können zwischen Lkw kollidieren: Im Spiel bekam ein
+//! eingesetzter Lkw das Kennzeichen eines anderen Firmen-Lkw. Ohne Modell (älteres Plugin)
+//! wird nichts zugeordnet.
+//!
+//! Gehört der Herzschlag zu einem Firmen-Lkw, den der Fahrer gerade geliehen hat, wird der
 //! gemeldete Zustand als letzter bekannter Zustand des Lkw gespeichert (`trucks.last_*`).
 //! Nimmt der Chef den Lkw ohne Kilometerstand zurück, etwa nach einem Absturz, gilt dieser.
 
@@ -61,6 +66,11 @@ pub struct JobReq {
 pub struct HeartbeatReq {
     #[serde(default)]
     pub plate: String,
+    /// Marke aus der Telemetrie (`brand_id` der Konfiguration `truck`), etwa `scania`
+    pub truck_brand: Option<String>,
+    /// Modell aus der Telemetrie (`id` der Konfiguration `truck`). Ohne Modell gehört der
+    /// Herzschlag zu keinem Firmen-Lkw.
+    pub truck_model: Option<String>,
     pub odometer_km: Option<f64>,
     pub wear: Option<WearReq>,
     pub fuel_relative: Option<f64>,
@@ -77,6 +87,12 @@ pub struct HeartbeatReq {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Heartbeat {
     pub plate: String,
+    /// Marke und Modell, wie gemeldet (bereinigt)
+    pub truck_brand: Option<String>,
+    pub truck_model: Option<String>,
+    /// Das Modell als Schlüssel zum Vergleich mit `trucks.model`, siehe
+    /// [`spedhub_save::model_key`]. `None`, wenn kein Modell gemeldet ist.
+    pub model: Option<String>,
     pub odometer_km: Option<f64>,
     pub engine: Option<f64>,
     pub transmission: Option<f64>,
@@ -118,6 +134,11 @@ impl HeartbeatReq {
                 "Das Kennzeichen darf höchstens {PLATE_MAX} Zeichen ohne Steuerzeichen haben"
             ));
         }
+        let truck_brand = clean_text(self.truck_brand.as_deref(), TEXT_MAX);
+        let truck_model = clean_text(self.truck_model.as_deref(), TEXT_MAX);
+        let model = truck_model
+            .as_deref()
+            .and_then(|m| spedhub_save::model_key(truck_brand.as_deref(), m));
         let wear = self.wear.unwrap_or_default();
         let job = self.job.map(|j| Job {
             cargo: clean_text(j.cargo.as_deref(), TEXT_MAX),
@@ -126,6 +147,9 @@ impl HeartbeatReq {
         });
         Ok(Heartbeat {
             plate: plate.to_string(),
+            truck_brand,
+            truck_model,
+            model,
             odometer_km: number(self.odometer_km, 100_000_000.0, "Der Kilometerstand")?,
             engine: number(wear.engine, 1.0, "Der Verschleiß des Motors")?,
             transmission: number(wear.transmission, 1.0, "Der Verschleiß des Getriebes")?,
@@ -161,6 +185,9 @@ impl Heartbeat {
         }
         json!({
             "plate": self.plate,
+            "truck_brand": self.truck_brand,
+            "truck_model": self.truck_model,
+            "model": self.model,
             "odometer_km": self.odometer_km,
             "wear": wear,
             "fuel_relative": self.fuel_relative,
@@ -207,13 +234,17 @@ pub fn job_json(j: &Job) -> Value {
     json!({ "cargo": j.cargo, "source_city": j.source_city, "target_city": j.target_city })
 }
 
-/// Der Firmen-Lkw zu einem Kennzeichen, über das aktuelle oder ein altes Kennzeichen.
+/// Der Firmen-Lkw zu Kennzeichen und Modell. Beides muss passen: das Kennzeichen über das
+/// aktuelle oder ein altes Kennzeichen, das Modell als [`spedhub_save::model_key`] gleich
+/// `trucks.model`. Passt nur das Kennzeichen, ist es kein Firmen-Lkw, etwa ein eigener Lkw des
+/// Fahrers, dem das Spiel zufällig dasselbe Kennzeichen gegeben hat. Ohne `model` (älteres
+/// Plugin) gibt es nie einen Treffer: lieber keine Zuordnung als eine falsche.
+///
 /// Passen mehrere Lkw, gewinnt der, den `user_id` gerade geliehen hat, egal über welches
 /// Kennzeichen. Sonst gewinnt ein aktuelles Kennzeichen, dann das zuletzt ersetzte alte.
 ///
-/// Der Launcher setzt einen Lkw mit dem Kennzeichen aus dem Bauplan ein. Hat das Spiel das
-/// Kennzeichen einmal ersetzt, fährt der Lkw also wieder mit seinem alten, das inzwischen
-/// ein anderer Lkw als aktuelles tragen kann.
+/// Alte Kennzeichen zählen, weil das Spiel ein Kennzeichen ersetzen kann und ein Lkw danach
+/// noch mit dem alten unterwegs sein kann, etwa in einem Spielstand von vor der Rückgabe.
 ///
 /// Ausgemusterte und verkaufte Lkw zählen nicht. Steht ein verkaufter Lkw noch in einem
 /// Spielstand und wird gefahren, ist das kein Firmen-Lkw mehr und wird nicht als fremd
@@ -223,29 +254,37 @@ pub fn find_truck(
     company_id: i64,
     user_id: i64,
     plate: &str,
+    model: Option<&str>,
 ) -> rusqlite::Result<Option<i64>> {
     let key = plate_key(plate);
+    let Some(model) = model.filter(|m| !m.is_empty()) else {
+        return Ok(None);
+    };
     if key.is_empty() {
         return Ok(None);
     }
     // Erst die aktuellen Kennzeichen, dann die alten, das zuletzt ersetzte zuerst
-    let current: Vec<(i64, String)> = conn
+    let current: Vec<(i64, String, String)> = conn
         .prepare(
-            "SELECT id, plate FROM trucks WHERE company_id = ?1 AND retired_at IS NULL ORDER BY id",
+            "SELECT id, plate, model FROM trucks
+             WHERE company_id = ?1 AND retired_at IS NULL ORDER BY id",
         )?
-        .query_map([company_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .query_map([company_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
         .collect::<Result<_, _>>()?;
-    let old: Vec<(i64, String)> = conn
+    let old: Vec<(i64, String, String)> = conn
         .prepare(
-            "SELECT p.truck_id, p.plate FROM truck_plates p JOIN trucks t ON t.id = p.truck_id
+            "SELECT p.truck_id, p.plate, t.model FROM truck_plates p JOIN trucks t ON t.id = p.truck_id
              WHERE t.company_id = ?1 AND t.retired_at IS NULL
              ORDER BY p.replaced_at DESC, p.rowid DESC",
         )?
-        .query_map([company_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .query_map([company_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
         .collect::<Result<_, _>>()?;
     let mut candidates: Vec<i64> = Vec::new();
-    for (id, p) in current.into_iter().chain(old) {
-        if plate_key(&p) == key && !candidates.contains(&id) {
+    for (id, p, m) in current.into_iter().chain(old) {
+        if plate_key(&p) == key
+            && spedhub_save::model_key(None, &m).as_deref() == Some(model)
+            && !candidates.contains(&id)
+        {
             candidates.push(id);
         }
     }
@@ -285,7 +324,7 @@ pub fn record(
     hb: &Heartbeat,
     now: i64,
 ) -> rusqlite::Result<Recorded> {
-    let truck_id = find_truck(conn, company_id, user_id, &hb.plate)?;
+    let truck_id = find_truck(conn, company_id, user_id, &hb.plate, hb.model.as_deref())?;
     let own_lease = match truck_id {
         Some(id) => lease_holder(conn, id)? == Some(user_id),
         None => false,
@@ -362,6 +401,11 @@ impl Presence {
     pub fn job(&self) -> Value {
         self.data.get("job").cloned().unwrap_or(Value::Null)
     }
+
+    /// Das gemeldete Modell als Schlüssel ([`spedhub_save::model_key`]), `null` ohne Modell
+    pub fn model(&self) -> Value {
+        self.data.get("model").cloned().unwrap_or(Value::Null)
+    }
 }
 
 /// Alle letzten Herzschläge einer Firma, je Fahrer.
@@ -413,6 +457,33 @@ mod tests {
             Some("Holz bretter".into())
         );
         assert_eq!(clean_text(Some("abcdef"), 3), Some("abc".into()));
+    }
+
+    #[test]
+    fn modell_im_herzschlag() {
+        let hb = |brand: Option<&str>, model: Option<&str>| {
+            HeartbeatReq {
+                plate: "SPED 001".into(),
+                truck_brand: brand.map(str::to_string),
+                truck_model: model.map(str::to_string),
+                ..Default::default()
+            }
+            .validate()
+            .unwrap()
+        };
+        let h = hb(Some(" scania "), Some("vehicle.scania.s_2016"));
+        assert_eq!(h.model.as_deref(), Some("scania.s_2016"));
+        assert_eq!(h.truck_brand.as_deref(), Some("scania"));
+        assert_eq!(h.truck_model.as_deref(), Some("vehicle.scania.s_2016"));
+        assert_eq!(h.data()["model"], "scania.s_2016");
+        assert_eq!(
+            hb(Some("scania"), Some("s_2016")).model.as_deref(),
+            Some("scania.s_2016")
+        );
+        // Ohne Modell kein Schlüssel, auch nicht mit Marke
+        assert_eq!(hb(Some("scania"), None).model, None);
+        assert_eq!(hb(None, Some("  ")).model, None);
+        assert!(hb(None, None).data()["model"].is_null());
     }
 
     #[test]

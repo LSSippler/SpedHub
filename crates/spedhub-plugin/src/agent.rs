@@ -1,8 +1,8 @@
 //! Warteschlange und Sender-Thread.
 //!
 //! Der Spiel-Thread ruft nur [`Agent::submit`] auf. Das übersetzt das Event, prüft das aktive
-//! Profil, vergibt die `event_id`, merkt sich den Zeitpunkt (`occurred_at`, Systemzeit) und das
-//! Profil und legt es in einen Kanal, der nie blockiert. Kein Netz. Gelesen werden nur die neuen
+//! Profil, vergibt die `event_id`, merkt sich den Zeitpunkt (`occurred_at`, Systemzeit), das
+//! Profil und Marke und Modell des Lkw und legt es in einen Kanal, der nie blockiert. Kein Netz. Gelesen werden nur die neuen
 //! Zeilen von `game.log.txt` (siehe [`crate::profile`]), geschrieben wird nichts.
 //!
 //! Nur Ereignisse aus dem Firmenprofil werden angenommen. Ist ein anderes Profil aktiv oder
@@ -109,7 +109,8 @@ fn check(gate: &Gate) -> (ProfileState, Option<String>) {
 }
 
 enum Message {
-    Entry(Entry),
+    /// Eine Buchung ist groß, deshalb in einer Box
+    Entry(Box<Entry>),
     Log(String),
     Stop,
 }
@@ -314,14 +315,16 @@ impl Agent {
                 // Der Zeitpunkt wird hier festgehalten, nicht beim Senden: Das Event kann lange
                 // im Postausgang liegen.
                 let event_id = self.ids.next();
+                let (brand, model) = self.telemetry.truck();
                 let entry = Entry {
                     company_id: self.company_id,
                     booking: draft
                         .with_id_at(event_id.clone(), unix_now())
                         .with_job(job)
-                        .with_profile(&profile),
+                        .with_profile(&profile)
+                        .with_truck(brand, model),
                 };
-                let _ = self.tx.send(Message::Entry(entry));
+                let _ = self.tx.send(Message::Entry(Box::new(entry)));
                 Submitted::Queued(event_id)
             }
             Ok(None) => Submitted::Ignored,
@@ -493,7 +496,7 @@ impl Worker<'_> {
         match message {
             Ok(Message::Entry(entry)) => {
                 let id = entry.booking.event_id.clone();
-                if let Err(e) = self.outbox.push(entry) {
+                if let Err(e) = self.outbox.push(*entry) {
                     self.logger
                         .write(&format!("{e}. Event {id} bleibt nur im Speicher"));
                 }

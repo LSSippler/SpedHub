@@ -5,6 +5,13 @@
 //! - [`prepare_slot`] und [`write_slot`]: dasselbe in zwei Schritten, dazwischen lässt sich
 //!   der Kontostand setzen (Geldabgleich)
 //! - [`read_for_return`]: Kilometerstand und Zustand für die Rückgabe lesen
+//!
+//! Kennzeichen: Jeder Firmen-Lkw hat auf dem Server ein eigenes Kennzeichen. Das Paket vom
+//! Server bekommt es vor dem Einsetzen ([`package_from_checkout`], [`set_company_plate`]), als
+//! selbst vergebenes Kennzeichen mit dem Land aus dem Bauplan. Das Kennzeichen im Bauplan
+//! stammt aus dem Spielstand, aus dem der Chef den Lkw übernommen hat, und kann dort einem
+//! anderen Lkw gehören. Im Spiel bekam so ein eingesetzter Lkw das Kennzeichen eines anderen
+//! Firmen-Lkw.
 
 use crate::client::{LeasedTruck, NewTruck};
 use crate::error::{Error, Result};
@@ -12,9 +19,10 @@ use crate::profiles::{SaveSlot, newest_slot, next_free_slot_id};
 use crate::system::GameCheck;
 use serde_json::Value;
 use spedhub_save::{
-    DEFAULT_MIN_MATCH, InsertOptions, Save, TruckPackage, TruckState, export_truck,
-    find_package_truck, info_experience, insert_truck, money, plate_text, set_info_file_time,
-    set_info_money, set_info_name, set_money, truck_state, write_saves,
+    DEFAULT_MIN_MATCH, InsertOptions, Save, TruckPackage, TruckState, custom_plate, export_truck,
+    find_package_truck, info_experience, insert_truck, list_trucks, money, plate::plate_matches,
+    plate_country, plate_text, set_info_file_time, set_info_money, set_info_name, set_money,
+    truck_state, write_saves,
 };
 use std::{
     fs,
@@ -52,13 +60,26 @@ pub fn trucks_in_save(game_sii: &Path) -> Result<Vec<SaveTruck>> {
 }
 
 /// Macht aus einem Lkw im Spielstand die Anfrage für `POST /api/companies/{id}/trucks`.
-pub fn new_truck_from_save(game_sii: &Path, plate: &str) -> Result<NewTruck> {
+///
+/// `save_plate` findet den Lkw im Spielstand. `company_plate` ist sein Kennzeichen in der
+/// Firma, das der Chef festlegt (vorbelegt mit dem Vorschlag des Servers). Das Kennzeichen aus
+/// dem Spielstand wird nicht das Firmen-Kennzeichen: Es kann einem anderen Lkw gehören, etwa
+/// das Wunschkennzeichen eines Profils. Im Bauplan bleibt es stehen, beim Einsetzen gilt das
+/// Kennzeichen vom Server.
+pub fn new_truck_from_save(
+    game_sii: &Path,
+    save_plate: &str,
+    company_plate: &str,
+) -> Result<NewTruck> {
     let (save, _) = Save::read(game_sii)?;
-    let package = export_truck(&save, Some(plate))?;
+    let package = export_truck(&save, Some(save_plate))?;
+    // Lässt es sich so einsetzen? Sonst lieber jetzt eine Meldung als beim Ausleihen.
+    let mut check = package.clone();
+    set_company_plate(&mut check, company_plate)?;
     let state =
         serde_json::to_value(&package.state).map_err(|e| Error::Other(format!("Zustand: {e}")))?;
     Ok(NewTruck {
-        plate: plate_text(&package.license_plate),
+        plate: plate_text(&check.license_plate),
         model: package.model.clone(),
         odometer_km: i64::from(package.state.odometer),
         package: package.to_json()?,
@@ -66,8 +87,34 @@ pub fn new_truck_from_save(game_sii: &Path, plate: &str) -> Result<NewTruck> {
     })
 }
 
-/// Das Paket für den Spielstand aus dem, was der Server beim Ausleihen liefert. Kilometerstand
-/// und Zustand vom Server gelten vor den Werten im Bauplan: Der Server ist die Wahrheit.
+/// Setzt das Kennzeichen eines Firmen-Lkw ins Paket, bevor es in den Spielstand geht: als
+/// selbst vergebenes Kennzeichen `<TEXT>|_<land>` im Format des Spiels, mit dem Land aus dem
+/// Kennzeichen im Bauplan. `plate` ist das Kennzeichen vom Server, ohne Land.
+///
+/// Fehler, wenn sich `plate` nicht als eigenes Kennzeichen setzen lässt (erlaubt sind A bis Z,
+/// Ziffern, Leerzeichen, Punkt und Bindestrich, höchstens 16 Zeichen) oder der Bauplan kein
+/// Land nennt. Der Chef kann das Kennzeichen dann im Dashboard ändern.
+pub fn set_company_plate(package: &mut TruckPackage, plate: &str) -> Result<()> {
+    let country = plate_country(&package.license_plate).to_string();
+    if country.is_empty() {
+        return Err(Error::Other(format!(
+            "Im Bauplan steht kein Land zum Kennzeichen ({}). Das Kennzeichen {} lässt sich deshalb nicht setzen",
+            package.license_plate,
+            plate_text(plate)
+        )));
+    }
+    package.license_plate = custom_plate(&plate_text(plate), &country).map_err(|e| {
+        Error::Other(format!(
+            "Das Kennzeichen {} lässt sich nicht in den Spielstand schreiben: {e}. Der Chef kann es im Dashboard ändern",
+            plate_text(plate)
+        ))
+    })?;
+    Ok(())
+}
+
+/// Das Paket für den Spielstand aus dem, was der Server beim Ausleihen liefert. Kilometerstand,
+/// Zustand und Kennzeichen vom Server gelten vor den Werten im Bauplan: Der Server ist die
+/// Wahrheit.
 pub fn package_from_checkout(truck: &LeasedTruck) -> Result<TruckPackage> {
     if truck.package.trim().is_empty() {
         return Err(Error::Other(format!(
@@ -80,6 +127,7 @@ pub fn package_from_checkout(truck: &LeasedTruck) -> Result<TruckPackage> {
         package.state = state;
     }
     package.state.odometer = u32::try_from(truck.odometer_km.max(0)).unwrap_or(u32::MAX);
+    set_company_plate(&mut package, &truck.plate)?;
     Ok(package)
 }
 
@@ -255,10 +303,12 @@ pub struct ReturnData {
 
 /// Liest Kilometerstand und Zustand eines geliehenen Lkw aus dem neuesten Spielstand.
 ///
-/// Zuerst über das Kennzeichen. Findet sich keins und liegt das Paket vor, über Modell, Teile
-/// und Kilometerstand ([`spedhub_save::find_package_truck`]). Passen mehrere Lkw gleich gut,
-/// ist das ein Fehler. `None`, wenn beides nichts findet. Dann gibt der Fahrer den
-/// Kilometerstand von Hand ein.
+/// Zuerst über das Kennzeichen. Liegt das Paket vor, zählt ein Lkw mit dem Kennzeichen nur,
+/// wenn auch das Modell passt: Kennzeichen können zwischen Lkw kollidieren, etwa mit einem
+/// eigenen Lkw des Fahrers. Findet sich so keiner, oder haben mehrere Lkw das Kennzeichen, und
+/// liegt das Paket vor, geht es über Modell, Teile und Kilometerstand
+/// ([`spedhub_save::find_package_truck`]). Passen mehrere Lkw gleich gut, ist das ein Fehler.
+/// `None`, wenn beides nichts findet. Dann gibt der Fahrer den Kilometerstand von Hand ein.
 pub fn read_for_return(
     profile_dir: &Path,
     plate: &str,
@@ -266,9 +316,23 @@ pub fn read_for_return(
 ) -> Result<Option<ReturnData>> {
     let slot = newest_slot(profile_dir)?;
     let (save, _) = Save::read(slot.game())?;
-    let (state, found_by, new_plate) = match truck_state(&save, Some(plate)) {
+    // Mit Paket: Ein Lkw mit dem Kennzeichen, aber einem anderen Modell, ist nicht gemeint
+    let model_differs = match package {
+        Some(p) => !list_trucks(&save)?.iter().any(|t| {
+            plate_matches(&t.plate, plate) && t.model.as_deref() == Some(p.model.as_str())
+        }),
+        None => false,
+    };
+    let by_plate = if model_differs {
+        Err(spedhub_save::Error::TruckNotFound(plate.to_string()))
+    } else {
+        truck_state(&save, Some(plate))
+    };
+    let (state, found_by, new_plate) = match by_plate {
         Ok(state) => (state, FoundBy::Plate, None),
-        Err(spedhub_save::Error::TruckNotFound(_)) => {
+        Err(spedhub_save::Error::TruckNotFound(_) | spedhub_save::Error::AmbiguousPlate(_))
+            if package.is_some() =>
+        {
             let Some(package) = package else {
                 return Ok(None);
             };
@@ -283,6 +347,7 @@ pub fn read_for_return(
                 changed.then_some(now),
             )
         }
+        Err(spedhub_save::Error::TruckNotFound(_)) => return Ok(None),
         Err(e) => return Err(e.into()),
     };
     Ok(Some(ReturnData {

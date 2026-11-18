@@ -458,6 +458,16 @@ impl Client {
             .ok_or_else(|| Error::Network("Antwort ohne id".into()))
     }
 
+    /// Vorschlag des Servers für das Kennzeichen eines neuen Firmen-Lkw, etwa `NL 003` (nur
+    /// Chef).
+    pub fn plate_suggestion(&self, company_id: i64) -> Result<String> {
+        let v: Value = self.get(&format!("/api/companies/{company_id}/plate-suggestion"))?;
+        v.get("plate")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| Error::Network("Antwort ohne plate".into()))
+    }
+
     pub fn checkout(&self, truck_id: i64) -> Result<Checkout> {
         self.post(&format!("/api/trucks/{truck_id}/checkout"), &json!({}))
     }
