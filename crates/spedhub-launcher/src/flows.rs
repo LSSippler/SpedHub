@@ -5,6 +5,7 @@
 //! - [`return_truck`]: Rückgabe mit dem Kennzeichen aus dem Spielstand, falls es frei ist
 //! - [`sync_and_write`]: Geldabgleich, auf Wunsch zusammen mit dem Einsetzen eines Lkw
 //! - [`profile_to_report`]: muss das Firmenprofil (wieder) beim Server gemeldet werden?
+//! - [`ProfileReport`]: läuft die Meldung schon, oder muss sie nach einem Fehler noch einmal?
 
 use crate::client::{Checkin, Client, Company, SyncResult};
 use crate::error::{Error, Result};
@@ -159,6 +160,41 @@ pub fn profile_to_report(company: &Company, user_id: i64, chosen: Option<&str>) 
     (reported != Some(chosen)).then(|| chosen.to_string())
 }
 
+/// Welche Meldung des Firmenprofils gerade läuft oder geklappt hat, je Firma und Name.
+/// Verhindert, dass dieselbe Meldung nach jedem Laden wieder rausgeht, etwa bei einem älteren
+/// Server, der das Profil nicht zurückgibt. Eine fehlgeschlagene Meldung vergisst sie, damit
+/// das nächste Laden sie wiederholt: Bis der Server das Profil kennt, lehnt er Ereignisse aus
+/// dem neuen Profil ab.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ProfileReport {
+    sent: Option<(i64, String)>,
+}
+
+impl ProfileReport {
+    /// Soll diese Meldung jetzt rausgehen? Dann merkt sie sich sie als laufend.
+    pub fn start(&mut self, company_id: i64, name: &str) -> bool {
+        let attempt = Some((company_id, name.to_string()));
+        if self.sent == attempt {
+            return false;
+        }
+        self.sent = attempt;
+        true
+    }
+
+    /// Ergebnis einer Meldung. Bei einem Fehler wird sie vergessen, sofern inzwischen keine
+    /// andere läuft.
+    pub fn finished(&mut self, company_id: i64, name: &str, ok: bool) {
+        if !ok
+            && self
+                .sent
+                .as_ref()
+                .is_some_and(|(c, n)| *c == company_id && n == name)
+        {
+            self.sent = None;
+        }
+    }
+}
+
 /// Kurze Beschreibung des Abgleichs für die Oberfläche.
 pub fn describe(sync: &SyncResult) -> String {
     let euro = |v: i64| format!("{v} €");
@@ -196,4 +232,29 @@ pub fn describe(sync: &SyncResult) -> String {
         euro(sync.advance)
     ));
     parts.join(". ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn profil_meldung_nach_fehler_wiederholen() {
+        let mut r = ProfileReport::default();
+        assert!(r.start(1, "B"));
+        // Läuft schon: nicht noch einmal
+        assert!(!r.start(1, "B"));
+        // Server nicht erreichbar: beim nächsten Laden wieder
+        r.finished(1, "B", false);
+        assert!(r.start(1, "B"));
+        // Geklappt: bleibt gemerkt
+        r.finished(1, "B", true);
+        assert!(!r.start(1, "B"));
+        // Ein anderes Profil oder eine andere Firma geht raus
+        assert!(r.start(1, "C"));
+        assert!(r.start(2, "C"));
+        // Ein später gemeldeter Fehler einer älteren Meldung vergisst die neue nicht
+        r.finished(1, "C", false);
+        assert!(!r.start(2, "C"));
+    }
 }

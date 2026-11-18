@@ -5598,8 +5598,9 @@ async fn privates_profil_nachtraeglich_stornieren() {
     assert_eq!(f.wallet(f.fahrer_id).await, 0);
 }
 
-/// Erst die Ereignisse stornieren, dann die Betriebskosten: Die sind dann schon korrigiert,
-/// ein Storno gäbe zu viel zurück und wird abgelehnt.
+/// Erst die Ereignisse stornieren, dann die Betriebskosten: Ein Teil ist dann schon
+/// korrigiert. Das Storno erlässt nur den Rest, der korrigierte Teil wird ausgeglichen. Am Ende
+/// zahlt die Firma dasselbe wie in der anderen Reihenfolge.
 #[tokio::test]
 async fn betriebskosten_nach_den_ereignissen_stornieren() {
     let f = Firma::new().await;
@@ -5607,53 +5608,115 @@ async fn betriebskosten_nach_den_ereignissen_stornieren() {
     f.clock.set(t(5));
     f.event_at(&f.fahrer, "a", "job_delivered", 1000, None, Some(t(5)))
         .await;
-    sync_written_at(&f, 2000, 30).await;
+    let s1 = sync_written_at(&f, 2000, 30).await;
+    let sid = n(&s1["sync_id"]);
     let costs = n(&f.entries("betriebskosten").await[0]["id"]);
     f.clock.set(t(35));
     f.reverse_ok(&[f.entry_id("a").await], "privates Profil")
         .await;
     assert_eq!(f.balance().await, 0);
-    let count = f.ledger_count();
-    let (s, v) = f.reverse(&f.chef, &[costs], "privates Profil").await;
-    assert_eq!(s, StatusCode::CONFLICT, "{v}");
-    let msg = v["error"].as_str().unwrap();
-    assert!(
-        msg.contains(&format!("Buchung {costs} (Betriebskosten"))
-            && msg.contains("keine Betriebskosten mehr gebucht")
-            && msg.contains("1000 € zu viel"),
-        "{msg}"
+    assert_eq!(f.sync_row(sid), (0, 0, 0));
+    // Ganz korrigiert: Das Storno geht, gibt aber nichts zurück
+    let r = f.reverse_ok(&[costs], "privates Profil").await;
+    assert_eq!(
+        f.driver_of(&r)["waived"],
+        json!([{ "sync_id": sid, "entry_id": costs, "amount": 0, "already_corrected": 1000 }])
     );
-    assert_eq!(f.ledger_count(), count);
-    assert_eq!(f.balance().await, 0);
+    let e = r["entries"].as_array().unwrap();
+    assert_eq!(e.len(), 2, "Storno und Ausgleich: {r}");
+    assert_eq!(
+        (&e[1]["kind"], n(&e[1]["amount"]), n(&e[1]["sync_id"])),
+        (&json!("betriebskosten_korrektur"), -1000, sid)
+    );
+    assert!(
+        e[1]["note"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("Storno von Buchung {costs}")),
+        "{r}"
+    );
+    assert_eq!(n(&r["balance"]), 0);
+    assert_eq!(f.sync_row(sid), (0, 0, 0));
+    // Der Ausgleich ist eine Korrektur und lässt sich nicht stornieren
+    let k = n(&e[1]["id"]);
+    assert_eq!(f.entry(k).await["reversible"], false);
 
-    // Zweites Fenster: privater Auftrag über 1000 und echtes Tanken für 300
+    // Zweites Fenster: privater Auftrag über 1000 und echtes Tanken für 300. Ereignis und
+    // Betriebskosten zusammen: erst das Ereignis, dann die Betriebskosten.
     f.clock.set(t(40));
     f.event_at(&f.fahrer, "b", "job_delivered", 1000, None, Some(t(40)))
         .await;
     let s2 = sync_written_at(&f, 1700, 60).await;
+    let sid2 = n(&s2["sync_id"]);
     assert_eq!(n(&s2["booked"][0]["amount"]), -1300);
     let costs2 = n(&f.entries("betriebskosten").await[0]["id"]);
     f.clock.set(t(65));
-    // Ereignis und Betriebskosten zusammen: erst die Ereignisse, dann ist die Buchung zu groß
-    let (s, v) = f
-        .reverse(&f.chef, &[costs2, f.entry_id("b").await], "privates Profil")
+    let r = f
+        .reverse_ok(&[costs2, f.entry_id("b").await], "privates Profil")
         .await;
-    assert_eq!(s, StatusCode::CONFLICT, "{v}");
-    let msg = v["error"].as_str().unwrap();
-    assert!(
-        msg.contains("nur noch 300 € Betriebskosten gebucht") && msg.contains("1000 € zu viel"),
-        "{msg}"
-    );
     assert_eq!(
-        f.ledger_count(),
-        count + 2,
-        "nur Auftrag und Betriebskosten"
+        f.driver_of(&r)["waived"],
+        json!([{ "sync_id": sid2, "entry_id": costs2, "amount": 300, "already_corrected": 1000 }])
     );
-    // Nur das Ereignis: Das Tanken bleibt bei der Firma
-    f.reverse_ok(&[f.entry_id("b").await], "privates Profil")
+    assert_eq!(n(&r["balance"]), 0, "auch das Tanken ist erlassen");
+    assert_eq!(f.sync_row(sid2), (-300, 0, 300));
+
+    // Drittes Fenster, genauso, nur in zwei Schritten: dasselbe Ergebnis
+    f.clock.set(t(70));
+    f.event_at(&f.fahrer, "c", "job_delivered", 1000, None, Some(t(70)))
         .await;
-    assert_eq!(f.balance().await, -300);
-    assert_eq!(f.costs().await, -300);
+    let s3 = sync_written_at(&f, 1700, 90).await;
+    let sid3 = n(&s3["sync_id"]);
+    let costs3 = n(&f.entries("betriebskosten").await[0]["id"]);
+    f.clock.set(t(95));
+    f.reverse_ok(&[f.entry_id("c").await], "privates Profil")
+        .await;
+    assert_eq!(f.balance().await, -300, "das Tanken bleibt bei der Firma");
+    assert_eq!(f.sync_row(sid3), (-300, 300, 0));
+    f.reverse_ok(&[costs3], "Tanken war privat").await;
+    assert_eq!(f.balance().await, 0);
+    assert_eq!(f.sync_row(sid3), (-300, 0, 300));
+}
+
+/// Eine spät gemeldete Maut korrigiert die Betriebskosten eines Abgleichs zum Teil. Den Rest
+/// kann der Chef danach noch erlassen, ohne dass die Maut ein zweites Mal zurückkommt.
+#[tokio::test]
+async fn spaete_maut_sperrt_storno_der_betriebskosten_nicht() {
+    let f = Firma::new().await;
+    first_sync(&f).await;
+    // Im Spiel fehlen 1000: Die Firma bucht 1000 Betriebskosten
+    let s1 = sync_written_at(&f, 1000, 30).await;
+    let sid = n(&s1["sync_id"]);
+    assert_eq!(n(&s1["booked"][0]["amount"]), -1000);
+    let costs = n(&f.entries("betriebskosten").await[0]["id"]);
+    // Danach kommt eine Maut über 300 aus diesem Fenster: Korrektur über 300
+    f.clock.set(t(40));
+    let e = f
+        .event_at(&f.fahrer, "maut", "tollgate", 300, None, Some(t(10)))
+        .await;
+    assert_eq!(
+        e["late"]["booked"],
+        json!([{ "account": "firma", "kind": "betriebskosten_korrektur", "amount": 300 }])
+    );
+    assert_eq!(f.balance().await, -1000);
+    assert_eq!(f.sync_row(sid), (-700, 700, 0));
+    // Die restlichen 700 erlässt der Chef
+    f.clock.set(t(45));
+    let r = f.reverse_ok(&[costs], "Tanken war privat").await;
+    assert_eq!(
+        f.driver_of(&r)["waived"],
+        json!([{ "sync_id": sid, "entry_id": costs, "amount": 700, "already_corrected": 300 }])
+    );
+    assert_eq!(n(&r["balance"]), -300, "nur die Maut selbst");
+    assert_eq!(f.sync_row(sid), (-700, 0, 700));
+    // Ein noch späteres Ereignis aus dem Fenster erklärt zuerst den erlassenen Teil
+    f.clock.set(t(50));
+    let e = f
+        .event_at(&f.fahrer, "faehre", "ferry", 200, None, Some(t(20)))
+        .await;
+    assert_eq!(e["late"]["booked"], json!([]));
+    assert_eq!(f.balance().await, -500);
+    assert_eq!(f.sync_row(sid), (-500, 0, 500));
 }
 
 /// Erst die Betriebskosten stornieren, dann die Ereignisse: Die Firma hat die Kosten erlassen,
@@ -5675,8 +5738,9 @@ async fn betriebskosten_vor_den_ereignissen_stornieren() {
         .await;
     assert_eq!(
         f.driver_of(&r)["waived"],
-        json!([{ "sync_id": sid, "amount": 1000 }])
+        json!([{ "sync_id": sid, "entry_id": costs, "amount": 1000, "already_corrected": 0 }])
     );
+    assert_eq!(r["entries"].as_array().unwrap().len(), 1, "kein Ausgleich");
     assert_eq!(n(&r["balance"]), 1000);
     assert_eq!(f.sync_row(sid), (-1000, 0, 1000));
     // Jetzt das Ereignis: keine Korrektur, die Kosten sind schon erlassen
@@ -6538,4 +6602,325 @@ async fn ereignis_speichert_marke_und_modell() {
         .get(&f.chef, &format!("/api/companies/{}/rejected-events", f.id))
         .await;
     assert_eq!(r["entries"][0]["payload"]["truck_model"], "xf_euro6");
+}
+
+// ------------------------------------------------------------ Offenen Lohn erlassen
+
+impl Firma {
+    async fn waive(&self, token: &str, body: Value) -> (StatusCode, Value) {
+        self.post(
+            token,
+            &format!("/api/companies/{}/claims/waive", self.id),
+            body,
+        )
+        .await
+    }
+
+    async fn run_payroll(&self) -> Value {
+        let (s, r) = self
+            .post(
+                &self.chef,
+                &format!("/api/companies/{}/payrolls/run", self.id),
+                json!({}),
+            )
+            .await;
+        assert_eq!(s, StatusCode::OK, "{r}");
+        r
+    }
+}
+
+/// Die Kasse reicht nicht für den Lohn eines Auftrags, der Rest bleibt als Forderung stehen.
+/// Storniert der Chef Auftrag und Lohnbuchung, bleibt die Forderung, bis er sie erlässt. Sonst
+/// zahlte die nächste Abrechnung sie für den stornierten Auftrag aus.
+#[tokio::test]
+async fn lohnforderung_nach_storno_erlassen() {
+    let f = Firma::new().await;
+    // 1000 km: 400 € plus 50 € Pauschale. In der Kasse sind nur 100 €.
+    f.event(&f.fahrer, "job", "job_delivered", 100, Some(1000.0))
+        .await;
+    f.run_payroll().await;
+    let m = f.member(f.fahrer_id).await;
+    assert_eq!((n(&m["wallet"]), n(&m["open_claim"])), (100, 350));
+    assert_eq!(f.balance().await, 0);
+
+    // Auftrag und Lohnbuchung storniert: Kasse und Lohnkonto auf 0, die Forderung bleibt
+    let lohn = n(&line(&f.payrolls().await[0], f.fahrer_id)["entry_id"]);
+    let r = f
+        .reverse_ok(&[f.entry_id("job").await, lohn], "privates Profil")
+        .await;
+    let d = f.driver_of(&r);
+    assert_eq!((n(&d["wallet"]), n(&d["open_claim"])), (0, 350));
+    assert_eq!(n(&r["balance"]), 0);
+
+    // Nur der Chef, mit Grund, für ein Mitglied, höchstens die offene Forderung
+    let body = |amount: i64, reason: &str| json!({ "user_id": f.fahrer_id, "amount": amount, "reason": reason });
+    let (s, _) = f.waive(&f.fahrer, body(350, "privat")).await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    let (s, v) = f.waive(&f.chef, body(350, " ")).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    let (s, v) = f.waive(&f.chef, body(0, "privat")).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    let (s, v) = f.waive(&f.chef, body(351, "privat")).await;
+    assert_eq!(
+        (s, v["error"].clone()),
+        (
+            StatusCode::CONFLICT,
+            json!("Offen sind nur 350 €, mehr lässt sich nicht erlassen")
+        )
+    );
+    let (s, _) = f
+        .waive(
+            &f.chef,
+            json!({ "user_id": 999, "amount": 1, "reason": "privat" }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    assert_eq!(n(&f.member(f.fahrer_id).await["open_claim"]), 350);
+
+    // Zum Teil, dann den Rest
+    f.clock.advance(60);
+    let (s, v) = f
+        .waive(&f.chef, body(100, "Lohn für privaten Auftrag"))
+        .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(
+        v,
+        json!({ "user_id": f.fahrer_id, "waived": 100, "open_claim": 250, "wallet": 0 })
+    );
+    let (s, v) = f.waive(&f.chef, body(250, "Rest")).await;
+    assert_eq!((s, n(&v["open_claim"])), (StatusCode::OK, 0));
+    let (s, v) = f.waive(&f.chef, body(1, "noch mehr")).await;
+    assert_eq!(
+        (s, v["error"].clone()),
+        (StatusCode::CONFLICT, json!("Es ist kein Lohn offen"))
+    );
+    // Kein Geld geflossen
+    assert_eq!(f.balance().await, 0);
+    assert_eq!(f.wallet(f.fahrer_id).await, 0);
+
+    // Das Kassenbuch zeigt, wer wann was erlassen hat, neueste zuerst
+    let (s, p) = f
+        .get(&f.fahrer, &format!("/api/companies/{}/payrolls", f.id))
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    let w = p["claim_waivers"].as_array().unwrap();
+    assert_eq!(w.len(), 2, "{p}");
+    assert_eq!(
+        (
+            &w[1]["user"],
+            n(&w[1]["amount"]),
+            &w[1]["reason"],
+            &w[1]["booked_by_user"]
+        ),
+        (
+            &json!("Fahrer"),
+            100,
+            &json!("Lohn für privaten Auftrag"),
+            &json!("Chefin")
+        )
+    );
+
+    // Die nächste Abrechnung mit Geld in der Kasse zahlt nur den neuen Lohn
+    f.clock.advance(60);
+    f.event(&f.fahrer, "job-2", "job_delivered", 1000, Some(100.0))
+        .await;
+    let r = f.run_payroll().await;
+    let runs = r["payrolls"].as_array().unwrap();
+    let l = line(runs.last().unwrap(), f.fahrer_id);
+    assert_eq!(n(&l["claim_before"]), 0, "{l}");
+    assert_eq!(n(&l["claim_after"]), 0);
+    assert_eq!(f.wallet(f.fahrer_id).await, n(&l["paid"]));
+    assert!(n(&l["paid"]) < 350, "{l}");
+}
+
+// ------------------------------------------------------------ Storno von Paaren
+
+/// Die beiden Seiten einer Überweisung gehören zusammen, auch wenn sie verschiedene Zeitpunkte
+/// tragen (ältere Server lasen die Uhr je Seite). Fehlt die Gegenseite, wird nichts gebucht.
+#[tokio::test]
+async fn paar_storno_ohne_gleichen_zeitpunkt_und_ohne_gegenseite() {
+    let f = Firma::new().await;
+    f.event(&f.fahrer, "job", "job_delivered", 1000, None).await;
+    let (s, _) = f
+        .post(
+            &f.chef,
+            &format!("/api/companies/{}/transfer", f.id),
+            json!({ "user_id": f.fahrer_id, "amount": 500, "note": "Vorschuss" }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    let u = f.entries("ueberweisung").await;
+    let side = |account: &str| n(&u.iter().find(|e| e["account"] == account).unwrap()["id"]);
+    let (kasse, lohnkonto) = (side("firma"), side("fahrer"));
+    {
+        // Die Seite auf dem Lohnkonto eine Sekunde später, wie über eine Sekundengrenze
+        let conn = f.db.lock().unwrap();
+        conn.execute(
+            "UPDATE ledger SET created_at = created_at + 1 WHERE id = ?1",
+            [lohnkonto],
+        )
+        .unwrap();
+    }
+    let r = f.reverse_ok(&[kasse], "versehentlich").await;
+    assert_eq!(r["entries"].as_array().unwrap().len(), 2, "{r}");
+    assert_eq!((f.balance().await, f.wallet(f.fahrer_id).await), (1000, 0));
+
+    // Eine Überweisung ohne Gegenseite (etwa von Hand in die Datenbank geschrieben): 409
+    let lone = {
+        let conn = f.db.lock().unwrap();
+        conn.execute(
+            "INSERT INTO ledger (company_id, account, user_id, kind, amount, note, created_at)
+             VALUES (?1, 'firma', ?2, 'ueberweisung', -200, '', ?3)",
+            rusqlite::params![f.id, f.fahrer_id, f.clock.now()],
+        )
+        .unwrap();
+        conn.last_insert_rowid()
+    };
+    let count = f.ledger_count();
+    let (s, v) = f.reverse(&f.chef, &[lone], "versehentlich").await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    let msg = v["error"].as_str().unwrap();
+    assert!(
+        msg.contains(&format!("Buchung {lone} (Überweisung")) && msg.contains("Gegenbuchung"),
+        "{msg}"
+    );
+    assert_eq!(f.ledger_count(), count);
+
+    // Ist eine Seite schon allein storniert (so konnte es früher passieren), geht die andere
+    // allein, und die Konten stimmen wieder
+    let (s, _) = f
+        .post(
+            &f.chef,
+            &format!("/api/companies/{}/transfer", f.id),
+            json!({ "user_id": f.fahrer_id, "amount": 300, "note": "Vorschuss" }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    let u = f.entries("ueberweisung").await;
+    let open: Vec<&Value> = u
+        .iter()
+        .filter(|e| e["reversible"] == true && n(&e["amount"]).abs() == 300)
+        .collect();
+    let kasse = n(&open.iter().find(|e| e["account"] == "firma").unwrap()["id"]);
+    let lohnkonto = n(&open.iter().find(|e| e["account"] == "fahrer").unwrap()["id"]);
+    {
+        let conn = f.db.lock().unwrap();
+        conn.execute(
+            "INSERT INTO ledger (company_id, account, user_id, kind, amount, note, created_at,
+                                 reverses_id, booked_by)
+             VALUES (?1, 'firma', ?2, 'storno', 300, 'alt', ?3, ?4, ?5)",
+            rusqlite::params![f.id, f.fahrer_id, f.clock.now(), kasse, f.chef_id],
+        )
+        .unwrap();
+    }
+    let r = f.reverse_ok(&[lohnkonto], "nachholen").await;
+    assert_eq!(r["entries"].as_array().unwrap().len(), 1, "{r}");
+    assert_eq!(f.wallet(f.fahrer_id).await, 0);
+}
+
+// ------------------------------------------------------------ Kennzeichen, die nicht passen
+
+/// Meldet der Launcher bei der Rückgabe ein Kennzeichen, das sich nicht als eigenes setzen
+/// lässt, behält der Lkw seins. Das gemeldete kommt zu den früheren, damit die Telemetrie den
+/// Lkw weiter findet. So bleibt der Lkw ausleih- und einsetzbar.
+#[tokio::test]
+async fn rueckgabe_mit_kennzeichen_das_nicht_passt() {
+    let f = Firma::new().await;
+    let a = f.truck("SPED 001", 1000, full_state(1000)).await;
+    f.checkout(&f.fahrer, a).await;
+    let (s, r) = f
+        .checkin(
+            &f.fahrer,
+            a,
+            json!({ "odometer_km": 1100, "plate": "MÜ AB 123 XYZ ABCDEF" }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!(r["plate"], "SPED 001");
+    assert_eq!(r["plate_ignored"]["plate"], "MÜ AB 123 XYZ ABCDEF");
+    assert!(r["plate_ignored"]["reason"].as_str().unwrap().len() > 3);
+    let l = f.truck_as(&f.chef, a).await;
+    assert_eq!(l["plate"], "SPED 001");
+    assert_eq!(l["old_plates"], json!(["MÜ AB 123 XYZ ABCDEF"]));
+    // Ausleihen geht, mit dem eigenen Kennzeichen
+    let (s, out) = f
+        .post(&f.fahrer, &format!("/api/trucks/{a}/checkout"), json!({}))
+        .await;
+    assert_eq!(s, StatusCode::OK, "{out}");
+    assert_eq!(out["truck"]["plate"], "SPED 001");
+    // Die Telemetrie mit dem Kennzeichen aus dem alten Spielstand findet den Lkw
+    let (_, b) = f
+        .beat(&f.fahrer, json!({ "plate": "MÜ AB 123 XYZ ABCDEF" }))
+        .await;
+    assert_eq!(n(&b["leased_truck_id"]), a);
+    // Noch einmal dasselbe: kein zweiter Eintrag bei den früheren
+    let (s, r) = f
+        .checkin(
+            &f.fahrer,
+            a,
+            json!({ "odometer_km": 1200, "plate": "MÜ AB 123 XYZ ABCDEF" }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!(
+        f.truck_as(&f.chef, a).await["old_plates"],
+        json!(["MÜ AB 123 XYZ ABCDEF"])
+    );
+    // Ein gültiges Kennzeichen vom Spiel kommt in der gespeicherten Form
+    f.checkout(&f.fahrer, a).await;
+    let (s, r) = f
+        .checkin(
+            &f.fahrer,
+            a,
+            json!({ "odometer_km": 1300, "plate": "ef  xu 577" }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!(
+        (&r["plate"], &r["plate_ignored"]),
+        (&json!("EF XU 577"), &Value::Null)
+    );
+}
+
+/// Ein Lkw mit einem Kennzeichen aus der Zeit vor der Prüfung, das sich nicht als eigenes
+/// setzen lässt: Ausleihen lehnt der Server ab, bevor eine Leihe entsteht. Steckt er schon in
+/// einer Leihe, darf der Chef das Kennzeichen trotzdem ändern.
+#[tokio::test]
+async fn altes_kennzeichen_das_nicht_passt() {
+    let f = Firma::new().await;
+    let a = f.truck("SPED 001", 1000, full_state(1000)).await;
+    let set_raw = |plate: &str| {
+        let conn = f.db.lock().unwrap();
+        conn.execute(
+            "UPDATE trucks SET plate = ?1 WHERE id = ?2",
+            rusqlite::params![plate, a],
+        )
+        .unwrap();
+    };
+    set_raw("MÜNCHEN 1");
+    let (s, v) = f
+        .post(&f.fahrer, &format!("/api/trucks/{a}/checkout"), json!({}))
+        .await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    let msg = v["error"].as_str().unwrap();
+    assert!(
+        msg.contains("MÜNCHEN 1") && msg.contains("Der Chef ändert es im Dashboard"),
+        "{msg}"
+    );
+    let (s, l) = f.get(&f.chef, &format!("/api/trucks/{a}/lease")).await;
+    assert_eq!(s, StatusCode::CONFLICT, "keine Leihe entstanden: {l}");
+    let (s, v) = f.set_plate(&f.chef, a, "MUC 1").await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    f.checkout(&f.fahrer, a).await;
+
+    // Eine Leihe von vor der Prüfung mit so einem Kennzeichen: Ändern geht
+    set_raw("MÜNCHEN 2");
+    let (s, v) = f.set_plate(&f.chef, a, "MUC 2").await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let (s, l) = f.get(&f.fahrer, &format!("/api/trucks/{a}/lease")).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(l["truck"]["plate"], "MUC 2");
+    // Mit einem gültigen Kennzeichen bleibt es dabei: erst nach der Rückgabe
+    let (s, _) = f.set_plate(&f.chef, a, "MUC 3").await;
+    assert_eq!(s, StatusCode::CONFLICT);
 }

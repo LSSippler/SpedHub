@@ -1345,6 +1345,28 @@ fn uebernehmen_mit_vorschlag_und_einsetzen_mit_kennzeichen_der_firma() {
         (r.plate_taken, r.checkin.plate.as_str()),
         (None, "EF XU 577")
     );
+    assert_eq!(r.checkin.plate_ignored, None);
+    // Ein Kennzeichen, das sich nicht als eigenes setzen lässt, übernimmt der Server nicht. Der
+    // Lkw behält seins und lässt sich weiter einsetzen.
+    s.fahrer.checkout(truck_id).unwrap();
+    let r = return_truck(
+        &s.fahrer,
+        truck_id,
+        back.odometer_km,
+        None,
+        Some("MÜ AB 123"),
+    )
+    .unwrap();
+    assert_eq!(r.checkin.plate, "EF XU 577");
+    let ignored = r.checkin.plate_ignored.expect("plate_ignored");
+    assert_eq!(ignored.plate, "MÜ AB 123");
+    assert!(!ignored.reason.is_empty());
+    let again = s.fahrer.checkout(truck_id).unwrap();
+    assert_eq!(
+        package_from_checkout(&again.truck).unwrap().license_plate,
+        "EF XU 577|_germany"
+    );
+    return_truck(&s.fahrer, truck_id, back.odometer_km, None, None).unwrap();
     // Andere Fehler bleiben Fehler
     let e = return_truck(&s.fahrer, truck_id, back.odometer_km, None, Some("XY 1")).unwrap_err();
     assert_eq!(e.to_string(), "Server: Der Lkw ist gar nicht verliehen");

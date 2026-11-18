@@ -249,8 +249,10 @@ pub struct Rebook<'a> {
 /// - Erlassen: Was der Chef an Betriebskosten dieses Fensters storniert hat (`costs_waived`),
 ///   bleibt erlassen. Sinkt die fehlende Summe `max(0, -diff)`, weil Ereignisse sie erklären,
 ///   erklären sie zuerst den erlassenen Teil, `costs_waived` sinkt um denselben Betrag (nie
-///   unter 0). Steigt sie, ist das neu entdeckter Aufwand, `costs_waived` bleibt. So kommt
-///   dasselbe heraus, ob der Chef erst die Betriebskosten oder erst die Ereignisse storniert.
+///   unter 0). Steigt sie, ist das neu entdeckter Aufwand, `costs_waived` bleibt. Zusammen
+///   mit dem Ausgleich beim Storno schon teilweise korrigierter Betriebskosten (siehe
+///   [`crate::reversal`]) kommt so dasselbe heraus, ob der Chef erst die Betriebskosten oder
+///   erst die Ereignisse storniert, auch nach spät gemeldeten Ereignissen.
 /// - Betriebskosten: Ziel ist `max(0, max(0, -diff) - costs_waived)`, also die fehlende Summe
 ///   ohne den erlassenen Teil. Zu viel gebucht ergibt eine Gutschrift
 ///   `betriebskosten_korrektur`, zu wenig eine neue Buchung `betriebskosten`. Beide tragen den

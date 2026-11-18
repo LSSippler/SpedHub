@@ -89,7 +89,7 @@ Geschrieben: C:\SpedHub\spedhub_economy.scs (...)
 Was du dir ansehen solltest:
 
 - **Geändert:** Jede geänderte Zahl mit altem und neuem Wert. Skaliert werden `revenue_coef_per_km`, `cargo_market_revenue_coef_per_km`, `driver_revenue_coef_per_km`, `driver_cargo_market_revenue_coef_per_km` und `fixed_revenue`, in jeder Unit der Datei. Die Liste steht in `crates/spedhub-save/src/layout.rs` (`economy_data`).
-- **Warnung, ein Schlüssel kommt nicht vor:** Dann hat SCS die Datei geändert. Die Mod wird trotzdem gebaut, aber der fehlende Teil des Erlöses ist nicht gekürzt. Steht keiner der Schlüssel in der Datei, bricht der Befehl ab, dann ist es nicht die richtige Datei.
+- **Warnung, ein Schlüssel kommt nicht vor:** Dann stimmt die Liste in `layout.rs` nicht oder SCS hat die Datei geändert. Die Namen stammen aus Notizen der Community und sind an einer echten Datei noch nicht geprüft. Die Mod wird trotzdem gebaut, aber der fehlende Teil des Erlöses ist nicht gekürzt. Steht keiner der Schlüssel in der Datei, bricht der Befehl ab, dann ist es nicht die richtige Datei.
 - **Nicht verändert, bitte prüfen:** Schlüssel, deren Name nach Geld für Aufträge klingt (`revenue`, `reward`, `payment`, `pay`, `bonus`, `income`, `profit`, `salary`, `wage`, `earning`), mit ihrem Wert. Gehört einer davon zum Erlös, die Mod mit `--also <schlüssel> --force` neu bauen. Was davon in der echten Datei steht, ist hier nicht nachgelesen.
 - **`@include`:** Bindet die Datei andere Dateien ein, holt das Spiel sie weiter aus `def.scs`. Stehen dort Erlös-Werte, sind sie nicht gekürzt.
 - **Ganze Zahl wird Kommazahl:** Steht bei `fixed_revenue` eine ganze Zahl, die mit 0,01 nicht ganz bleibt (450 wird 4.5), ist ungeprüft, ob das Spiel an dieser Stelle eine Kommazahl liest.
@@ -184,6 +184,7 @@ Eine Mod mit der alten `economy_data.sii` überschreibt neue Werte von SCS mit d
 Im Spiel ist noch nichts davon getestet:
 
 - Ob das Spiel die Mod lädt: unkomprimiertes ZIP, Manifest, Kategorie `other`, Vorschaubild.
+- Ob die Schlüssel in `REVENUE_KEYS` (`crates/spedhub-save/src/layout.rs`) in der `economy_data.sii` von 1.62 so vorkommen. Die Namen stammen aus Notizen der Community, an einer echten Datei sind sie nicht nachgelesen.
 - Ob Aufträge dann 1 Prozent zahlen, für Frachtmarkt, Schnellaufträge und Speditionsaufträge mit eigenem Lkw. Ob die Liste der Schlüssel vollständig ist.
 - Ob die Telemetrie bei `job.delivered` den gekürzten Betrag meldet (und nicht den vollen).
 - Ob `fixed_revenue` eine Kommazahl annimmt, wenn aus einer ganzen Zahl eine wird.

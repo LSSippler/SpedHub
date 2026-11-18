@@ -33,13 +33,20 @@
 //!   spätere Korrektur dieses Fensters sie weder ein zweites Mal zurückgibt noch wieder anlegt.
 //!   Erklären stornierte oder spät gemeldete Ereignisse den Fehlbetrag später, erklären sie
 //!   zuerst den erlassenen Teil (siehe [`reconcile::rebook`]).
-//!   Sind die Betriebskosten des Fensters schon korrigiert, etwa weil die Ereignisse davor
-//!   storniert wurden, gäbe das Storno zu viel zurück und wird abgelehnt. In einem Aufruf
-//!   kommen deshalb erst die Ereignisse dran, dann die Betriebskosten.
+//! - Ist ein Teil der Betriebskosten schon korrigiert, etwa weil die Ereignisse davor storniert
+//!   oder spät gemeldet wurden, erlässt das Storno nur, was für das Fenster noch gebucht ist
+//!   (`costs_booked`). Den schon korrigierten Teil gleicht eine Buchung
+//!   `betriebskosten_korrektur` mit Verweis auf den Abgleich aus, er käme sonst ein zweites Mal
+//!   zurück. So zahlt die Firma am Ende dasselbe, egal ob der Chef erst die Ereignisse oder
+//!   erst die Betriebskosten storniert, und die Betriebskosten lassen sich immer stornieren.
+//!   In einem Aufruf kommen erst die Ereignisse dran, dann die Betriebskosten.
 //!
 //! Lohn: Stornierte Aufträge zählen in noch nicht abgerechneten Zeiträumen nicht mehr (siehe
 //! [`crate::payroll`]). Schon gezahlten Lohn holt der Server nicht von selbst zurück, das tut
-//! der Chef mit einem Storno der Lohnbuchung.
+//! der Chef mit einem Storno der Lohnbuchung. Eine offene Lohnforderung aus einer Abrechnung
+//! bleibt bei jedem Storno stehen, auch beim Storno der Lohnbuchung derselben Abrechnung. Die
+//! erlässt der Chef getrennt (siehe [`crate::payroll::waive_claim`]). Die Antwort nennt deshalb
+//! je Fahrer die offene Forderung.
 use crate::{
     clock::format_local,
     error::{ApiError, ApiResult},
@@ -55,13 +62,14 @@ pub const MAX_ENTRIES: usize = 500;
 pub const REASON_MIN: usize = 3;
 pub const REASON_MAX: usize = 200;
 
-/// Prüft den Grund: getrimmt, 3 bis 200 Zeichen, keine Steuerzeichen.
+/// Prüft den Grund eines Stornos oder einer erlassenen Lohnforderung: getrimmt, 3 bis 200
+/// Zeichen, keine Steuerzeichen.
 pub fn clean_reason(reason: Option<&str>) -> Result<String, String> {
     let r = reason.unwrap_or_default().trim();
     let n = r.chars().count();
     if !(REASON_MIN..=REASON_MAX).contains(&n) {
         return Err(format!(
-            "Der Grund für das Storno fehlt. Er braucht {REASON_MIN} bis {REASON_MAX} Zeichen"
+            "Der Grund fehlt. Er braucht {REASON_MIN} bis {REASON_MAX} Zeichen"
         ));
     }
     if r.chars().any(char::is_control) {
@@ -171,9 +179,16 @@ fn reversed_by(conn: &Connection, e: &Entry) -> rusqlite::Result<Option<(i64, i6
     .optional()
 }
 
+/// Bucht sich diese Art als Paar auf beiden Konten (Überweisung, Haftung)?
+fn is_pair(e: &Entry) -> bool {
+    matches!(e.kind.as_str(), "ueberweisung" | "haftung")
+}
+
 /// Die andere Seite einer Überweisung oder Haftung. Beide Seiten werden in einer Transaktion
 /// direkt nacheinander gebucht: Überweisung erst Kasse, dann Lohnkonto, Haftung erst
-/// Lohnkonto, dann Kasse. Geprüft werden außerdem Art, Nutzer, Zeitpunkt und Gegenbetrag.
+/// Lohnkonto, dann Kasse. Geprüft werden außerdem Art, Nutzer und Gegenbetrag. Der Zeitpunkt
+/// zählt nicht: Ältere Server haben ihn je Seite neu gelesen, die beiden Seiten können also
+/// eine Sekunde auseinander liegen.
 fn partner(conn: &Connection, company_id: i64, e: &Entry) -> rusqlite::Result<Option<Entry>> {
     let id = match (e.kind.as_str(), e.account.as_str()) {
         ("ueberweisung", "firma") | ("haftung", "fahrer") => e.id + 1,
@@ -185,7 +200,6 @@ fn partner(conn: &Connection, company_id: i64, e: &Entry) -> rusqlite::Result<Op
             && p.account != e.account
             && p.user_id == e.user_id
             && p.amount == -e.amount
-            && p.created_at == e.created_at
     }))
 }
 
@@ -266,14 +280,20 @@ pub fn reverse(
         }
         targets.insert(id, e);
     }
-    // Die andere Seite von Überweisung und Haftung kommt mit
-    let pairs: Vec<Entry> = targets
-        .values()
-        .map(|e| partner(conn, company_id, e))
-        .collect::<rusqlite::Result<Vec<_>>>()?
-        .into_iter()
-        .flatten()
-        .collect();
+    // Die andere Seite von Überweisung und Haftung kommt mit. Ohne sie wird nichts gebucht,
+    // sonst entstünde Geld aus dem Nichts. Ist sie schon storniert, bleibt nur diese Seite.
+    let mut pairs = Vec::new();
+    for e in targets.values().filter(|e| is_pair(e)) {
+        match partner(conn, company_id, e)? {
+            Some(p) => pairs.push(p),
+            None => {
+                return Err(ApiError::conflict(&format!(
+                    "{}: Die Gegenbuchung auf dem anderen Konto ist nicht zu finden. Storniert wird nur beides zusammen",
+                    e.describe()
+                )));
+            }
+        }
+    }
     for p in pairs {
         if !targets.contains_key(&p.id) && reversed_by(conn, &p)?.is_none() {
             targets.insert(p.id, p);
@@ -369,31 +389,40 @@ pub fn reverse(
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
         let c = -e.amount;
-        if c > booked {
-            let rest = if booked > 0 {
-                format!("sind nur noch {booked} € Betriebskosten gebucht")
-            } else {
-                "sind keine Betriebskosten mehr gebucht".into()
-            };
-            return Err(ApiError::conflict(&format!(
-                "{}: Für den Abgleich vom {} {rest}, der Rest ist schon korrigiert, etwa durch stornierte Ereignisse. Ein Storno gäbe {} € zu viel zurück",
-                e.describe(),
-                format_local(synced_at),
-                c - booked.max(0)
-            )));
+        // Erlassen wird, was für das Fenster noch gebucht ist. Den Rest hat eine Korrektur
+        // schon zurückgegeben, etwa für stornierte oder spät gemeldete Ereignisse. Den gleicht
+        // eine Buchung aus, sonst käme er ein zweites Mal zurück.
+        let waive = c.min(booked.max(0));
+        let corrected = c - waive;
+        if corrected > 0 {
+            let note = format!(
+                "Ausgleich zum Storno von Buchung {}: {corrected} € davon waren schon korrigiert, Abgleich vom {}",
+                e.id,
+                format_local(synced_at)
+            );
+            conn.execute(
+                "INSERT INTO ledger (company_id, account, user_id, kind, amount, note, created_at,
+                                     sync_id)
+                 VALUES (?1, 'firma', ?2, 'betriebskosten_korrektur', ?3, ?4, ?5, ?6)",
+                params![company_id, e.user_id, -corrected, note, now, sync_id],
+            )?;
+            entries.push(json!({
+                "id": conn.last_insert_rowid(), "account": "firma", "user_id": e.user_id,
+                "kind": "betriebskosten_korrektur", "amount": -corrected, "note": note,
+                "created_at": now, "sync_id": sync_id
+            }));
         }
         conn.execute(
             "UPDATE sync_points SET costs_booked = costs_booked - ?1,
                                     costs_waived = costs_waived + ?1
              WHERE id = ?2",
-            params![c, sync_id],
+            params![waive, sync_id],
         )?;
         if let Some(uid) = e.user_id {
-            effects
-                .entry(uid)
-                .or_default()
-                .waived
-                .push(json!({ "sync_id": sync_id, "amount": c }));
+            effects.entry(uid).or_default().waived.push(json!({
+                "sync_id": sync_id, "entry_id": e.id, "amount": waive,
+                "already_corrected": corrected
+            }));
         }
     }
 

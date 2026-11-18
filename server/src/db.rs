@@ -134,6 +134,19 @@ CREATE TABLE IF NOT EXISTS wage_claims (
     payroll_id  INTEGER NOT NULL REFERENCES payroll_runs(id),
     created_at  INTEGER NOT NULL
 );
+-- Erlassene Lohnforderungen: Der Chef verzichtet für die Firma nicht, sondern streicht einem
+-- Fahrer einen Teil seiner offenen Forderung, etwa nach dem Storno eines Auftrags, dessen Lohn
+-- die Kasse nicht mehr zahlen konnte. Ebenfalls ein Journal, Einträge werden nie geändert. Die
+-- offene Forderung ist die Summe von wage_claims minus die Summe hier (siehe payroll::open_claim).
+CREATE TABLE IF NOT EXISTS wage_claim_waivers (
+    id          INTEGER PRIMARY KEY,
+    company_id  INTEGER NOT NULL REFERENCES companies(id),
+    user_id     INTEGER NOT NULL REFERENCES users(id),
+    amount      INTEGER NOT NULL CHECK (amount > 0),
+    reason      TEXT NOT NULL,
+    booked_by   INTEGER NOT NULL REFERENCES users(id),
+    created_at  INTEGER NOT NULL
+);
 -- Abgleichpunkte: was der Launcher im Spielstand vorgefunden hat und was er schreiben sollte.
 -- Grundlage für den nächsten Abgleich ist write_money, wenn written = 1, sonst ingame_money.
 -- last_ledger_id: größte Buchung beim Abgleich. Ereignisse mit Zeitpunkt wählt seit November
@@ -199,8 +212,6 @@ CREATE TABLE IF NOT EXISTS purchase_budgets (
 );
 -- Höchstens ein offenes Budget je Firma
 CREATE UNIQUE INDEX IF NOT EXISTS one_open_budget ON purchase_budgets(company_id) WHERE closed_at IS NULL;
--- Eine Betriebskosten-Buchung ist der Kauf dieses Lkw. Die Buchung selbst bleibt, wie sie ist,
--- die Verknüpfung ändert nur die Anzeige im Kassenbuch.
 -- Ereignisse, die der Server nicht gebucht hat, weil sie nicht aus dem gemeldeten Firmenprofil
 -- des Fahrers kamen (siehe `profiles.rs`). Kein Journal, nur zum Nachsehen für den Chef. `payload`
 -- ist das Ereignis, wie es ankam, als JSON. Je Fahrer und event_id nur einmal.
@@ -217,6 +228,8 @@ CREATE TABLE IF NOT EXISTS rejected_events (
     created_at  INTEGER NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS rejected_event_once ON rejected_events(company_id, user_id, event_id);
+-- Eine Betriebskosten-Buchung ist der Kauf dieses Lkw. Die Buchung selbst bleibt, wie sie ist,
+-- die Verknüpfung ändert nur die Anzeige im Kassenbuch.
 CREATE TABLE IF NOT EXISTS purchase_links (
     ledger_id   INTEGER PRIMARY KEY REFERENCES ledger(id),
     truck_id    INTEGER NOT NULL REFERENCES trucks(id),

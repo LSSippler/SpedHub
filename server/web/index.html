@@ -232,7 +232,7 @@ const speicher = {
 };
 
 const zustand = { token: speicher.get("token"), ich: null, firmaId: null, firma: null, lkw: [], buch: null, rueckgabe: null,
-                  laeufe: [], ungeklaert: [], abgelehnt: [], offen: new Set(),
+                  laeufe: [], erlasse: [], ungeklaert: [], abgelehnt: [], offen: new Set(),
                   // Verkaufen oder ausmustern: { id, art: "verkauf" | "ausmustern" }
                   abgang: null, abgaengeOffen: false,
                   // Kennzeichen ändern: id des Lkw. Vorschlag des Servers für den nächsten Lkw (nur Chef)
@@ -497,7 +497,8 @@ async function ladeFirma() {
   // Inzwischen eine andere Firma oder ein anderer Zeitraum: Diese Antwort ist veraltet
   if (id !== zustand.firmaId || bereich !== bereichAnfrage()) return;
   zustand.firma = firma; zustand.lkw = lkw.trucks; zustand.buch = buch;
-  zustand.laeufe = laeufe.payrolls; zustand.ungeklaert = ungeklaert; zustand.abgelehnt = abgelehnt;
+  zustand.laeufe = laeufe.payrolls; zustand.erlasse = laeufe.claim_waivers || [];
+  zustand.ungeklaert = ungeklaert; zustand.abgelehnt = abgelehnt;
   zustand.vorschlag = vorschlag;
   // Was inzwischen storniert ist, fällt aus der Auswahl
   for (const e of buch.entries) if (!e.reversible) zustand.auswahl.delete(e.id);
@@ -807,9 +808,55 @@ function zeichneFahrer() {
         zahl(km(m.company_km)),
         h("td", {}, m.stage == null ? "keine" : "Stufe " + m.stage + ", " + cent(m.cents_per_km) + " je km"),
         zahl(euro(m.wallet), m.wallet < 0),
-        zahl(m.open_claim ? euro(m.open_claim) : "", m.open_claim > 0)))))),
+        h("td", { class: "zahl" + (m.open_claim > 0 ? " minus" : "") }, m.open_claim ? euro(m.open_claim) : "",
+          chef && m.open_claim > 0 ? h("div", {}, h("button", { type: "button", class: "leise mini", onclick: () => zeigeErlass(m) }, "Erlassen")) : null)))))),
     h("p", { class: "klein blass" }, "Online ist, wessen Spiel sich in den letzten 30 Sekunden gemeldet hat. Das Level kommt mit dem Geldabgleich aus dem Spielstand. Ein Fragezeichen heißt: noch kein Abgleich."
-      + (chef ? " Das Firmenprofil meldet der Launcher. Ist eins gemeldet, bucht der Server nur Ereignisse aus diesem Profil." : "")));
+      + (chef ? " Das Firmenprofil meldet der Launcher. Ist eins gemeldet, bucht der Server nur Ereignisse aus diesem Profil."
+        + " Offener Lohn ist, was eine Abrechnung mangels Geld in der Kasse nicht zahlen konnte. Die nächste Abrechnung zahlt ihn zuerst."
+        + " Ein Storno ändert daran nichts. War der Lohn falsch, etwa für einen stornierten Auftrag, erlässt du ihn hier." : "")));
+}
+
+/** Offenen Lohn eines Fahrers ganz oder zum Teil erlassen, mit Pflichtgrund (nur Chef). */
+function zeigeErlass(m) {
+  const betrag = h("input", { type: "number", required: true, min: 1, max: m.open_claim, step: 1, value: String(m.open_claim) });
+  const grund = h("input", { required: true, minlength: 3, maxlength: 200, autocomplete: "off" });
+  const fehler = h("p", { class: "fehlertext klein", role: "alert" });
+  const dialog = h("dialog", { "aria-labelledby": "erlasstitel" });
+  const zu = () => { dialog.close(); dialog.remove(); };
+  const senden = async (ev) => {
+    ev.preventDefault();
+    fehler.textContent = "";
+    const knopf = ev.submitter;
+    if (knopf) knopf.disabled = true;
+    try {
+      const r = await api("POST", "/api/companies/" + zustand.firmaId + "/claims/waive",
+        { user_id: m.user_id, amount: Number(betrag.value), reason: grund.value });
+      zu();
+      zustand.buchStand = null;
+      await auffrischen();
+      melde(euro(r.waived) + " offener Lohn erlassen. Offen sind noch " + euro(r.open_claim) + ".");
+    } catch (err) {
+      if (err instanceof ApiFehler && err.status === 401) { zu(); abmeldenLokal(); melde("Deine Anmeldung ist abgelaufen. Melde dich neu an.", true); }
+      else fehler.textContent = err.message || String(err);
+    } finally {
+      if (knopf) knopf.disabled = false;
+    }
+  };
+  dialog.append(
+    h("h2", { id: "erlasstitel" }, "Offenen Lohn von " + m.name + " erlassen"),
+    h("p", {}, "Offen sind " + euro(m.open_claim) + ". Was du erlässt, zahlt keine Abrechnung mehr aus. "
+      + "Aus der Kasse fließt dabei kein Geld, und es lässt sich nicht zurücknehmen."),
+    h("form", { onsubmit: senden },
+      feld("Betrag in Euro", betrag),
+      feld("Grund, 3 bis 200 Zeichen", grund),
+      fehler,
+      h("div", { class: "zeile" },
+        h("button", {}, "Lohn erlassen"),
+        h("button", { type: "button", class: "leise", onclick: zu }, "Abbrechen"))));
+  dialog.addEventListener("cancel", () => setTimeout(() => dialog.remove(), 0));
+  document.body.append(dialog);
+  dialog.showModal();
+  grund.focus();
 }
 
 /** Das eigene gemeldete Firmenprofil, oder null. */
@@ -1008,7 +1055,8 @@ function zeigeStorno() {
     h("p", { class: "klein blass" }, "Überweisungen und Haftung werden mit der Gegenseite storniert, Lohn mit einer Gegenbuchung in der Kasse. "
       + "Liegt ein Ereignis in einem schon abgeglichenen Zeitraum, rechnet der Server den Geldabgleich neu und bucht zu viel gebuchte Betriebskosten zurück."),
     kosten ? h("p", { class: "klein warnung" }, (kosten === 1 ? "Darunter ist eine Betriebskosten-Buchung" : "Darunter sind " + kosten + " Betriebskosten-Buchungen")
-      + ". Ein Storno erlässt sie der Firma. Sind sie durch stornierte Ereignisse schon korrigiert, lehnt der Server ab.") : null,
+      + ". Ein Storno erlässt sie der Firma. Ist ein Teil schon korrigiert, etwa durch stornierte oder spät gemeldete Ereignisse, "
+      + "gibt das Storno nur den Rest zurück und gleicht den korrigierten Teil mit einer Buchung aus.") : null,
     h("form", { onsubmit: senden },
       feld("Grund, 3 bis 200 Zeichen", grund),
       fehler,
@@ -1034,6 +1082,12 @@ function stornoMeldung(r) {
   }
   const offen = r.drivers.reduce((s, d) => s + d.open_window, 0);
   if (offen) text += " " + (offen === 1 ? "1 Ereignis zählt" : offen + " Ereignisse zählen") + " beim nächsten Abgleich nicht mehr.";
+  const erlassen = r.drivers.flatMap((d) => d.waived);
+  const schon = erlassen.reduce((s, w) => s + (w.already_corrected || 0), 0);
+  if (schon) text += " Von den Betriebskosten waren " + euro(schon) + " schon korrigiert, die gleicht eine Buchung aus.";
+  const forderung = r.drivers.filter((d) => d.open_claim > 0);
+  if (forderung.length) text += " Offener Lohn bleibt stehen: " + forderung.map((d) => d.user + " " + euro(d.open_claim)).join(", ")
+    + ". Erlassen geht in der Liste der Fahrer.";
   return text;
 }
 
@@ -1042,7 +1096,7 @@ function stornoMeldung(r) {
 function zeichneBuch(immer) {
   const chef = zustand.firma.your_role === "chef";
   const ich = zustand.firma.members.find((m) => m.user_id === zustand.ich.user_id);
-  const stand = JSON.stringify([zustand.buch, zustand.laeufe, zustand.ungeklaert, [...zustand.auswahl.keys()], [...zustand.offen],
+  const stand = JSON.stringify([zustand.buch, zustand.laeufe, zustand.erlasse, zustand.ungeklaert, [...zustand.auswahl.keys()], [...zustand.offen],
     zustand.filter, zustand.firma.balance, ich && [ich.wallet, ich.open_claim], zustand.firma.payroll_time,
     zustand.lkw.map((t) => [t.id, t.plate, !!t.retired])]);
   if (!immer && stand === zustand.buchStand) return;
@@ -1052,11 +1106,17 @@ function zeichneBuch(immer) {
   const einzeln = zustand.buch.entries.filter((e) => e.payroll_id == null);
   const posten = einzeln.map((e) => ({ t: e.created_at, id: e.id, e }))
     .concat(zustand.laeufe.filter((l) => l.lines.length).map((l) => ({ t: l.created_at, id: Infinity, l })))
+    .concat(zustand.erlasse.map((w) => ({ t: w.created_at, id: -w.id, w })))
     .sort((a, b) => b.t - a.t || b.id - a.id);
   // "Alle sichtbaren auswählen": stornierbar, ohne Betriebskosten (die korrigiert der Abgleich selbst)
   zustand.sichtbar = chef ? einzeln.filter((e) => e.reversible && e.kind !== "betriebskosten") : [];
-  const zeilen = posten.flatMap(({ e, l }) => {
+  const zeilen = posten.flatMap(({ e, l, w }) => {
     if (l) return laufZeilen(l, chef);
+    // Erlassener Lohn: Es fließt kein Geld, nur die offene Forderung sinkt
+    if (w) return [h("tr", {},
+      h("td", { class: "wann" }, wann(w.created_at)),
+      h("td", {}, "Offener Lohn erlassen, " + w.user + " (" + euro(w.amount) + ", " + w.reason + ", von " + w.booked_by_user + ")"),
+      h("td", { class: "zahl" }, ""), h("td", { class: "zahl" }, ""))];
     const weg = e.reversed_by != null;
     const istStorno = e.kind === "storno";
     const betrag = h("span", { class: (e.amount < 0 ? "minus " : "") + "durch" }, (e.amount > 0 ? "+" : "") + euro(e.amount));

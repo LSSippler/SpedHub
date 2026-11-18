@@ -10,6 +10,9 @@
 //! Stornierte Aufträge zählen nicht, weder mit Kilometern noch für die Pauschale. Das wirkt nur
 //! auf Zeiträume, die noch nicht abgerechnet sind: Schon gezahlten Lohn holt der Server nicht
 //! zurück. Das kann der Chef, indem er die Lohnbuchung storniert (siehe [`crate::reversal`]).
+//! Auch eine offene Forderung aus einer schon abgerechneten Zeit bleibt beim Storno stehen und
+//! würde bei der nächsten Abrechnung zuerst gezahlt. Die erlässt der Chef mit [`waive_claim`],
+//! ganz oder zum Teil.
 //!
 //! Jeder Tag wird genau einmal abgerechnet: `payroll_runs` hat einen eindeutigen Index auf Firma
 //! und Tag, und die Abrechnung läuft in einer Transaktion. Nach einem Neustart holt
@@ -30,12 +33,78 @@ fn company_balance(conn: &Connection, company_id: i64) -> rusqlite::Result<i64> 
     )
 }
 
+/// Offene Lohnforderung eines Fahrers: was Abrechnungen nicht zahlen konnten, abzüglich dessen,
+/// was spätere Abrechnungen bedient haben und was der Chef erlassen hat.
 pub fn open_claim(conn: &Connection, company_id: i64, user_id: i64) -> rusqlite::Result<i64> {
     conn.query_row(
-        "SELECT COALESCE(SUM(amount), 0) FROM wage_claims WHERE company_id = ?1 AND user_id = ?2",
+        "SELECT (SELECT COALESCE(SUM(amount), 0) FROM wage_claims
+                 WHERE company_id = ?1 AND user_id = ?2)
+              - (SELECT COALESCE(SUM(amount), 0) FROM wage_claim_waivers
+                 WHERE company_id = ?1 AND user_id = ?2)",
         [company_id, user_id],
         |r| r.get(0),
     )
+}
+
+/// Warum sich eine Forderung nicht erlassen lässt.
+#[derive(Debug, PartialEq)]
+pub enum WaiveError {
+    /// Betrag 0 oder negativ
+    NotPositive,
+    /// Mehr als offen ist: die offene Forderung
+    TooMuch(i64),
+}
+
+/// Erlässt `amount` von der offenen Lohnforderung eines Fahrers, mit Grund, ausgelöst vom Chef
+/// `chef_id`. Bucht nichts im Kassenbuch, es fließt kein Geld: Die Forderung wird nur nicht
+/// mehr ausgezahlt. Gibt die offene Forderung danach zurück.
+pub fn waive_claim(
+    conn: &Connection,
+    company_id: i64,
+    user_id: i64,
+    amount: i64,
+    (reason, chef_id): (&str, i64),
+    now: i64,
+) -> rusqlite::Result<Result<i64, WaiveError>> {
+    if amount <= 0 {
+        return Ok(Err(WaiveError::NotPositive));
+    }
+    let open = open_claim(conn, company_id, user_id)?;
+    if amount > open {
+        return Ok(Err(WaiveError::TooMuch(open)));
+    }
+    conn.execute(
+        "INSERT INTO wage_claim_waivers (company_id, user_id, amount, reason, booked_by, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![company_id, user_id, amount, reason, chef_id, now],
+    )?;
+    Ok(Ok(open - amount))
+}
+
+/// Erlassene Forderungen der Firma, neueste zuerst, mit `created_at` in `[from, to)`.
+pub fn waivers_json(
+    conn: &Connection,
+    company_id: i64,
+    (from, to): (Option<i64>, Option<i64>),
+    limit: i64,
+) -> rusqlite::Result<Vec<Value>> {
+    conn.prepare(
+        "SELECT w.id, w.user_id, u.name, w.amount, w.reason, b.name, w.created_at
+         FROM wage_claim_waivers w JOIN users u ON u.id = w.user_id
+         JOIN users b ON b.id = w.booked_by
+         WHERE w.company_id = ?1 AND (?2 IS NULL OR w.created_at >= ?2)
+           AND (?3 IS NULL OR w.created_at < ?3)
+         ORDER BY w.id DESC LIMIT ?4",
+    )?
+    .query_map(params![company_id, from, to, limit], |r| {
+        Ok(json!({
+            "id": r.get::<_, i64>(0)?, "user_id": r.get::<_, i64>(1)?,
+            "user": r.get::<_, String>(2)?, "amount": r.get::<_, i64>(3)?,
+            "reason": r.get::<_, String>(4)?, "booked_by_user": r.get::<_, String>(5)?,
+            "created_at": r.get::<_, i64>(6)?
+        }))
+    })?
+    .collect()
 }
 
 /// Ganze Euro aus Cent, kaufmännisch gerundet.

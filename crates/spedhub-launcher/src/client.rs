@@ -281,6 +281,10 @@ pub struct Checkin {
     /// Kennzeichen nach der Rückgabe
     #[serde(default)]
     pub plate: String,
+    /// Das gemeldete Kennzeichen, wenn der Server es nicht übernommen hat, weil es sich nicht
+    /// als eigenes Kennzeichen setzen lässt. Der Lkw behält dann `plate`.
+    #[serde(default)]
+    pub plate_ignored: Option<IgnoredPlate>,
     pub odometer_km: i64,
     pub rev: i64,
     pub driven_km: i64,
@@ -296,6 +300,15 @@ pub struct Checkin {
     /// Über der Schadensgrenze: Der Lkw steht jetzt in der Werkstatt
     #[serde(default)]
     pub in_workshop: bool,
+}
+
+/// Ein Kennzeichen aus dem Spielstand, das der Server bei der Rückgabe nicht übernommen hat.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct IgnoredPlate {
+    pub plate: String,
+    /// Warum, wie `spedhub_save::custom_plate` es sagt
+    #[serde(default)]
+    pub reason: String,
 }
 
 /// Eine Betriebskosten-Buchung des Chefs, die noch mit keinem Lkw verknüpft ist. Daraus wählt

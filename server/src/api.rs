@@ -103,6 +103,7 @@ pub fn router_with(db: Db, clock: Clock) -> Router {
             post(close_budget),
         )
         .route("/api/companies/{id}/transfer", post(transfer))
+        .route("/api/companies/{id}/claims/waive", post(waive_claim))
         .route("/api/companies/{id}/payrolls", get(list_payrolls))
         .route("/api/companies/{id}/payrolls/run", post(run_payroll_now))
         .route("/api/companies/{id}/sync", post(sync))
@@ -943,7 +944,9 @@ struct TruckPatch {
 
 /// Kennzeichen eines Lkw ändern, etwa wenn zwei Firmen-Lkw durch Zufall gleich heißen. Nur der
 /// Chef, nicht während einer Leihe (der Spielstand des Fahrers hat dann noch das alte) und
-/// nicht bei ausgemusterten oder verkauften Lkw, sonst 409. Das alte Kennzeichen kommt zu den
+/// nicht bei ausgemusterten oder verkauften Lkw, sonst 409. Während einer Leihe geht es doch,
+/// wenn sich das alte Kennzeichen nicht als eigenes setzen lässt: Dann steht der Lkw nicht im
+/// Spielstand, und der Launcher setzt ihn mit dem neuen ein. Das alte Kennzeichen kommt zu den
 /// früheren. Beim nächsten Einsetzen schreibt der Launcher das neue in den Spielstand.
 async fn update_truck(
     State(db): State<Db>,
@@ -979,7 +982,12 @@ async fn update_truck(
             |r| r.get(0),
         )
         .optional()?;
-    if let Some(name) = holder {
+    // Während einer Leihe hat der Spielstand des Fahrers das alte Kennzeichen. Ausnahme: Das
+    // alte lässt sich gar nicht als eigenes setzen. Dann konnte der Launcher den Lkw nicht
+    // einsetzen, und erst das neue Kennzeichen macht das möglich.
+    if let Some(name) = holder
+        && plates::company_plate(&current).is_ok()
+    {
         return Err(ApiError::conflict(&format!(
             "Der Lkw ist gerade an {name} verliehen. Das Kennzeichen lässt sich erst nach der Rückgabe ändern"
         )));
@@ -1228,6 +1236,17 @@ async fn checkout(
             "Der Lkw steht in der Werkstatt. Ausleihen geht erst, wenn der Chef ihn reparieren lässt",
         ));
     }
+    // Der Launcher schreibt das Kennzeichen beim Einsetzen als eigenes in den Spielstand. Geht
+    // das nicht, entstünde eine Leihe, deren Lkw nie in den Spielstand kommt.
+    let plate: String =
+        tx.query_row("SELECT plate FROM trucks WHERE id = ?1", [truck_id], |r| {
+            r.get(0)
+        })?;
+    if let Err(e) = plates::company_plate(&plate) {
+        return Err(ApiError::conflict(&format!(
+            "Das Kennzeichen {plate} lässt sich nicht in den Spielstand schreiben ({e}). Der Chef ändert es im Dashboard, danach geht das Ausleihen"
+        )));
+    }
     // Schaden beim Ausleihen: Was danach dazukommt, ist neuer Schaden dieser Leihe
     let damage_out = damage::damage_of(&state).fixable;
     tx.execute(
@@ -1289,7 +1308,9 @@ struct CheckinReq {
 }
 
 /// Lkw zurückgeben. Der Zustand aus dem Spielstand wird übernommen, die Revision steigt.
-/// Mit `plate` bekommt der Lkw ein neues Kennzeichen, das alte kommt in `truck_plates`.
+/// Mit `plate` bekommt der Lkw ein neues Kennzeichen, das alte kommt in `truck_plates`. Lässt
+/// sich das gemeldete nicht als eigenes Kennzeichen setzen, bleibt das alte, das gemeldete kommt
+/// zu den früheren, und die Antwort nennt es in `plate_ignored`.
 ///
 /// Ohne `odometer_km` (Fahrer abgestürzt, kein Spielstand) darf nur der Chef zurücknehmen.
 /// Dann gilt der letzte bekannte Zustand aus dem Herzschlag. Gibt es keinen, 409. Nach jeder
@@ -1369,7 +1390,7 @@ async fn checkin(
             (last_km.unwrap_or(odometer).max(odometer), state, Some(at))
         }
     };
-    let new_plate = match b.plate.as_deref().map(str::trim) {
+    let reported = match b.plate.as_deref().map(str::trim) {
         None => None,
         Some("") => return Err(ApiError::bad("Das Kennzeichen darf nicht leer sein")),
         Some(p) if p.chars().count() > 32 => {
@@ -1380,6 +1401,29 @@ async fn checkin(
         Some(p) if p == current_plate => None,
         Some(p) => Some(p.to_string()),
     };
+    // Ein Kennzeichen, das sich nicht als eigenes setzen lässt (zu lang, Umlaute), übernimmt
+    // der Server nicht: Der Launcher könnte den Lkw damit nie wieder einsetzen. Er behält das
+    // bisherige und merkt sich das gemeldete als früheres, damit die Telemetrie den Lkw mit
+    // dem Spielstand von vor dem nächsten Einsetzen noch findet.
+    let (new_plate, plate_ignored) = match reported {
+        None => (None, None),
+        Some(p) => match plates::company_plate(&p) {
+            Ok(clean) if clean == current_plate => (None, None),
+            Ok(clean) => (Some(clean), None),
+            Err(e) => (None, Some((p, e))),
+        },
+    };
+    if let Some((p, _)) = &plate_ignored {
+        let known: bool = tx
+            .prepare("SELECT 1 FROM truck_plates WHERE truck_id = ?1 AND plate = ?2")?
+            .exists(params![truck_id, p])?;
+        if !known {
+            tx.execute(
+                "INSERT INTO truck_plates (truck_id, plate, replaced_at) VALUES (?1, ?2, ?3)",
+                params![truck_id, p, clock.now()],
+            )?;
+        }
+    }
     if let Some(p) = &new_plate {
         free_retired_plate(&tx, company_id, p, clock.now())?;
         match tx.execute(
@@ -1439,17 +1483,21 @@ async fn checkin(
             "Haftung {plate}, {} Prozentpunkte neuer Schaden",
             damage::percent_text(damage_new)
         );
+        // Beide Seiten mit demselben Zeitpunkt, sie gehören zusammen
+        let now = clock.now();
         for (account, amount) in [("fahrer", -liability), ("firma", liability)] {
             tx.execute(
                 "INSERT INTO ledger (company_id, account, user_id, kind, amount, note, created_at)
                  VALUES (?1, ?2, ?3, 'haftung', ?4, ?5, ?6)",
-                params![company_id, account, holder, amount, note, clock.now()],
+                params![company_id, account, holder, amount, note, now],
             )?;
         }
     }
     tx.commit()?;
     Ok(Json(json!({
         "id": truck_id, "plate": plate, "odometer_km": new_odometer, "rev": rev,
+        // Gemeldetes Kennzeichen, das der Server nicht übernommen hat, und warum
+        "plate_ignored": plate_ignored.map(|(p, e)| json!({ "plate": p, "reason": e })),
         "driven_km": new_odometer - odometer,
         // Gesetzt, wenn der letzte bekannte Zustand übernommen wurde: von wann er ist
         "from_last_known": from_last.map(|at| json!({ "at": at })),
@@ -1981,11 +2029,13 @@ async fn transfer(
     if b.amount > company_balance(&tx, company_id)? {
         return Err(ApiError::conflict("In der Kasse ist nicht genug Geld"));
     }
+    // Beide Seiten mit demselben Zeitpunkt, sie gehören zusammen
+    let now = clock.now();
     for (account, amount) in [("firma", -b.amount), ("fahrer", b.amount)] {
         tx.execute(
             "INSERT INTO ledger (company_id, account, user_id, kind, amount, note, created_at)
              VALUES (?1, ?2, ?3, 'ueberweisung', ?4, ?5, ?6)",
-            params![company_id, account, b.user_id, amount, b.note, clock.now()],
+            params![company_id, account, b.user_id, amount, b.note, now],
         )?;
     }
     let balance = company_balance(&tx, company_id)?;
@@ -2111,12 +2161,71 @@ async fn reverse_entries(
             .optional()?;
         d["user"] = json!(name);
         d["wallet"] = json!(wallet(&tx, company_id, uid)?);
+        // Ein Storno ändert an offenen Forderungen nichts, der Chef erlässt sie getrennt
+        d["open_claim"] = json!(payroll::open_claim(&tx, company_id, uid)?);
         list.push(d);
     }
     let balance = company_balance(&tx, company_id)?;
     tx.commit()?;
     Ok(Json(json!({
         "entries": entries, "balance": balance, "drivers": list
+    })))
+}
+
+#[derive(Deserialize)]
+struct WaiveReq {
+    user_id: i64,
+    amount: i64,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+/// Offene Lohnforderung eines Fahrers ganz oder zum Teil erlassen, siehe
+/// [`payroll::waive_claim`]. Nur der Chef, mit Grund. Das braucht er etwa, wenn er einen
+/// Auftrag storniert, dessen Lohn eine Abrechnung als Forderung stehen gelassen hat: Das Storno
+/// selbst ändert an der Forderung nichts.
+async fn waive_claim(
+    State(db): State<Db>,
+    State(clock): State<Clock>,
+    user: AuthUser,
+    Path(company_id): Path<i64>,
+    Json(b): Json<WaiveReq>,
+) -> ApiResult<Json<Value>> {
+    let reason = reversal::clean_reason(b.reason.as_deref()).map_err(|e| ApiError::bad(&e))?;
+    let mut conn = db.lock().unwrap();
+    let tx = conn.transaction()?;
+    require_chef(&tx, company_id, user.id)?;
+    let is_member: bool = tx
+        .prepare("SELECT 1 FROM memberships WHERE company_id = ?1 AND user_id = ?2")?
+        .exists([company_id, b.user_id])?;
+    if !is_member {
+        return Err(ApiError::not_found("Diese Person ist nicht in der Firma"));
+    }
+    let open = match payroll::waive_claim(
+        &tx,
+        company_id,
+        b.user_id,
+        b.amount,
+        (&reason, user.id),
+        clock.now(),
+    )? {
+        Ok(open) => open,
+        Err(payroll::WaiveError::NotPositive) => {
+            return Err(ApiError::bad("Der Betrag muss größer als 0 sein"));
+        }
+        Err(payroll::WaiveError::TooMuch(0)) => {
+            return Err(ApiError::conflict("Es ist kein Lohn offen"));
+        }
+        Err(payroll::WaiveError::TooMuch(open)) => {
+            return Err(ApiError::conflict(&format!(
+                "Offen sind nur {open} €, mehr lässt sich nicht erlassen"
+            )));
+        }
+    };
+    let wallet = wallet(&tx, company_id, b.user_id)?;
+    tx.commit()?;
+    Ok(Json(json!({
+        "user_id": b.user_id, "waived": b.amount, "open_claim": open, "wallet": wallet
     })))
 }
 
@@ -2383,7 +2492,9 @@ async fn list_payrolls(
         .into_iter()
         .map(|id| payroll::run_json(&conn, id))
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(Json(json!({ "payrolls": runs })))
+    // Erlassene Forderungen im selben Zeitraum, für das Kassenbuch
+    let waivers = payroll::waivers_json(&conn, company_id, (q.from, q.to), limit)?;
+    Ok(Json(json!({ "payrolls": runs, "claim_waivers": waivers })))
 }
 
 /// Abrechnung sofort auslösen (Testbereich im Dashboard). Nur der Chef.

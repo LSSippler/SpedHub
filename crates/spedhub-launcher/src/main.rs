@@ -9,7 +9,7 @@ use spedhub_launcher::client::{
     Client, Company, Me, PurchaseCandidate, Truck, format_percent, version_warning,
 };
 use spedhub_launcher::flows::{
-    describe, lease_package, profile_to_report, return_truck, sync_and_write,
+    ProfileReport, describe, lease_package, profile_to_report, return_truck, sync_and_write,
 };
 use spedhub_launcher::plugin_install::{self, GameSource, PluginStatus};
 use spedhub_launcher::profiles::{
@@ -269,6 +269,7 @@ enum Background {
     PlateSuggested(std::result::Result<String, String>),
     /// Firmenprofil beim Server gemeldet, oder warum nicht
     ProfileReported {
+        company_id: i64,
         name: String,
         result: std::result::Result<(), String>,
     },
@@ -375,9 +376,8 @@ struct App {
     version_warning: Option<String>,
     plugin: PluginView,
     update: UpdateState,
-    /// Zuletzt versuchte Meldung des Firmenprofils (Firma, Name). Verhindert, dass dieselbe
-    /// Meldung nach jedem Laden wieder rausgeht, etwa bei einem älteren Server.
-    profile_report: Option<(i64, String)>,
+    /// Laufende oder geklappte Meldung des Firmenprofils, siehe [`ProfileReport`]
+    profile_report: ProfileReport,
     bg_tx: Sender<Background>,
     bg_rx: Receiver<Background>,
 }
@@ -423,7 +423,7 @@ impl App {
             version_warning: None,
             plugin,
             update: UpdateState::Checking,
-            profile_report: None,
+            profile_report: ProfileReport::default(),
             bg_tx,
             bg_rx,
         };
@@ -517,17 +517,16 @@ impl App {
         let Some(name) = profile_to_report(company, me.user_id, name.as_deref()) else {
             return;
         };
-        let attempt = Some((company.id, name.clone()));
-        if self.profile_report == attempt {
+        let company_id = company.id;
+        if !self.profile_report.start(company_id, &name) {
             return;
         }
-        self.profile_report = attempt;
         let client = self.client();
-        let company_id = company.id;
         self.background(ctx, move || Background::ProfileReported {
             result: client
                 .set_profile(company_id, Some(&name))
                 .map_err(|e| e.to_string()),
+            company_id,
             name,
         });
     }
@@ -846,14 +845,22 @@ impl App {
                     "Kein Vorschlag für das Kennzeichen vom Server ({e}). Bitte selbst eins eintragen"
                 )),
             },
-            Background::ProfileReported { name, result } => match result {
-                Ok(()) => self.info(format!(
-                    "Firmenprofil {name} beim Server gemeldet. Gebucht wird nur, was in diesem Profil passiert"
-                )),
-                Err(e) => self.error(format!(
-                    "Das Firmenprofil ließ sich dem Server nicht melden: {e}"
-                )),
-            },
+            Background::ProfileReported {
+                company_id,
+                name,
+                result,
+            } => {
+                self.profile_report
+                    .finished(company_id, &name, result.is_ok());
+                match result {
+                    Ok(()) => self.info(format!(
+                        "Firmenprofil {name} beim Server gemeldet. Gebucht wird nur, was in diesem Profil passiert"
+                    )),
+                    Err(e) => self.error(format!(
+                        "Das Firmenprofil {name} ließ sich dem Server nicht melden: {e}. Bis das klappt, lehnt der Server Aufträge aus diesem Profil ab. Der Launcher versucht es beim nächsten Aktualisieren wieder"
+                    )),
+                }
+            }
             Background::Failed(e) => {
                 self.plugin.installing = false;
                 match std::mem::replace(&mut self.update, UpdateState::Current) {
@@ -1063,15 +1070,19 @@ impl App {
             if let Some(p) = &paths {
                 p.remove_lease(truck_id);
             }
-            let renamed = match (&new_plate, &returned.plate_taken) {
-                (_, Some(p)) => format!(
+            let renamed = match (&new_plate, &returned.plate_taken, &r.plate_ignored) {
+                (_, Some(p), _) => format!(
                     ". Das Spiel hat ihm das Kennzeichen {p} gegeben, das ein anderer Firmen-Lkw trägt. Er behält {}",
                     r.plate
                 ),
-                (Some(p), None) => {
+                (Some(_), None, Some(i)) => format!(
+                    ". Das Spiel hat ihm das Kennzeichen {} gegeben, das sich nicht als eigenes setzen lässt ({}). Er behält {}",
+                    i.plate, i.reason, r.plate
+                ),
+                (Some(p), None, None) => {
                     format!(". Neues Kennzeichen {p}, das alte merkt sich der Server")
                 }
-                (None, None) => String::new(),
+                (None, None, _) => String::new(),
             };
             let mut text = format!(
                 "{plate} ist zurückgegeben, {} km gefahren{renamed}. Schaden {} %",
