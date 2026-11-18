@@ -60,8 +60,14 @@ Das Repo ist ein Cargo-Workspace. Neue Crates kommen als Mitglied in die `Cargo.
 
 ## Was noch nicht bestätigt ist
 
-Im Spiel bestätigt (ETS2 1.62, Abschnitt "Im Spiel bestätigt" in `docs/save-format.md`): Ein mit `spedhub-save` eingesetzter Lkw lädt mit Zubehör, Kilometern, Verschleiß und Tank, und der nächste Autosave des Spiels ist intakt. Das Spiel vergibt dabei alle `_nameless`-Namen neu und kann das Kennzeichen ersetzen. Weder Unit-Name noch Kennzeichen sind also eine dauerhafte Kennung, Lkw werden über Modell und Teile wiedererkannt (`find_package_truck`).
+Im Spiel bestätigt (ETS2 1.62, Abschnitt "Im Spiel bestätigt" in `docs/save-format.md`):
+- Ein mit `spedhub-save` eingesetzter Lkw lädt mit Zubehör, Kilometern, Verschleiß und Tank, und der nächste Autosave des Spiels ist intakt.
+- Ein neuer Speicherplatz des Launchers erscheint im Spiel und lädt, der Lkw ist eigener und aktiver Lkw.
+- Das Spiel übernimmt den beim Geldabgleich geschriebenen Kontostand.
+- Mit einem frischen Profil gibt es kein `Economy reset - company mismatch`, der Reset im ersten Test lag am alten Spielstand.
+- Das Plugin lädt (Log "SpedHub: aktiv"), Herzschläge kommen an, `job.delivered` kommt mit Fracht, Städten, Strecke und Zeitpunkt.
+- Das Spiel vergibt alle `_nameless`-Namen neu und kann das Kennzeichen ersetzen, auch durch das Wunschkennzeichen aus einem anderen Profil desselben Spielers. Kennzeichen können also zwischen Lkw kollidieren. Weder Unit-Name noch Kennzeichen sind eine dauerhafte Kennung, Lkw werden über Modell und Teile wiedererkannt (`find_package_truck`).
 
-Offen ist weiter: warum das Spiel Kennzeichen ersetzt, woher `Economy reset - company mismatch` kommt, ob neue Speicherplätze des Launchers im Spiel erscheinen, ob das Spiel einen beim Geldabgleich geschriebenen Kontostand übernimmt (auch mit Anschaffungsbudget), ob das aus `info_players_experience` berechnete Level zum Level im Spiel passt, ob das Spiel einen nach der Werkstatt mit Verschleiß 0 eingesetzten Lkw so annimmt, das Einsetzen neben eigene Lkw und das Entfernen. Code am Spielstand deshalb weiter so bauen, dass sich die Feldliste in `crates/spedhub-save/src/layout.rs` leicht anpassen lässt.
+Offen ist weiter: warum das Spiel Kennzeichen ersetzt, ob der Kontostand mit Anschaffungsbudget genauso übernommen wird, ob das aus `info_players_experience` berechnete Level zum Level im Spiel passt, ob das Spiel einen nach der Werkstatt mit Verschleiß 0 eingesetzten Lkw so annimmt, das Einsetzen neben eigene Lkw und das Entfernen. Code am Spielstand deshalb weiter so bauen, dass sich die Feldliste in `crates/spedhub-save/src/layout.rs` leicht anpassen lässt.
 
-Ebenfalls ungeprüft: Lädt das Spiel die Plugin-DLL, liefern die Kanäle für den Herzschlag die erwarteten Einheiten, welches Format hat `license.plate`, ist die Job-Konfiguration bei `job.delivered` noch gefüllt? Das Setup ist nur auf dem Windows-Runner der CI gebaut. Setup, Plugin-Installation und Neustart über UAC sind nie auf einem echten Windows gelaufen.
+Ebenfalls ungeprüft: Liefern die Kanäle für den Herzschlag die erwarteten Einheiten, und welches Format hat `license.plate`? Das Setup ist nur auf dem Windows-Runner der CI gebaut. Setup, Plugin-Installation und Neustart über UAC sind nie auf einem echten Windows gelaufen.
