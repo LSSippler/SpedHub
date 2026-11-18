@@ -9,7 +9,7 @@ use crate::{
     profiles,
     purchases::{self, Budget},
     reconcile::{client_time, correct_late, kind_label, last_point, plausible_time, window_sum},
-    version,
+    reversal, version,
 };
 use argon2::{
     Argon2,
@@ -81,6 +81,7 @@ pub fn router_with(db: Db, clock: Clock) -> Router {
         )
         .route("/api/companies/{id}/heartbeat", post(heartbeat))
         .route("/api/companies/{id}/ledger", get(get_ledger))
+        .route("/api/companies/{id}/ledger/reverse", post(reverse_entries))
         .route(
             "/api/companies/{id}/ledger/{entry}/link-truck",
             post(link_truck).delete(unlink_truck),
@@ -1859,8 +1860,15 @@ async fn transfer(
 #[derive(Deserialize)]
 struct LedgerQuery {
     limit: Option<i64>,
+    /// Nur Buchungen mit `created_at` ab hier (Unix-Sekunden, einschließlich)
+    from: Option<i64>,
+    /// Nur Buchungen mit `created_at` vor diesem Zeitpunkt (Unix-Sekunden, ausschließlich)
+    to: Option<i64>,
 }
 
+/// Die letzten Buchungen, neueste zuerst. Mit `from` und `to` nur die aus diesem Zeitraum
+/// (Empfang beim Server). Jede Buchung sagt, ob und von wem sie storniert ist, ein Storno, was
+/// es storniert, und `reversible`, ob sich die Buchung jetzt stornieren lässt.
 async fn get_ledger(
     State(db): State<Db>,
     user: AuthUser,
@@ -1873,22 +1881,36 @@ async fn get_ledger(
     let mut stmt = conn.prepare(
         "SELECT l.id, l.account, u.name, l.kind, l.amount, l.note, l.created_at, l.user_id,
                 l.game_amount, l.distance_km, l.payroll_id, l.occurred_at, l.event_id,
-                l.cargo, l.source_city, l.target_city, pl.truck_id, tr.plate, l.profile
+                l.cargo, l.source_city, l.target_city, pl.truck_id, tr.plate, l.profile,
+                l.reverses_id, r.id, r.created_at, r.note, ru.name, o.kind, o.created_at,
+                bu.name
          FROM ledger l LEFT JOIN users u ON u.id = l.user_id
          LEFT JOIN purchase_links pl ON pl.ledger_id = l.id
          LEFT JOIN trucks tr ON tr.id = pl.truck_id
-         WHERE l.company_id = ?1 ORDER BY l.id DESC LIMIT ?2",
+         LEFT JOIN ledger r ON r.reverses_id = l.id AND r.account = l.account
+         LEFT JOIN users ru ON ru.id = r.booked_by
+         LEFT JOIN ledger o ON o.id = l.reverses_id
+         LEFT JOIN users bu ON bu.id = l.booked_by
+         WHERE l.company_id = ?1 AND (?3 IS NULL OR l.created_at >= ?3)
+           AND (?4 IS NULL OR l.created_at < ?4)
+         ORDER BY l.id DESC LIMIT ?2",
     )?;
     let entries = stmt
-        .query_map([company_id, limit], |r| {
+        .query_map(params![company_id, limit, q.from, q.to], |r| {
+            let kind: String = r.get(3)?;
+            let account: String = r.get(1)?;
+            let payroll_id: Option<i64> = r.get(10)?;
+            let reversed_by: Option<i64> = r.get(20)?;
+            let reversible = reversed_by.is_none()
+                && reversal::not_reversible(&kind, &account, payroll_id).is_none();
             Ok(json!({
-                "id": r.get::<_, i64>(0)?, "account": r.get::<_, String>(1)?,
-                "user": r.get::<_, Option<String>>(2)?, "kind": r.get::<_, String>(3)?,
+                "id": r.get::<_, i64>(0)?, "account": account,
+                "user": r.get::<_, Option<String>>(2)?, "kind": kind,
                 "amount": r.get::<_, i64>(4)?, "note": r.get::<_, String>(5)?,
                 "created_at": r.get::<_, i64>(6)?, "user_id": r.get::<_, Option<i64>>(7)?,
                 "game_amount": r.get::<_, Option<i64>>(8)?,
                 "distance_km": r.get::<_, Option<i64>>(9)?,
-                "payroll_id": r.get::<_, Option<i64>>(10)?,
+                "payroll_id": payroll_id,
                 "occurred_at": r.get::<_, Option<i64>>(11)?,
                 "event_id": r.get::<_, Option<String>>(12)?,
                 "cargo": r.get::<_, Option<String>>(13)?,
@@ -1898,13 +1920,64 @@ async fn get_ledger(
                 "truck_id": r.get::<_, Option<i64>>(16)?,
                 "truck_plate": r.get::<_, Option<String>>(17)?,
                 // Aus diesem ETS2-Profil hat das Plugin das Ereignis gemeldet
-                "profile": r.get::<_, Option<String>>(18)?
+                "profile": r.get::<_, Option<String>>(18)?,
+                // Storno: was diese Buchung storniert (Art und Zeitpunkt des Originals) und wer
+                "reverses_id": r.get::<_, Option<i64>>(19)?,
+                "reverses_kind": r.get::<_, Option<String>>(24)?,
+                "reverses_created_at": r.get::<_, Option<i64>>(25)?,
+                "booked_by_user": r.get::<_, Option<String>>(26)?,
+                // Storniert: von welcher Buchung, wann, warum und von wem
+                "reversed_by": reversed_by,
+                "reversed_at": r.get::<_, Option<i64>>(21)?,
+                "reverse_reason": r.get::<_, Option<String>>(22)?,
+                "reversed_by_user": r.get::<_, Option<String>>(23)?,
+                "reversible": reversible
             }))
         })?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Json(
         json!({ "balance": company_balance(&conn, company_id)?, "entries": entries }),
     ))
+}
+
+#[derive(Deserialize)]
+struct ReverseReq {
+    #[serde(default)]
+    entry_ids: Vec<i64>,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+/// Buchungen stornieren, siehe [`crate::reversal`]. Nur der Chef. Alles oder nichts in einer
+/// Transaktion. Die Antwort enthält die neuen Storno-Buchungen, den Kassenstand und je
+/// betroffenem Fahrer Lohnkonto und Wirkung auf den Geldabgleich.
+async fn reverse_entries(
+    State(db): State<Db>,
+    State(clock): State<Clock>,
+    user: AuthUser,
+    Path(company_id): Path<i64>,
+    Json(b): Json<ReverseReq>,
+) -> ApiResult<Json<Value>> {
+    let reason = reversal::clean_reason(b.reason.as_deref()).map_err(|e| ApiError::bad(&e))?;
+    let mut conn = db.lock().unwrap();
+    let tx = conn.transaction()?;
+    require_chef(&tx, company_id, user.id)?;
+    let (entries, drivers) =
+        reversal::reverse(&tx, company_id, user.id, &b.entry_ids, &reason, clock.now())?;
+    let mut list = Vec::new();
+    for (uid, mut d) in drivers {
+        let name: Option<String> = tx
+            .query_row("SELECT name FROM users WHERE id = ?1", [uid], |r| r.get(0))
+            .optional()?;
+        d["user"] = json!(name);
+        d["wallet"] = json!(wallet(&tx, company_id, uid)?);
+        list.push(d);
+    }
+    let balance = company_balance(&tx, company_id)?;
+    tx.commit()?;
+    Ok(Json(json!({
+        "entries": entries, "balance": balance, "drivers": list
+    })))
 }
 
 #[derive(Deserialize)]
@@ -1935,6 +2008,14 @@ async fn link_truck(
     if kind != "betriebskosten" || account != "firma" {
         return Err(ApiError::bad(
             "Als Lkw-Kauf lässt sich nur eine Betriebskosten-Buchung der Firmenkasse verknüpfen",
+        ));
+    }
+    let reversed: bool = tx
+        .prepare("SELECT 1 FROM ledger WHERE reverses_id = ?1")?
+        .exists([entry])?;
+    if reversed {
+        return Err(ApiError::conflict(
+            "Die Buchung ist storniert und lässt sich nicht mehr als Lkw-Kauf verknüpfen",
         ));
     }
     let linked: Option<String> = tx
@@ -1996,7 +2077,8 @@ struct CandidateQuery {
     limit: Option<i64>,
 }
 
-/// Betriebskosten-Buchungen des Chefs, die noch mit keinem Lkw verknüpft sind, neueste zuerst.
+/// Betriebskosten-Buchungen des Chefs, die noch mit keinem Lkw verknüpft und nicht storniert
+/// sind, neueste zuerst.
 /// Daraus wählt der Chef nach "Lkw übernehmen" den Kauf.
 async fn purchase_candidates(
     State(db): State<Db>,
@@ -2013,6 +2095,7 @@ async fn purchase_candidates(
              WHERE l.company_id = ?1 AND l.account = 'firma' AND l.kind = 'betriebskosten'
                AND l.user_id = ?2
                AND NOT EXISTS (SELECT 1 FROM purchase_links p WHERE p.ledger_id = l.id)
+               AND NOT EXISTS (SELECT 1 FROM ledger s WHERE s.reverses_id = l.id)
              ORDER BY l.id DESC LIMIT ?3",
         )?
         .query_map(params![company_id, user.id, limit], |r| {
@@ -2149,8 +2232,12 @@ async fn list_payrolls(
     let conn = db.lock().unwrap();
     role_in(&conn, company_id, user.id)?;
     let ids: Vec<i64> = conn
-        .prepare("SELECT id FROM payroll_runs WHERE company_id = ?1 ORDER BY id DESC LIMIT ?2")?
-        .query_map([company_id, limit], |r| r.get(0))?
+        .prepare(
+            "SELECT id FROM payroll_runs WHERE company_id = ?1
+               AND (?3 IS NULL OR created_at >= ?3) AND (?4 IS NULL OR created_at < ?4)
+             ORDER BY id DESC LIMIT ?2",
+        )?
+        .query_map(params![company_id, limit, q.from, q.to], |r| r.get(0))?
         .collect::<Result<_, _>>()?;
     let runs = ids
         .into_iter()
@@ -2259,16 +2346,41 @@ async fn sync(
         diff = Some(d);
         if d < 0 {
             costs = -d;
-            let note = format!("Abgleich: erwartet {exp} €, im Spiel {} €", b.ingame_money);
-            tx.execute(
-                "INSERT INTO ledger (company_id, account, user_id, kind, amount, note, created_at)
-                 VALUES (?1, 'firma', ?2, 'betriebskosten', ?3, ?4, ?5)",
-                params![company_id, user.id, d, note, t],
-            )?;
-            booked.push(json!({ "account": "firma", "kind": "betriebskosten", "amount": d }));
         } else {
             surplus = d;
         }
+    }
+
+    // Erst der Abgleichpunkt, damit die Betriebskosten ihn in `sync_id` tragen. Was geschrieben
+    // werden soll und die größte Buchung kommen danach dazu.
+    tx.execute(
+        "INSERT INTO sync_points (company_id, user_id, ingame_money, xp, expected, write_money,
+                                  last_ledger_id, created_at, cutoff, diff, costs_booked,
+                                  unexplained_attributed)
+         VALUES (?1, ?2, ?3, ?4, ?5, 0, 0, ?6, ?7, ?8, ?9, ?10)",
+        params![
+            company_id,
+            user.id,
+            b.ingame_money,
+            b.xp,
+            expected,
+            t,
+            cutoff,
+            diff,
+            costs,
+            surplus
+        ],
+    )?;
+    let sync_id = tx.last_insert_rowid();
+    if let (Some(exp), true) = (expected, costs > 0) {
+        let note = format!("Abgleich: erwartet {exp} €, im Spiel {} €", b.ingame_money);
+        tx.execute(
+            "INSERT INTO ledger (company_id, account, user_id, kind, amount, note, created_at,
+                                 sync_id)
+             VALUES (?1, 'firma', ?2, 'betriebskosten', ?3, ?4, ?5, ?6)",
+            params![company_id, user.id, -costs, note, t, sync_id],
+        )?;
+        booked.push(json!({ "account": "firma", "kind": "betriebskosten", "amount": -costs }));
     }
 
     let advance: i64 = tx.query_row(
@@ -2283,26 +2395,9 @@ async fn sync(
     let last_ledger_id: i64 =
         tx.query_row("SELECT COALESCE(MAX(id), 0) FROM ledger", [], |r| r.get(0))?;
     tx.execute(
-        "INSERT INTO sync_points (company_id, user_id, ingame_money, xp, expected, write_money,
-                                  last_ledger_id, created_at, cutoff, diff, costs_booked,
-                                  unexplained_attributed)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-        params![
-            company_id,
-            user.id,
-            b.ingame_money,
-            b.xp,
-            expected,
-            write_money,
-            last_ledger_id,
-            t,
-            cutoff,
-            diff,
-            costs,
-            surplus
-        ],
+        "UPDATE sync_points SET write_money = ?1, last_ledger_id = ?2 WHERE id = ?3",
+        params![write_money, last_ledger_id, sync_id],
     )?;
-    let sync_id = tx.last_insert_rowid();
     let mut unexplained = Value::Null;
     if surplus > 0 {
         tx.execute(

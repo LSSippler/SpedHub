@@ -264,8 +264,10 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("ledger", "cargo", "TEXT"),
     ("ledger", "source_city", "TEXT"),
     ("ledger", "target_city", "TEXT"),
-    // Bei Buchungen aus einem spät gemeldeten Ereignis (`betriebskosten` und
-    // `betriebskosten_korrektur`): der Abgleich, dessen Fenster neu gerechnet wurde. Sonst leer.
+    // Bei `betriebskosten` und `betriebskosten_korrektur`: der Abgleich, zu dessen Fenster sie
+    // gehören. Korrekturen aus spät gemeldeten oder stornierten Ereignissen tragen ihn seit
+    // der ersten Fassung der späten Ereignisse, Betriebskosten, die ein Abgleich selbst bucht,
+    // erst seit dem Storno. Bei älteren steht nichts, siehe `reversal::cost_sync`.
     ("ledger", "sync_id", "INTEGER"),
     // Abgleich: Zeitpunkt des gelesenen Spielstands. Der Kontostand darin enthält die
     // Ereignisse bis hier.
@@ -310,6 +312,17 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     // Profil, aus dem das Plugin das Ereignis gemeldet hat. Leer bei älteren Plugins, beim
     // Dashboard ohne gemeldetes Profil und bei allen anderen Buchungen.
     ("ledger", "profile", "TEXT"),
+    // Storno: die Buchung, die diese Buchung storniert (`kind` = 'storno'). Gegenbuchungen in
+    // der Kasse beim Storno einer Lohnbuchung verweisen auf dieselbe Buchung, deshalb ist der
+    // Verweis je Konto eindeutig (Index `ledger_reverses_once` in `migrate`).
+    ("ledger", "reverses_id", "INTEGER REFERENCES ledger(id)"),
+    // Wer die Buchung von Hand ausgelöst hat, wenn es nicht der Kontoinhaber ist. Bisher nur
+    // bei Stornos: der Chef, der storniert hat. Sonst leer.
+    ("ledger", "booked_by", "INTEGER REFERENCES users(id)"),
+    // Betriebskosten dieses Fensters, die der Chef storniert und damit erlassen hat, soweit
+    // sie nicht inzwischen durch Ereignisse erklärt sind. Eine spätere Korrektur des Fensters
+    // bucht sie nicht wieder an, siehe `reconcile::rebook`.
+    ("sync_points", "costs_waived", "INTEGER NOT NULL DEFAULT 0"),
 ];
 
 /// Fünf Lohnstufen von 40 bis 80 Cent je Kilometer: (Level im Spiel, Firmenkilometer, Cent je km).
@@ -340,6 +353,12 @@ fn migrate(conn: &Connection, now: i64) -> rusqlite::Result<()> {
                                 costs_booked = MAX(0, expected - ingame_money),
                                 unexplained_attributed = MAX(0, ingame_money - expected)
          WHERE diff IS NULL AND expected IS NOT NULL;",
+    )?;
+    // Jede Buchung lässt sich je Konto nur einmal stornieren. Erst hier, weil die Spalte in
+    // einer alten Datenbank eben erst angelegt wurde.
+    conn.execute_batch(
+        "CREATE UNIQUE INDEX IF NOT EXISTS ledger_reverses_once ON ledger(reverses_id, account)
+         WHERE reverses_id IS NOT NULL;",
     )?;
     // Tokens von vor dem Ablauf gelten ab jetzt als benutzt
     conn.execute(

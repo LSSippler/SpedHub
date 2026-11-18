@@ -24,6 +24,11 @@
 //! Kommt ein Ereignis mit Zeitpunkt erst an, nachdem sein Fenster abgeglichen ist, steckte sein
 //! Betrag schon im damaligen Kontostand. [`correct_late`] rechnet das Fenster dann neu und
 //! bucht nur die Differenz, alte Buchungen bleiben unverändert.
+//!
+//! Storniert der Chef ein Ereignis aus einem schon abgeglichenen Fenster, hat es damals
+//! mitgezählt, obwohl es nicht hätte zählen dürfen. Dann rechnet [`rebook`] das Fenster
+//! genauso neu, nur mit umgekehrtem Vorzeichen (siehe [`crate::reversal`]). Im offenen Fenster
+//! zählt ein storniertes Ereignis einfach nicht mehr ([`window_sum`]).
 use crate::clock::format_local;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
@@ -35,6 +40,9 @@ pub const MAX_AHEAD: i64 = 86_400;
 
 /// Notiz eines ungeklärten Betrags, den spät gemeldete Ereignisse erklärt haben.
 pub const EXPLAINED_NOTE: &str = "Durch spät gemeldete Ereignisse erklärt";
+
+/// Notiz eines ungeklärten Betrags, den stornierte Ereignisse erklärt haben.
+pub const REVERSED_NOTE: &str = "Durch stornierte Ereignisse erklärt";
 
 /// Der Zeitpunkt vom Client, wenn er plausibel ist, sonst `None`. Unplausible Zeitpunkte
 /// werden nicht abgelehnt, sonst hinge ein Ereignis für immer im Postausgang des Plugins.
@@ -107,7 +115,7 @@ pub fn last_point(
 
 /// Summe der Spielbeträge und Zahl der Ereignisse eines Fahrers im Fenster `(from, to]`.
 /// Ereignisse ohne Zeitpunkt vom Client zählen, wenn sie nach der Buchung `after_id`
-/// angekommen sind, also nach dem vorigen Abgleich.
+/// angekommen sind, also nach dem vorigen Abgleich. Stornierte Ereignisse zählen nicht.
 pub fn window_sum(
     conn: &Connection,
     company_id: i64,
@@ -117,27 +125,71 @@ pub fn window_sum(
     after_id: i64,
 ) -> rusqlite::Result<(i64, i64)> {
     conn.query_row(
-        "SELECT COALESCE(SUM(game_amount), 0), COUNT(*) FROM ledger
-         WHERE company_id = ?1 AND user_id = ?2 AND game_amount IS NOT NULL
-           AND event_id IS NOT NULL
-           AND CASE WHEN occurred_at IS NULL THEN id > ?5
-                    ELSE occurred_at > ?3 AND occurred_at <= ?4 END",
+        "SELECT COALESCE(SUM(l.game_amount), 0), COUNT(*) FROM ledger l
+         WHERE l.company_id = ?1 AND l.user_id = ?2 AND l.game_amount IS NOT NULL
+           AND l.event_id IS NOT NULL
+           AND CASE WHEN l.occurred_at IS NULL THEN l.id > ?5
+                    ELSE l.occurred_at > ?3 AND l.occurred_at <= ?4 END
+           AND NOT EXISTS (SELECT 1 FROM ledger s WHERE s.reverses_id = l.id)",
         params![company_id, user_id, from, to, after_id],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )
 }
 
+/// Der schon abgeglichene Abgleich eines Fahrers, dessen Fenster den Zeitpunkt `t` enthält:
+/// `(base des Vorgängers, cutoff]`, nie der erste Abgleich. `None`, wenn `t` vor dem ersten
+/// Abgleich liegt, zwischen gelesenem und neu geschriebenem Spielstand oder im noch offenen
+/// Fenster nach dem letzten Abgleich.
+pub fn window_at(
+    conn: &Connection,
+    company_id: i64,
+    user_id: i64,
+    t: i64,
+) -> rusqlite::Result<Option<i64>> {
+    conn.query_row(
+        "SELECT s.id
+         FROM sync_points s
+         JOIN sync_points p ON p.id = (
+             SELECT MAX(q.id) FROM sync_points q
+             WHERE q.company_id = s.company_id AND q.user_id = s.user_id AND q.id < s.id)
+         WHERE s.company_id = ?1 AND s.user_id = ?2 AND s.diff IS NOT NULL
+           AND ?3 > CASE WHEN p.written = 1
+                         THEN COALESCE(p.written_at, p.cutoff, p.created_at)
+                         ELSE COALESCE(p.cutoff, p.created_at) END
+           AND ?3 <= COALESCE(s.cutoff, s.created_at)
+         ORDER BY s.id DESC LIMIT 1",
+        params![company_id, user_id, t],
+        |r| r.get(0),
+    )
+    .optional()
+}
+
+/// Der Abgleich, der ein Ereignis ohne Zeitpunkt vom Client (Buchung `ledger_id`) gezählt hat:
+/// der erste Abgleich des Fahrers, der nach dem Ereignis angekommen ist (`last_ledger_id`
+/// mindestens `ledger_id`). War das sein erster Abgleich, steckt das Ereignis im Anfangsstand
+/// und es kommt `None`, ebenso, wenn es noch keinen solchen Abgleich gibt (offenes Fenster).
+pub fn window_of_undated(
+    conn: &Connection,
+    company_id: i64,
+    user_id: i64,
+    ledger_id: i64,
+) -> rusqlite::Result<Option<i64>> {
+    Ok(conn
+        .query_row(
+            "SELECT id, diff FROM sync_points
+             WHERE company_id = ?1 AND user_id = ?2 AND last_ledger_id >= ?3
+             ORDER BY id LIMIT 1",
+            params![company_id, user_id, ledger_id],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<i64>>(1)?)),
+        )
+        .optional()?
+        .and_then(|(id, diff)| diff.map(|_| id)))
+}
+
 /// Ein spät gemeldetes Ereignis: Es ist laut Client zum Zeitpunkt `t` im Spiel passiert und hat den
 /// Kontostand im Spiel um `game_amount` verändert, kam aber erst nach dem Abgleich an, dessen
-/// Fenster `t` enthält. Dann rechnet diese Funktion das Fenster neu:
-///
-/// - `diff` des Abgleichs sinkt um `game_amount`
-/// - Betriebskosten: Ziel ist `max(0, -diff)`. Zu viel gebucht ergibt eine Gutschrift
-///   `betriebskosten_korrektur`, zu wenig eine neue Buchung `betriebskosten`. Beide tragen den
-///   Abgleich in `sync_id`, damit das Anschaffungsbudget sie dem richtigen Abgleich zuordnet.
-/// - Ungeklärt: Ziel ist `max(0, diff)`. Ein offener Eintrag bekommt den Rest, den der Chef
-///   nicht schon mit einem geschlossenen Eintrag hingenommen hat. Bleibt nichts, wird er
-///   geschlossen. Gibt es keinen offenen und bleibt etwas, kommt ein neuer dazu.
+/// Fenster `t` enthält. Dann steckte sein Betrag schon im damaligen Kontostand, und das Fenster
+/// wird mit [`rebook`] neu gerechnet: `diff` sinkt um `game_amount`.
 ///
 /// Gibt es kein solches Fenster, etwa weil `t` vor dem ersten Abgleich liegt oder zwischen
 /// gelesenem und neu geschriebenem Spielstand, passiert nichts und es kommt `None` zurück.
@@ -153,39 +205,80 @@ pub fn correct_late(
     label: &str,
     now: i64,
 ) -> rusqlite::Result<Option<Value>> {
-    // Das Fenster (base des Vorgängers, cutoff] eines Abgleichs, der nicht der erste ist
-    let found: Option<(i64, i64, i64, i64)> = conn
-        .query_row(
-            "SELECT s.id, s.diff, s.costs_booked, s.created_at
-             FROM sync_points s
-             JOIN sync_points p ON p.id = (
-                 SELECT MAX(q.id) FROM sync_points q
-                 WHERE q.company_id = s.company_id AND q.user_id = s.user_id AND q.id < s.id)
-             WHERE s.company_id = ?1 AND s.user_id = ?2 AND s.diff IS NOT NULL
-               AND ?3 > CASE WHEN p.written = 1
-                             THEN COALESCE(p.written_at, p.cutoff, p.created_at)
-                             ELSE COALESCE(p.cutoff, p.created_at) END
-               AND ?3 <= COALESCE(s.cutoff, s.created_at)
-             ORDER BY s.id DESC LIMIT 1",
-            params![company_id, user_id, t],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-        )
-        .optional()?;
-    let Some((sync_id, diff, costs_booked, synced_at)) = found else {
+    let Some(sync_id) = window_at(conn, company_id, user_id, t)? else {
         return Ok(None);
     };
     if game_amount == 0 {
         return Ok(None);
     }
-    let new_diff = diff - game_amount;
+    rebook(
+        conn,
+        &Rebook {
+            company_id,
+            user_id,
+            sync_id,
+            diff_change: -game_amount,
+            note_prefix: &format!("Spät gemeldet: {label}"),
+            explained_note: EXPLAINED_NOTE,
+            now,
+        },
+    )
+    .map(Some)
+}
+
+/// Was [`rebook`] mit einem Abgleich tun soll.
+pub struct Rebook<'a> {
+    pub company_id: i64,
+    pub user_id: i64,
+    pub sync_id: i64,
+    /// Um so viel ändert sich die Differenz (im Spiel minus erwartet) des Abgleichs. Ein spät
+    /// gemeldetes Ereignis hätte mitgezählt werden müssen: minus sein Spielbetrag. Ein
+    /// storniertes Ereignis hätte nicht mitzählen dürfen: plus sein Spielbetrag.
+    pub diff_change: i64,
+    /// Anfang der Notiz an den Buchungen, dahinter kommt ", Abgleich vom ..."
+    pub note_prefix: &'a str,
+    /// Notiz an einem ungeklärten Betrag, der dadurch ganz erklärt ist
+    pub explained_note: &'a str,
+    pub now: i64,
+}
+
+/// Rechnet das Fenster eines schon abgeglichenen Abgleichs neu und bucht nur den Unterschied,
+/// alte Buchungen bleiben unverändert:
+///
+/// - `diff` des Abgleichs ändert sich um `diff_change`
+/// - Erlassen: Was der Chef an Betriebskosten dieses Fensters storniert hat (`costs_waived`),
+///   bleibt erlassen. Sinkt die fehlende Summe `max(0, -diff)`, weil Ereignisse sie erklären,
+///   erklären sie zuerst den erlassenen Teil, `costs_waived` sinkt um denselben Betrag (nie
+///   unter 0). Steigt sie, ist das neu entdeckter Aufwand, `costs_waived` bleibt. So kommt
+///   dasselbe heraus, ob der Chef erst die Betriebskosten oder erst die Ereignisse storniert.
+/// - Betriebskosten: Ziel ist `max(0, max(0, -diff) - costs_waived)`, also die fehlende Summe
+///   ohne den erlassenen Teil. Zu viel gebucht ergibt eine Gutschrift
+///   `betriebskosten_korrektur`, zu wenig eine neue Buchung `betriebskosten`. Beide tragen den
+///   Abgleich in `sync_id`, damit das Anschaffungsbudget sie dem richtigen Abgleich zuordnet.
+/// - Ungeklärt: Ziel ist `max(0, diff)`. Ein offener Eintrag bekommt den Rest, den der Chef
+///   nicht schon mit einem geschlossenen Eintrag hingenommen hat. Bleibt nichts, wird er
+///   geschlossen. Gibt es keinen offenen und bleibt etwas, kommt ein neuer dazu.
+pub fn rebook(conn: &Connection, r: &Rebook<'_>) -> rusqlite::Result<Value> {
+    let (diff, costs_booked, waived, synced_at): (i64, i64, i64, i64) = conn.query_row(
+        "SELECT diff, costs_booked, costs_waived, created_at FROM sync_points WHERE id = ?1",
+        [r.sync_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    )?;
+    let (company_id, user_id, sync_id, now) = (r.company_id, r.user_id, r.sync_id, r.now);
+    let new_diff = diff + r.diff_change;
     let note = format!(
-        "Spät gemeldet: {label}, Abgleich vom {}",
+        "{}, Abgleich vom {}",
+        r.note_prefix,
         format_local(synced_at)
     );
 
+    // Erlassen: Erklärte Fehlbeträge erklären zuerst den erlassenen Teil
+    let (missing_before, missing) = ((-diff).max(0), (-new_diff).max(0));
+    let waived = (waived - (missing_before - missing).max(0)).max(0);
+
     // Betriebskosten
     let mut booked = Vec::new();
-    let costs = (-new_diff).max(0);
+    let costs = (missing - waived).max(0);
     let delta = costs - costs_booked;
     if delta != 0 {
         // Zu viel gebucht: Gutschrift. Zu wenig: weitere Betriebskosten.
@@ -233,7 +326,7 @@ pub fn correct_late(
             conn.execute(
                 "UPDATE unexplained SET closed_at = ?1, closed_by = NULL, close_note = ?2
                  WHERE id = ?3",
-                params![now, EXPLAINED_NOTE, id],
+                params![now, r.explained_note, id],
             )?;
             json!({ "id": id, "amount": amount, "closed": true })
         }
@@ -249,14 +342,15 @@ pub fn correct_late(
     };
 
     conn.execute(
-        "UPDATE sync_points SET diff = ?1, costs_booked = ?2, unexplained_attributed = ?3
-         WHERE id = ?4",
-        params![new_diff, costs, surplus, sync_id],
+        "UPDATE sync_points SET diff = ?1, costs_booked = ?2, unexplained_attributed = ?3,
+                                costs_waived = ?4
+         WHERE id = ?5",
+        params![new_diff, costs, surplus, waived, sync_id],
     )?;
-    Ok(Some(json!({
+    Ok(json!({
         "sync_id": sync_id, "diff_before": diff, "diff": new_diff,
         "booked": booked, "unexplained": unexplained
-    })))
+    }))
 }
 
 /// Deutsche Bezeichnung einer Buchungsart aus einem Ereignis, für Notizen.

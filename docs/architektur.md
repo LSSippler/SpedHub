@@ -26,7 +26,7 @@ Nicht Teil des Projekts: ein eigener Multiplayer, Eingriffe in den Arbeitsspeich
 
 | Baustein | Aufgabe | Stand |
 |---|---|---|
-| Server (`server/`) | Accounts, Firma, Kasse, Fuhrpark, Leihen, tägliche Lohnabrechnung, Geldabgleich mit spät gemeldeten Ereignissen, Herzschlag und Online-Status, Schaden und Werkstatt, Anschaffungen, Verkauf und Ausmusterung | läuft |
+| Server (`server/`) | Accounts, Firma, Kasse mit Storno, Fuhrpark, Leihen, tägliche Lohnabrechnung, Geldabgleich mit spät gemeldeten Ereignissen, Herzschlag und Online-Status, Schaden und Werkstatt, Anschaffungen, Verkauf und Ausmusterung | läuft |
 | Dashboard (`server/web/`) | Weboberfläche für Chef und Fahrer | läuft |
 | Save-Bibliothek (`crates/spedhub-save`) | Spielstand lesen und schreiben, Lkw exportieren, wiedererkennen, einsetzen, entfernen, Kontostand setzen | erste Fassung. Einsetzen in einen Spielstand ohne eigenen Lkw, neuer Speicherplatz und Kontostand im Spiel bestätigt (1.62), Einsetzen neben eigene Lkw und Entfernen noch nicht |
 | Launcher (`crates/spedhub-launcher`) | Anmelden, Abgleich, Spielstand vorbereiten, Spiel starten, Abgleich beim Beenden, Plugin installieren, Updates | erste Fassung: Anmelden, Passwort ändern, Fuhrpark mit Schaden und Werkstatt, Ausleihen und Zurückgeben, Lkw übernehmen und Kauf verknüpfen, Lkw in den Spielstand schreiben, Geldabgleich, `plugin.json`, Plugin installieren, Updates, Spiel starten. Aufräumen des Profils und Abgleich beim Beenden: offen |
@@ -88,7 +88,7 @@ Ein Fahrer kann in ETS2 mehrere Profile haben, das Plugin läuft in jedem. Beim 
 2. **Plugin:** liest aus `game.log.txt` die letzte Zeile `New profile selected: '<Name>'`, beim Annehmen jedes Ereignisses und vor jedem Herzschlag, immer nur die neuen Bytes. Nur aus dem Firmenprofil nimmt es Ereignisse an und schickt Herzschläge, beide tragen dann `profile`. Bei einem anderen oder unbekannten Profil steht nur etwas im Log, der Postausgang enthält nur Ereignisse aus dem Firmenprofil. Das Telemetry SDK nennt das Profil nicht, deshalb der Umweg über das Log. Gelesen wird nur die Datei, kein Eingriff ins Spiel.
 3. **Server:** Ist ein Firmenprofil gemeldet, bucht er nur Ereignisse mit genau diesem `profile`. Andere und solche ohne lehnt er mit 422 ab, legt sie in `rejected_events` und ins Log, der Chef sieht sie im Büro. Herzschläge aus anderen Profilen verwirft er, ohne Fehlerstatus. Ohne gemeldetes Profil (ältere Launcher) bucht er wie bisher und merkt sich das Profil nur an der Buchung.
 
-Abgelehnte Ereignisse zählen auch im Geldabgleich nicht. Verglichen wird nach dem Trimmen genau, mit Groß- und Kleinschreibung. Details in `crates/spedhub-plugin/README.md` und `server/README.md`, jeweils "Nur das Firmenprofil".
+Abgelehnte Ereignisse zählen auch im Geldabgleich nicht. Verglichen wird nach dem Trimmen genau, mit Groß- und Kleinschreibung. Die 68 Ereignisse, die vor dieser Prüfung gebucht wurden, nimmt der Chef mit einem Storno zurück (siehe Kasse, Storno). Das korrigiert auch die Betriebskosten, die der Abgleich daraus gebucht hat. Details in `crates/spedhub-plugin/README.md` und `server/README.md`, jeweils "Nur das Firmenprofil".
 
 ### Anmeldung
 
@@ -123,6 +123,18 @@ Ein Ereignis fürs Tanken gibt es im SDK nicht. Tanken und Reparaturen ergeben s
 
 Ersetzt: Bis November 2026 bekam der Fahrer bei jedem Auftrag einen Lohnanteil in Prozent, der Rest ging in die Kasse. Die Buchungen von damals stehen weiter im Journal.
 
+#### Storno
+
+Buchungen werden nie geändert oder gelöscht. Eine falsche Buchung, etwa ein Ereignis aus einem privaten Profil, storniert der Chef im Kassenbuch des Dashboards: eine oder mehrere auswählen (mit Zeitraum und "Alle sichtbaren auswählen" auch viele auf einmal), Grund angeben, bestätigen. Das Storno ist eine neue Buchung `storno` mit umgekehrtem Betrag auf demselben Konto, mit Verweis auf das Original, Grund und Chef. Jede Buchung lässt sich nur einmal stornieren, ein Storno gar nicht, alles oder nichts je Aufruf. Kasse und Lohnkonto sind Summen und stimmen damit sofort.
+
+- **Paare:** Überweisung und Haftung werden mit der Gegenseite storniert. Eine Lohnbuchung aus einer Lohnabrechnung bekommt eine Gegenbuchung in der Kasse, die Summe der Abrechnung in der Kasse selbst lässt sich nicht stornieren.
+- **Geldabgleich:** Stornierte Ereignisse zählen nicht mehr. Lag eins in einem schon abgeglichenen Fenster, rechnet der Server das Fenster neu wie bei einem spät gemeldeten Ereignis, nur umgekehrt, und bucht zu viel gebuchte Betriebskosten als Korrektur zurück. Korrekturen selbst lassen sich nicht stornieren.
+- **Betriebskosten stornieren** heißt, die Firma erlässt sie. Der Abgleichpunkt merkt sich das, damit eine spätere Korrektur sie weder doppelt zurückgibt noch wieder anlegt. Sind sie durch stornierte Ereignisse schon korrigiert, lehnt der Server das Storno ab.
+- **Lohn:** Stornierte Aufträge zählen nicht für Firmenkilometer, Lohnstufe und noch nicht abgerechnete Tage. Gezahlten Lohn holt der Chef bei Bedarf mit einem Storno der Lohnbuchung zurück.
+- **Anschaffungsbudget:** Storniert der Chef eigene Betriebskosten, die das offene Budget verbraucht haben, ist dieser Teil wieder frei.
+
+Regeln, Beispiele und Schnittstelle in `server/README.md`, Abschnitt "Storno".
+
 ### Lohn
 
 Einmal am Tag (Standard 4:00, Europe/Berlin) rechnet der Server den Vortag ab: je Fahrer Kilometer aus abgelieferten Aufträgen mal Cent je km seiner Lohnstufe, plus Tagespauschale für jeden Tag mit mindestens einem Auftrag. Das Geld geht aus der Firmenkasse auf das Lohnkonto.
@@ -132,7 +144,7 @@ Einmal am Tag (Standard 4:00, Europe/Berlin) rechnet der Server den Vortag ab: j
 - Reicht die Kasse nicht, bekommt jeder denselben Anteil. Der Rest wird offene Lohnforderung und bei der nächsten Abrechnung zuerst bedient.
 - Jeder Tag läuft genau einmal, auch nach einem Neustart. Verpasste Tage holt der Server nach.
 
-Abrechnungen, Zeilen je Fahrer, offene Forderungen und bezahlte Pauschaltage liegen in eigenen Tabellen (`payroll_runs`, `payroll_lines`, `wage_claims`, `flat_days`). Forderungen sind wie die Kasse ein Journal.
+Stornierte Aufträge zählen nicht (siehe Kasse, Storno). Abrechnungen, Zeilen je Fahrer, offene Forderungen und bezahlte Pauschaltage liegen in eigenen Tabellen (`payroll_runs`, `payroll_lines`, `wage_claims`, `flat_days`). Forderungen sind wie die Kasse ein Journal.
 
 ### Geldabgleich
 
@@ -157,6 +169,8 @@ Welche Ereignisse zu welchem Abgleich gehören, entscheidet der Zeitpunkt, zu de
 Fehlt `cutoff` oder `written_at` (älterer Launcher, Dashboard) oder ist er unplausibel, gilt der Empfang beim Server. Ein `cutoff` liegt nie vor dem Beginn seines Fensters, so überlappen sich Fenster auch dann nicht, wenn Abgleiche mit verschiedenen Uhren kommen. Jeder Abgleich k beginnt das nächste Fenster bei `written_at`, wenn bestätigt, sonst bei `cutoff`. Das Fenster von Abgleich k reicht von dort bis `cutoff` von k. Zwischen `cutoff` und `written_at` war das Spiel zu, Ereignisse mit Zeitpunkt dort zählen in keinem Fenster.
 
 Kommt ein Ereignis an, dessen Zeitpunkt in einem schon abgeglichenen Fenster liegt, steckte sein Spielbetrag schon im damaligen Kontostand. Der Server bucht es wie jedes andere und korrigiert dazu diesen Abgleich: Er rechnet die Differenz neu und bucht nur den Unterschied, als `betriebskosten_korrektur` (Gutschrift) oder weitere `betriebskosten`. Ein offener ungeklärter Betrag wird kleiner oder geschlossen. Alte Buchungen bleiben unverändert. Ereignisse vor dem ersten Abgleich stecken im Anfangsstand und ändern nichts. Je Abgleich merkt sich der Server dafür die aktuelle Differenz, die gebuchten Betriebskosten und den ungeklärten Betrag. Die Lohnabrechnung zählt weiter nach dem Empfang beim Server, damit abgeschlossene Abrechnungen bleiben, wie sie sind.
+
+Storniert der Chef ein Ereignis, zählt es in keinem Fenster mehr. Lag es in einem schon abgeglichenen, korrigiert der Server diesen Abgleich genauso, nur mit umgekehrtem Vorzeichen (siehe Kasse, Storno).
 
 Ein Ereignis ohne plausiblen eigenen Zeitpunkt (älteres Plugin, Dashboard) zählt nach dem Empfang: im ersten Abgleich, der nach ihm beim Server ankommt. Der Server vergleicht dafür nur die Reihenfolge des Empfangs, nie seine Uhr mit der des Fahrer-PCs, und ein solches Ereignis korrigiert nie einen alten Abgleich.
 

@@ -41,11 +41,11 @@ Unter http://127.0.0.1:8787 liegt die Weboberfläche. Dort kannst du:
 - bei den Fahrern sehen, wer gerade online ist (grüner Punkt), mit welchem Lkw, in welcher Stadt und mit welchem Auftrag, dazu Level, Firmenkilometer, Lohnstufe, Lohnkonto und offenen Lohn
 - im Fuhrpark sehen, ob ein verliehener Lkw gerade gefahren wird, wie viel Schaden jeder Lkw hat (reparierbar und dauerhaft) und welcher in der Werkstatt steht
 - in der Kopfzeile das Passwort ändern
-- im Kassenbuch alle Buchungen sehen, die Lohnabrechnungen als eine Zeile je Abrechnung zum Aufklappen
-- als Chef: bei den Fahrern das gemeldete Firmenprofil sehen, im Büro die abgelehnten Ereignisse (Zeit, Fahrer, Art, Betrag, Profil, Grund), sehen, wer einen Firmen-Lkw fährt, ohne ihn geliehen zu haben, einen Lkw ohne Kilometerstand mit dem letzten bekannten Zustand zurücknehmen, Lkw anlegen, Lkw reparieren lassen, Lkw verkaufen (mit Erlös) und ausmustern, im Büro ein Anschaffungsbudget freigeben und schließen, im Kassenbuch Betriebskosten als Lkw-Kauf mit einem Lkw verknüpfen, Tagespauschale, Uhrzeit der Abrechnung, Betriebsvorschuss, Erlösfaktor, Lohnstufen, Schadensgrenze, Satz der Werkstatt und Haftung einstellen, Geld zwischen Kasse und Fahrern überweisen, ungeklärte Beträge aus dem Geldabgleich sehen und schließen
+- im Kassenbuch alle Buchungen sehen, die Lohnabrechnungen als eine Zeile je Abrechnung zum Aufklappen, nach Zeitraum filtern (von, bis, lokale Tage) und sehen, was storniert ist: stornierte Buchungen durchgestrichen mit "storniert am ... (Grund)", Stornos mit "Storno von" und der Art des Originals
+- als Chef: bei den Fahrern das gemeldete Firmenprofil sehen, im Büro die abgelehnten Ereignisse (Zeit, Fahrer, Art, Betrag, Profil, Grund), sehen, wer einen Firmen-Lkw fährt, ohne ihn geliehen zu haben, einen Lkw ohne Kilometerstand mit dem letzten bekannten Zustand zurücknehmen, Lkw anlegen, Lkw reparieren lassen, Lkw verkaufen (mit Erlös) und ausmustern, im Büro ein Anschaffungsbudget freigeben und schließen, im Kassenbuch Betriebskosten als Lkw-Kauf mit einem Lkw verknüpfen, im Kassenbuch Buchungen auswählen (einzeln, auch die Lohnbuchungen in aufgeklappten Lohnabrechnungen, oder "Alle sichtbaren auswählen") und mit Grund stornieren (siehe Storno), Tagespauschale, Uhrzeit der Abrechnung, Betriebsvorschuss, Erlösfaktor, Lohnstufen, Schadensgrenze, Satz der Werkstatt und Haftung einstellen, Geld zwischen Kasse und Fahrern überweisen, ungeklärte Beträge aus dem Geldabgleich sehen und schließen
 - im Testbereich "Ereignis von Hand buchen" Ereignisse mit Strecke buchen, einen Geldabgleich durchspielen, einen Herzschlag senden und die Lohnabrechnung sofort auslösen. Ereignisse und Herzschlag tragen dabei dein gemeldetes Firmenprofil, wie beim Plugin, sonst würde der Server sie ablehnen. Im Spiel melden Ereignisse und Herzschlag das Plugin aus `crates/spedhub-plugin` und den Abgleich der Launcher
 
-Die Seite holt sich alle 5 Sekunden den neuen Stand. Sie steckt als eine einzelne Datei in `server/web/index.html` und wird beim Bauen fest in die .exe eingebaut. Nach einer Änderung an der Datei also neu starten:
+Die Seite holt sich alle 5 Sekunden den neuen Stand. Zeitraum und Auswahl im Kassenbuch bleiben dabei, wie sie sind. Sie steckt als eine einzelne Datei in `server/web/index.html` und wird beim Bauen fest in die .exe eingebaut. Nach einer Änderung an der Datei also neu starten:
 
 ```powershell
 cd C:\dev\SpedHub
@@ -188,7 +188,8 @@ Alle Anfragen und Antworten sind JSON. Außer bei `register`, `login` und `healt
 | `POST /api/trucks/{id}/repair` | Chef | Lkw reparieren lassen, siehe Schaden und Werkstatt. 409, wenn er verliehen, ausgemustert oder verkauft ist, keinen Schaden hat oder die Kasse nicht reicht. Liefert `cost`, `damage_before`, `damage`, `damage_unfixable`, `rev`, `in_workshop` und den neuen Kassenstand `balance` |
 | `POST /api/companies/{id}/heartbeat` | Mitglied | Herzschlag aus dem Spiel, siehe Online: `plate`, optional `odometer_km`, `wear` (`engine`, `transmission`, `cabin`, `chassis`, `wheels`, je 0 bis 1), `fuel_relative` (0 bis 1), `fuel_liters`, `near_city`, `speed_kmh`, `job` (`cargo`, `source_city`, `target_city`) oder `null` und `profile` (das aktive ETS2-Profil). Ohne Kennzeichen oder mit unplausiblen Zahlen 400. Liefert `recorded: true`, `last_seen` und `leased_truck_id`, wenn das Kennzeichen zum eigenen geliehenen Lkw passt. Passt `profile` nicht zum gemeldeten Firmenprofil, wird nichts gespeichert: 200 mit `recorded: false` und `note` |
 | `POST /api/companies/{id}/events` | Mitglied | Ereignis aus dem Spiel buchen: `event_id`, `type`, `amount`, optional `distance_km`, `note` und `occurred_at` (wann es im Spiel passiert ist, Unix-Sekunden). Bei `job_delivered` optional `cargo`, `source_city` und `target_city` (höchstens 64 Zeichen, ohne Steuerzeichen). Dazu `profile`, das ETS2-Profil, aus dem das Plugin meldet: Ist für den Fahrer ein Firmenprofil gemeldet und passt `profile` nicht oder fehlt, 422 ohne Buchung, siehe "Nur das Firmenprofil zählt". War es vor einem schon abgeglichenen Spielstand passiert, korrigiert der Server diesen Abgleich, die Antwort sagt das unter `late`. Die Antwort enthält `occurred_at`, leer ohne plausiblen Zeitpunkt |
-| `GET /api/companies/{id}/ledger` | Mitglied | Die letzten Buchungen, `?limit=50`. Jede mit `game_amount` (Betrag im Spiel), `distance_km`, `payroll_id`, `event_id`, `occurred_at` (leer, wenn der Client keinen plausiblen Zeitpunkt geschickt hat) und bei Aufträgen `cargo`, `source_city`, `target_city` (leer bei alten Buchungen). Als Lkw-Kauf verknüpfte Buchungen tragen `truck_id` und `truck_plate` (das aktuelle Kennzeichen), alle anderen `null`. `profile` ist das ETS2-Profil, aus dem das Ereignis gemeldet wurde, leer bei allen anderen Buchungen und bei Ereignissen ohne Profil |
+| `GET /api/companies/{id}/ledger` | Mitglied | Die letzten Buchungen, `?limit=50` (1 bis 500), optional `from` und `to` (Unix-Sekunden auf `created_at`, `from` einschließlich, `to` ausschließlich). Jede mit `game_amount` (Betrag im Spiel), `distance_km`, `payroll_id`, `event_id`, `occurred_at` (leer, wenn der Client keinen plausiblen Zeitpunkt geschickt hat) und bei Aufträgen `cargo`, `source_city`, `target_city` (leer bei alten Buchungen). Als Lkw-Kauf verknüpfte Buchungen tragen `truck_id` und `truck_plate` (das aktuelle Kennzeichen), alle anderen `null`. `profile` ist das ETS2-Profil, aus dem das Ereignis gemeldet wurde, leer bei allen anderen Buchungen und bei Ereignissen ohne Profil. Zum Storno: `reversed_by` (id des Stornos oder `null`), `reversed_at`, `reverse_reason`, `reversed_by_user` (wer storniert hat), bei einem Storno `reverses_id`, `reverses_kind`, `reverses_created_at` (das Original) und `booked_by_user`, dazu `reversible`: ob sich die Buchung jetzt stornieren lässt |
+| `POST /api/companies/{id}/ledger/reverse` | Chef | Buchungen stornieren, siehe Storno: `entry_ids` (1 bis 500 ids, doppelte zählen einmal) und `reason` (Pflicht, getrimmt 3 bis 200 Zeichen ohne Steuerzeichen, sonst 400). Fahrer 403. Alles oder nichts: Ist eine Buchung unbekannt oder aus einer anderen Firma, 404, ist sie schon storniert, selbst ein Storno oder nicht stornierbar, 409, und die Meldung nennt die Buchung. Liefert `entries` (die neuen Storno-Buchungen), `balance` und `drivers`: je betroffenem Fahrer `user_id`, `user`, `wallet`, `corrections` (neu gerechnete Abgleiche wie bei `late`, mit `events`), `open_window` (stornierte Ereignisse im offenen Fenster) und `waived` (erlassene Betriebskosten je Abgleich) |
 | `POST /api/companies/{id}/ledger/{entry}/link-truck` | Chef | Betriebskosten-Buchung als Kauf eines Lkw verknüpfen: `truck_id`. Die Buchung bleibt unverändert. 404, wenn es die Buchung in der Firma oder den Lkw in der Firma nicht gibt, 400, wenn die Buchung keine `betriebskosten` der Firmenkasse ist, 409, wenn sie schon verknüpft ist |
 | `DELETE /api/companies/{id}/ledger/{entry}/link-truck` | Chef | Verknüpfung lösen. 404, wenn die Buchung nicht verknüpft ist |
 | `GET /api/companies/{id}/purchase-candidates` | Chef | Die letzten unverknüpften `betriebskosten` des Chefs, neueste zuerst, `?limit=10`: `id`, `created_at`, `amount`, `note` |
@@ -196,7 +197,7 @@ Alle Anfragen und Antworten sind JSON. Außer bei `register`, `login` und `healt
 | `POST /api/companies/{id}/budgets` | Chef | Anschaffungsbudget freigeben: `amount` (1 bis 1000000000, sonst 400), optional `note`. Gebucht wird nichts. 409, wenn schon eins offen ist oder die Kasse den Betrag nicht deckt |
 | `POST /api/companies/{id}/budgets/{bid}/close` | Chef | Budget schließen. Gebucht wird nichts. Die Antwort sagt unter `budget.rest`, was entfällt. 409, wenn es schon geschlossen ist |
 | `POST /api/companies/{id}/transfer` | Chef | Geld verschieben: `user_id`, `amount`, optional `note`. Positiv geht aus der Kasse an den Fahrer, negativ zurück |
-| `GET /api/companies/{id}/payrolls` | Mitglied | Die letzten Lohnabrechnungen mit einer Zeile je Fahrer, `?limit=30` |
+| `GET /api/companies/{id}/payrolls` | Mitglied | Die letzten Lohnabrechnungen mit einer Zeile je Fahrer, `?limit=30`, optional `from` und `to` wie beim Kassenbuch (auf `created_at` der Abrechnung). Je Zeile `entry_id` (die Lohnbuchung auf dem Lohnkonto, leer ohne Zahlung) und ihr Storno: `reversed_by`, `reversed_at`, `reverse_reason`, `reversed_by_user` |
 | `POST /api/companies/{id}/payrolls/run` | Chef | Lohn sofort abrechnen: erst fällige Tage, dann alles seit der letzten Abrechnung |
 | `POST /api/companies/{id}/sync` | Mitglied | Geldabgleich: `ingame_money`, optional `xp` und `saved_at` (Änderungszeit des gelesenen Spielstands, Unix-Sekunden). Liefert unter anderem `sync_id`, `expected`, `booked`, `unexplained`, `budget` (Rest eines offenen Anschaffungsbudgets, nur beim Chef, sonst 0), `write_money` und `saved_at` |
 | `POST /api/companies/{id}/sync/{sync_id}/written` | wer abgeglichen hat | Der Betrag aus dem Abgleich steht jetzt im Spielstand. Optional `written_at`: wann der Launcher geschrieben hat, Unix-Sekunden. Nur für den neuesten eigenen Abgleich |
@@ -258,7 +259,9 @@ Dazu kommen Buchungen aus dem Geldabgleich, alle auf die Firmenkasse und mit dem
 | `kind` | Betrag | Wann |
 |---|---|---|
 | `betriebskosten` | negativ | Im Spiel fehlt Geld, das die gemeldeten Ereignisse nicht erklären |
-| `betriebskosten_korrektur` | positiv | Ein spät gemeldetes Ereignis zeigt, dass ein Abgleich zu viel Betriebskosten gebucht hat. Im Kassenbuch "Betriebskosten, Korrektur" |
+| `betriebskosten_korrektur` | positiv | Ein spät gemeldetes oder storniertes Ereignis zeigt, dass ein Abgleich zu viel Betriebskosten gebucht hat. Im Kassenbuch "Betriebskosten, Korrektur" |
+
+Beide tragen den Abgleich in `ledger.sync_id`. Betriebskosten, die ein Abgleich selbst bucht, tun das erst seit dem Storno, ältere ordnet der Server über `sync_points.last_ledger_id` zu (siehe Storno).
 
 Und aus Werkstatt und Haftung (siehe Schaden und Werkstatt):
 
@@ -274,13 +277,20 @@ Und aus dem Fuhrpark (siehe Anschaffungen):
 |---|---|---|---|
 | `lkw_verkauf` | Firmenkasse, `user_id` ist der Chef | positiv | Der Chef verkauft einen Lkw mit Erlös über 0. Notiz wie "Verkauf SPED 002". Im Kassenbuch "Lkw-Verkauf" |
 
+Und aus dem Kassenbuch (siehe Storno):
+
+| `kind` | Konto | Betrag | Wann |
+|---|---|---|---|
+| `storno` | wie das Original, `user_id` wie das Original | umgekehrt | Der Chef storniert eine Buchung. `reverses_id` ist das Original, `note` der Grund, `booked_by` der Chef. Im Kassenbuch "Storno von Auftrag" |
+| `storno` | Firmenkasse, `user_id` ist der Fahrer | positiv | Gegenbuchung beim Storno einer Lohnbuchung aus einer Lohnabrechnung, `reverses_id` ist dieselbe Lohnbuchung |
+
 Einen Lkw-Kauf gibt es nicht als eigene Buchungsart: Der Kauf ist eine `betriebskosten`-Buchung aus dem Geldabgleich, die der Chef mit dem Lkw verknüpft. Das Kassenbuch zeigt sie dann als "Lkw-Kauf SPED 004".
 
 Die Typen entsprechen den Gameplay-Events aus dem Telemetrie-SDK. Jede `event_id` wird pro Firma nur einmal gebucht. Schickt der Client ein Ereignis doppelt, kommt `duplicate: true` zurück und es passiert nichts.
 
 Bei einer Überweisung kann die Kasse nicht ins Minus gehen. Ein Lohnkonto schon, das sind dann Schulden beim Chef.
 
-Die Kasse ist ein Journal. Kassenstand und Lohnkonten sind immer die Summe der Buchungen, es gibt keine einzelne Zahl, die man überschreiben könnte. Offene Lohnforderungen sind ebenfalls ein Journal (`wage_claims`).
+Die Kasse ist ein Journal. Kassenstand und Lohnkonten sind immer die Summe der Buchungen, es gibt keine einzelne Zahl, die man überschreiben könnte. Falsche Buchungen korrigiert der Chef mit einem Storno, siehe unten. Offene Lohnforderungen sind ebenfalls ein Journal (`wage_claims`).
 
 Bis zu dieser Fassung bekam der Fahrer bei jedem Auftrag einen Lohnanteil in Prozent (`wage_percent`), der Rest ging in die Kasse. Das ist ersetzt. Alte Buchungen bleiben, wie sie sind, und stehen im Kassenbuch als "Lohnanteil (altes Modell)". Eine vorhandene Datenbank wird beim Start erweitert, abgerechnet wird ab dem Zeitpunkt der Umstellung.
 
@@ -290,6 +300,8 @@ Einmal am Tag zur eingestellten Uhrzeit (Standard 4:00, Zeitzone Europe/Berlin) 
 
 - Kilometer aus abgelieferten Aufträgen mal Cent je km seiner Lohnstufe, auf ganze Euro gerundet
 - plus Tagespauschale (Standard 50 Euro) für jeden Tag mit mindestens einem abgelieferten Auftrag
+
+Stornierte Aufträge zählen dabei nicht, schon gezahlten Lohn holt ein Storno aber nicht von selbst zurück (siehe Storno).
 
 Das Geld geht aus der Firmenkasse auf das Lohnkonto. Reicht die Kasse nicht, bekommt jeder denselben Anteil, der Rest wird offene Lohnforderung. Offene Forderungen werden bei der nächsten Abrechnung zuerst bedient.
 
@@ -328,6 +340,43 @@ Spät gemeldete Ereignisse: Kommt ein Ereignis erst an, nachdem sein Fenster sch
 - Waren dadurch zu viel Betriebskosten gebucht, gibt es eine Gutschrift `betriebskosten_korrektur`. Waren es zu wenig, etwa weil ein später Auftrag Tanken verdeckt hat, weitere `betriebskosten`.
 - Ein offener ungeklärter Betrag wird kleiner oder geschlossen (ohne Namen, Notiz "Durch spät gemeldete Ereignisse erklärt"). Was der Chef schon geschlossen hat, bleibt geschlossen. Bleibt mehr übrig, als er hingenommen hat, kommt ein neuer offener Eintrag dazu.
 - Ereignisse vor dem ersten Abgleich stecken im Anfangsstand, Ereignisse zwischen gelesenem und neu geschriebenem Spielstand zählen nirgends. Dort wird nichts korrigiert.
+- Hat der Chef Betriebskosten des Fensters storniert und damit erlassen, rechnet die Korrektur ohne diesen Teil (siehe Storno).
+
+Stornierte Ereignisse zählen in keinem Fenster. Lag eins in einem schon abgeglichenen, rechnet der Server das Fenster genauso neu, nur mit umgekehrtem Vorzeichen, siehe Storno.
+
+## Storno
+
+Buchungen werden nie geändert oder gelöscht. Ist eine falsch, etwa weil ein Ereignis aus einem privaten Profil gebucht wurde, storniert der Chef sie: im Kassenbuch des Dashboards (Kontrollkästchen, "Auswahl stornieren", Grund) oder über `POST /api/companies/{id}/ledger/reverse`. Der Code steht in `src/reversal.rs`.
+
+**Buchung.** Ein Storno ist eine neue Buchung `storno` auf demselben Konto und mit derselben `user_id` wie das Original, mit umgekehrtem Betrag, `reverses_id` (das Original), `note` (der Grund) und `booked_by` (der Chef), `created_at` ist jetzt. Das Original bleibt unverändert. Kasse und Lohnkonten sind Summen, das Storno wirkt dort also sofort: Eine stornierte Strafe bringt das Lohnkonto wieder hoch, eine stornierte Maut die Kasse, ein stornierter Auftrag nimmt den Erlös wieder aus der Kasse. Die Kasse darf dabei ins Minus.
+
+**Regeln.**
+
+- Jede Buchung lässt sich je Konto nur einmal stornieren. Ein eindeutiger Index auf `ledger(reverses_id, account)` sichert das zusätzlich ab. Ein zweites Storno gibt 409.
+- Ein Storno lässt sich nicht stornieren (409). Zurücknehmen lässt sich ein Storno also nicht.
+- `betriebskosten_korrektur` lässt sich nicht stornieren (409): Korrekturen rechnet der Server. Storniert wird das Ereignis oder die Betriebskosten dahinter.
+- Die Summe einer Lohnabrechnung in der Kasse (`lohn` mit `payroll_id`) lässt sich nicht stornieren (409), sie gehört zu mehreren Fahrern. Storniert wird die Lohnbuchung eines Fahrers. Dazu bucht der Server eine Gegenbuchung `storno` in der Kasse mit demselben Verweis, das Geld geht also an die Kasse zurück. Deshalb ist der Index je Konto eindeutig und nicht nur auf `reverses_id`.
+- Überweisung und Haftung stehen als Paar auf Kasse und Lohnkonto. Wer eine Seite storniert, storniert die andere mit, sonst ginge Geld verloren oder entstünde aus dem Nichts.
+- Alles oder nichts: Erst werden alle Buchungen geprüft, dann in einer Transaktion gebucht. Eine unbekannte id oder eine aus einer anderen Firma gibt 404, eine schon stornierte oder nicht stornierbare 409, und nichts ist gebucht. Höchstens 500 je Aufruf.
+
+**Geldabgleich.** Ereignisse zählen im Abgleich mit ihrem Spielbetrag (`game_amount`). Ein storniertes Ereignis hätte nie zählen dürfen:
+
+- Im offenen Fenster nach dem letzten Abgleich zählt es beim nächsten Abgleich nicht mehr.
+- In einem schon abgeglichenen Fenster hat es damals mitgezählt. Welches Fenster, entscheidet dieselbe Suche wie bei spät gemeldeten Ereignissen: `occurred_at`, bei Ereignissen ohne Zeitpunkt der erste Abgleich, der nach ihnen ankam (`last_ledger_id`). Der Server rechnet dieses Fenster neu wie bei einem spät gemeldeten Ereignis, nur mit umgekehrtem Vorzeichen: Die Differenz steigt um den Spielbetrag. Zu viel gebuchte Betriebskosten kommen als `betriebskosten_korrektur` zurück (Notiz "Storno: Auftrag, Abgleich vom ..."), ein offener ungeklärter Betrag wird kleiner oder geschlossen ("Durch stornierte Ereignisse erklärt"). Mehrere Ereignisse im selben Fenster rechnet er in einem Schritt. Beispiel: Ein privater Auftrag über 1000 Euro hat gezählt, im Spielstand der Firma fehlte das Geld, der Abgleich hat 1000 Euro Betriebskosten gebucht. Das Storno des Auftrags nimmt 1000 Euro aus der Kasse und bucht 1000 Euro Korrektur zurück.
+- Vor dem ersten Abgleich und zwischen gelesenem und neu geschriebenem Spielstand hat es nirgends gezählt, dort ändert sich nichts.
+
+**Betriebskosten stornieren.** Auch Betriebskosten aus einem Abgleich lassen sich stornieren, normal mit Gegenbuchung. Damit erlässt die Firma sie. Der Abgleichpunkt merkt sich das: `costs_booked` sinkt um den Betrag, `costs_waived` steigt. Eine spätere Korrektur dieses Fensters rechnet mit dem Ziel `max(0, Fehlbetrag - costs_waived)`, gibt die erlassenen Kosten also kein zweites Mal zurück und legt sie nicht wieder an. Erklären Ereignisse den Fehlbetrag später (storniert oder spät gemeldet), erklären sie zuerst den erlassenen Teil, `costs_waived` sinkt mit. Steigt der Fehlbetrag, ist das neuer Aufwand und wird gebucht.
+
+- Erst die Ereignisse, dann die Betriebskosten: Die Betriebskosten sind dann schon korrigiert. Ein Storno gäbe zu viel zurück und wird mit 409 abgelehnt, die Meldung nennt, was noch gebucht ist ("Für den Abgleich vom ... sind nur noch 300 € Betriebskosten gebucht ..."). Kommen Ereignisse und Betriebskosten im selben Aufruf, rechnet der Server erst die Ereignisse.
+- Erst die Betriebskosten, dann die Ereignisse: Das Storno der Ereignisse bucht keine Korrektur, die Kosten sind ja schon erlassen. Hatte der Abgleich in derselben Buchung echtes Tanken, ist das mit erlassen, denn der Chef hat die ganze Buchung storniert.
+- "Alle sichtbaren auswählen" im Dashboard lässt Betriebskosten deshalb aus.
+- Betriebskosten, die ein Abgleich vor dem Storno gebucht hat, tragen kein `sync_id`. Der Abgleich hat sie als letzte Buchung vor sich gebucht und deren id als `last_ledger_id` gespeichert, zur selben Zeit und für denselben Fahrer. Darüber ordnet der Server sie zu, ohne die Buchung zu ändern. Findet er keinen Abgleich (nur bei von Hand eingetragenen Daten), bucht er nur die Gegenbuchung und passt keinen Abgleichpunkt an.
+
+**Lohn.** Stornierte Aufträge zählen nicht bei den Firmenkilometern und damit nicht für die Lohnstufe, und in noch nicht abgerechneten Zeiträumen nicht in der Lohnabrechnung, weder mit Kilometern noch für die Tagespauschale. Schon gezahlten Lohn holt der Server nicht von selbst zurück. Das tut der Chef, indem er die Lohnbuchung des Fahrers storniert (im Dashboard in der aufgeklappten Lohnabrechnung): Lohnkonto minus, Kasse plus. Offene Lohnforderungen (`wage_claims`) bleiben davon unberührt, auch wenn der Lohn daraus nie hätte entstehen dürfen.
+
+**Anschaffungsbudget.** Storniert der Chef eigene Betriebskosten, die das Budget verbraucht haben (nach der Freigabe gebucht, ihr Abgleich nach der Freigabe), gibt das Storno das Budget wieder frei, solange es offen ist. Die Firma hat das Geld dann zurück, der nächste Abgleich schreibt den größeren Rest ins Spiel. Ein Storno von Betriebskosten von vor der Freigabe vergrößert das Budget nicht, eins nach dem Schließen ändert den entfallenen Rest nicht. Korrekturen aus stornierten Ereignissen zählen wie die aus spät gemeldeten.
+
+**Anderes.** Eine stornierte Betriebskosten-Buchung lässt sich nicht mehr als Lkw-Kauf verknüpfen (409) und fehlt in `purchase-candidates`. Eine bestehende Verknüpfung bleibt.
 
 ## Schaden und Werkstatt
 
@@ -366,6 +415,8 @@ Kauft der Chef im Spiel einen Lkw, bezahlt er mit Geld aus dem Spiel, und der Ge
     verbraucht = -(Summe betriebskosten und betriebskosten_korrektur des Chefs in der Firmenkasse
                    nach der Freigabe), begrenzt auf 0 bis amount
     Rest       = amount - verbraucht
+
+Stornos von Betriebskosten zählen mit, wenn die stornierte Buchung gezählt hat, siehe Storno.
 
 "Nach der Freigabe" heißt: Buchungen mit einer größeren id als die größte bei der Freigabe (`purchase_budgets.ledger_from`). Beim Schließen merkt sich das Budget die größte id (`ledger_to`), was danach kommt, zählt nicht mehr. Damit zählen auch Tanken und Reparaturen des Chefs nach der Freigabe als verbraucht, ebenso alle Betriebskosten, die der erste Abgleich nach der Freigabe bucht, selbst wenn das Geld im Spiel schon vorher ausgegeben wurde. Das Budget wird so nie zu groß, höchstens zu klein.
 
@@ -408,7 +459,8 @@ Spät gemeldete Ereignisse rechnen das Fenster eines früheren Abgleichs neu (si
 | `src/presence.rs` | Herzschlag, Online, Kennzeichen vergleichen, letzter bekannter Zustand |
 | `src/profiles.rs` | Gemeldetes Firmenprofil, Vergleich mit dem Profil von Ereignis und Herzschlag, abgelehnte Ereignisse |
 | `src/damage.rs` | Schaden aus dem Zustand, Gewichtung, Kosten der Werkstatt, Haftung |
-| `src/reconcile.rs` | Abgleichfenster, Zeitpunkte und Korrektur bei spät gemeldeten Ereignissen |
+| `src/reconcile.rs` | Abgleichfenster, Zeitpunkte, Neurechnen eines Fensters bei spät gemeldeten und stornierten Ereignissen |
+| `src/reversal.rs` | Storno: Prüfen, Gegenbuchungen, Paare, Wirkung auf den Geldabgleich |
 | `src/purchases.rs` | Anschaffungsbudget: Restbetrag und Verbrauch |
 | `src/payroll.rs` | Tägliche Lohnabrechnung |
 | `src/levels.rs` | Level aus Erfahrungspunkten, Lohnstufen |

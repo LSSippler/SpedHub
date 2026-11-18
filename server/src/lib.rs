@@ -12,4 +12,5 @@ pub mod presence;
 pub mod profiles;
 pub mod purchases;
 pub mod reconcile;
+pub mod reversal;
 pub mod version;

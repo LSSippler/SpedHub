@@ -160,6 +160,34 @@
   .budget-stand { margin-bottom: .75rem; }
   .budget-stand .rest { font-size: 1.56rem; font-weight: 700; font-stretch: 80%; }
 
+  /* Kassenbuch: Zeitraum, Auswahl und Storno */
+  .buch .filter { display: flex; flex-wrap: wrap; gap: .5rem; align-items: flex-end; padding: .6rem 1rem; border-bottom: 1px solid var(--linie); }
+  .buch .filter .feld { flex: 1 1 7.5rem; min-width: 0; margin-bottom: 0; }
+  .buch .filter input { padding: .3rem .4rem; min-width: 0; }
+  .buch .filter button { padding: .3rem .7rem; }
+  .buch .auswahl { display: flex; flex-wrap: wrap; gap: .4rem .6rem; align-items: center; padding: .6rem 1rem; border-bottom: 1px solid var(--linie); background: #f6f9f1; }
+  .buch .auswahl .zaehler { font-weight: 600; margin-right: auto; }
+  .buch .auswahl button { padding: .25rem .6rem; font-size: .875rem; white-space: normal; }
+  .buch .auswahl p { flex-basis: 100%; margin: 0; }
+  .buch .bereich { padding: .5rem 1rem 0; margin: 0; }
+  input.wahl { width: auto; margin: 0 .35rem 0 0; vertical-align: -.1rem; accent-color: var(--eu); }
+  /* Kästchen über der Uhrzeit, damit die Spalte auch auf dem Telefon schmal bleibt */
+  .buch td.wann label { display: flex; flex-direction: column; align-items: flex-start; gap: .15rem;
+                        font-size: inherit; color: inherit; margin: 0; cursor: pointer; }
+  /* Feste Spalten: "Was" bekommt den Rest, lange Wörter dürfen dort umbrechen. Sonst schiebt die
+     Spalte auf dem Telefon das Lohnkonto aus dem Bild. */
+  #buch-liste > table { table-layout: fixed; }
+  #buch-liste > table > thead th.wann { width: 5.25rem; }
+  .buch td:not(.zahl) { overflow-wrap: break-word; }
+  @media (max-width: 34rem) {
+    #buch-liste > table > thead th.wann { width: 4.5rem; }
+    #buch-liste > table > thead th.zahl { width: 5.6rem; }
+  }
+  .buch tr.storniert .durch { text-decoration: line-through; color: var(--blass); }
+  .buch .storno-hinweis { color: var(--weg); font-size: .8125rem; }
+  .buch tr.storno td { background: #f7f1e6; }
+  dialog .warnung { color: var(--weg); }
+
   #meldung { position: fixed; left: 50%; bottom: 1.25rem; transform: translateX(-50%); max-width: min(34rem, 92vw);
              padding: .7rem 1rem; background: var(--plane); color: #fff; border-radius: 3px; }
   #meldung.fehler { background: var(--fehler); }
@@ -208,7 +236,10 @@ const zustand = { token: speicher.get("token"), ich: null, firmaId: null, firma:
                   // Verkaufen oder ausmustern: { id, art: "verkauf" | "ausmustern" }
                   abgang: null, abgaengeOffen: false,
                   // Kassenbuch: Buchung, die gerade als Lkw-Kauf verknüpft wird
-                  verknuepfen: null };
+                  verknuepfen: null,
+                  // Kassenbuch: Zeitraum (lokale Tage wie "2026-11-16", leer heißt offen) und
+                  // ausgewählte Buchungen zum Stornieren: id -> { amount, account, kind }
+                  filter: { von: "", bis: "" }, auswahl: new Map(), sichtbar: [], buchStand: null };
 let takt = null;
 
 class ApiFehler extends Error { constructor(status, text) { super(text); this.status = status; } }
@@ -273,7 +304,9 @@ const ARTEN_SPIEL = { job_delivered: "Auftrag abgeliefert", job_cancelled: "Auft
 const ARTEN = { lohn: "Lohnanteil (altes Modell)", auftrag: "Auftrag", strafe: "Strafe", maut: "Maut", faehre: "Fähre", zug: "Zug",
                 auftrag_abgebrochen: "Auftrag abgebrochen", ueberweisung: "Überweisung", betriebskosten: "Betriebskosten",
                 betriebskosten_korrektur: "Betriebskosten, Korrektur", werkstatt: "Werkstatt", haftung: "Haftung",
-                lkw_verkauf: "Lkw-Verkauf" };
+                lkw_verkauf: "Lkw-Verkauf", storno: "Storno" };
+/** Art des Originals bei einem Storno. Ein Storno von Lohn kommt fast immer aus einer Lohnabrechnung. */
+const ARTEN_STORNO = { ...ARTEN, lohn: "Lohn" };
 /** "2026-11-16" wird zu "16.11.2026". */
 const tag = (d) => d.split("-").reverse().join(".");
 const cent = (n) => new Intl.NumberFormat("de-DE").format(n) + "\u00a0ct";
@@ -426,27 +459,51 @@ async function zeigeFirmenwahl() {
 
 // ---------------------------------------------------------------- Firma
 
+/** Beginn eines lokalen Tags wie "2026-11-16" in Unix-Sekunden, mit `plus` Tagen später. */
+function tagBeginn(tagText, plus) {
+  const [y, m, d] = tagText.split("-").map(Number);
+  return Math.floor(new Date(y, m - 1, d + (plus || 0)).getTime() / 1000);
+}
+
+/** Zeitraum des Kassenbuchs als Teil der Adresse: von Mitternacht bis Mitternacht nach "bis". */
+function bereichAnfrage() {
+  const f = zustand.filter;
+  let q = "";
+  if (f.von) q += "&from=" + tagBeginn(f.von);
+  if (f.bis) q += "&to=" + tagBeginn(f.bis, 1);
+  return q;
+}
+
+/** So viele Buchungen holt das Kassenbuch höchstens, mit Zeitraum mehr. */
+const buchGrenze = () => (bereichAnfrage() ? 500 : 200);
+
 async function ladeFirma() {
   const id = zustand.firmaId;
+  const bereich = bereichAnfrage();
   const [firma, lkw, buch, laeufe] = await Promise.all([
     api("GET", "/api/companies/" + id),
     api("GET", "/api/companies/" + id + "/trucks"),
-    api("GET", "/api/companies/" + id + "/ledger?limit=200"),
-    api("GET", "/api/companies/" + id + "/payrolls?limit=60"),
+    api("GET", "/api/companies/" + id + "/ledger?limit=" + buchGrenze() + bereich),
+    api("GET", "/api/companies/" + id + "/payrolls?limit=60" + bereich),
   ]);
   const chef = firma.your_role === "chef";
   const [ungeklaert, abgelehnt] = chef ? await Promise.all([
     api("GET", "/api/companies/" + id + "/unexplained").then((r) => r.entries),
     api("GET", "/api/companies/" + id + "/rejected-events?limit=50").then((r) => r.entries),
   ]) : [[], []];
-  if (id !== zustand.firmaId) return;
+  // Inzwischen eine andere Firma oder ein anderer Zeitraum: Diese Antwort ist veraltet
+  if (id !== zustand.firmaId || bereich !== bereichAnfrage()) return;
   zustand.firma = firma; zustand.lkw = lkw.trucks; zustand.buch = buch;
   zustand.laeufe = laeufe.payrolls; zustand.ungeklaert = ungeklaert; zustand.abgelehnt = abgelehnt;
+  // Was inzwischen storniert ist, fällt aus der Auswahl
+  for (const e of buch.entries) if (!e.reversible) zustand.auswahl.delete(e.id);
+  for (const l of laeufe.payrolls) for (const x of l.lines) if (x.reversed_by != null) zustand.auswahl.delete(x.entry_id);
 }
 
 async function oeffneFirma(id) {
   clearInterval(takt);
   zustand.firmaId = id; zustand.rueckgabe = null; zustand.abgang = null; zustand.verknuepfen = null;
+  zustand.auswahl = new Map(); zustand.filter = { von: "", bis: "" }; zustand.buchStand = null;
   await ladeFirma();
   speicher.set("firma", String(id));
   baueFirma();
@@ -476,7 +533,7 @@ function baueFirma() {
       h("section", {}, h("h2", {}, "Fahrer"), h("div", { id: "fahrer" })),
       chef ? baueBuero() : null,
       baueTestbuchung()),
-    h("aside", { class: "buch", id: "buch" })));
+    baueBuch()));
   zeichneDaten();
 }
 
@@ -734,31 +791,57 @@ function meinProfil() {
 
 // ---- Kassenbuch
 
+/** Ein Kontrollkästchen zum Auswählen einer Buchung für das Storno (nur Chef). */
+function auswahlKasten(id, info, beschreibung) {
+  return h("input", { type: "checkbox", class: "wahl", checked: zustand.auswahl.has(id), "aria-label": "Auswählen: " + beschreibung,
+    onchange: (ev) => {
+      if (ev.target.checked) zustand.auswahl.set(id, info); else zustand.auswahl.delete(id);
+      zustand.buchStand = null;
+      zeichneAuswahl();
+    } });
+}
+
+/** "storniert am 18.11.2026 09:12 (Grund)" unter einer stornierten Buchung. */
+function stornoHinweis(am, grund, wer) {
+  return h("div", { class: "storno-hinweis" }, "storniert am " + datum(am) + " " + uhrzeit(am)
+    + (grund ? " (" + grund + ")" : "") + (wer ? ", von " + wer : ""));
+}
+
 /** Eine Lohnabrechnung als Zeile, aufklappbar mit den Fahrern. */
-function laufZeilen(l) {
+function laufZeilen(l, chef) {
   const auf = zustand.offen.has(l.id);
   const knopf = h("button", { type: "button", "aria-expanded": auf ? "true" : "false", onclick: () => {
     if (zustand.offen.has(l.id)) zustand.offen.delete(l.id); else zustand.offen.add(l.id);
-    zeichneBuch();
+    zeichneBuch(true);
   } }, (l.kind === "hand" ? "Lohnabrechnung von Hand " : "Lohnabrechnung ") + tag(l.day));
   const offen = l.lines.reduce((s, x) => s + x.claim_after, 0);
+  const storniert = l.lines.filter((x) => x.reversed_by != null).length;
   const zeilen = [h("tr", { class: "lauf" },
     h("td", { class: "wann" }, wann(l.created_at)),
-    h("td", {}, knopf, offen > 0 ? h("div", { class: "klein minus" }, "offen geblieben: " + euro(offen)) : null),
+    h("td", {}, knopf, offen > 0 ? h("div", { class: "klein minus" }, "offen geblieben: " + euro(offen)) : null,
+      storniert ? h("div", { class: "storno-hinweis" }, storniert === 1 ? "1 Lohnbuchung storniert" : storniert + " Lohnbuchungen storniert") : null),
     h("td", { class: "zahl" }, l.paid ? h("span", { class: "minus" }, euro(-l.paid)) : ""),
     h("td", { class: "zahl" }, l.paid ? "+" + euro(l.paid) : ""))];
   if (auf) {
     zeilen.push(h("tr", {}, h("td", { colspan: 4, class: "innen" }, h("table", {},
       h("thead", {}, h("tr", {}, h("th", {}, "Fahrer"), h("th", { class: "zahl" }, "Lohn"),
         h("th", { class: "zahl" }, "Gezahlt"), h("th", { class: "zahl" }, "Offen"))),
-      h("tbody", {}, l.lines.map((x) => h("tr", {},
-        h("td", {}, x.name, h("div", { class: "klein blass" },
-          km(x.km) + ", " + (x.stage == null ? "keine Stufe" : "Stufe " + x.stage + " mit " + cent(x.cents_per_km))
-          + (x.flat_days ? ", Pauschale " + euro(x.flat) : "")
-          + (x.claim_before ? ", dazu alter Lohn " + euro(x.claim_before) : ""))),
-        h("td", { class: "zahl" }, euro(x.wage)),
-        h("td", { class: "zahl" }, euro(x.paid)),
-        h("td", { class: "zahl" + (x.claim_after > 0 ? " minus" : "") }, x.claim_after ? euro(x.claim_after) : ""))))))));
+      h("tbody", {}, l.lines.map((x) => {
+        const weg = x.reversed_by != null;
+        // Die Lohnbuchung eines Fahrers lässt sich einzeln stornieren, das Geld geht an die Kasse zurück
+        const wahl = chef && x.entry_id != null && !weg
+          ? auswahlKasten(x.entry_id, { amount: x.paid, account: "fahrer", kind: "lohn" }, "Lohn " + x.name + " " + tag(l.day))
+          : null;
+        return h("tr", { class: weg ? "storniert" : "" },
+          h("td", {}, wahl, h("span", { class: "durch" }, x.name), h("div", { class: "klein blass" },
+            km(x.km) + ", " + (x.stage == null ? "keine Stufe" : "Stufe " + x.stage + " mit " + cent(x.cents_per_km))
+            + (x.flat_days ? ", Pauschale " + euro(x.flat) : "")
+            + (x.claim_before ? ", dazu alter Lohn " + euro(x.claim_before) : "")),
+            weg ? stornoHinweis(x.reversed_at, x.reverse_reason, x.reversed_by_user) : null),
+          h("td", { class: "zahl" }, euro(x.wage)),
+          h("td", { class: "zahl" }, h("span", { class: "durch" }, euro(x.paid))),
+          h("td", { class: "zahl" + (x.claim_after > 0 ? " minus" : "") }, x.claim_after ? euro(x.claim_after) : ""));
+      }))))));
   }
   return zeilen;
 }
@@ -793,14 +876,14 @@ function kaufKnoepfe(e) {
   }
   if (e.kind !== "betriebskosten" || e.account !== "firma") return null;
   if (zustand.verknuepfen !== e.id) {
-    return h("button", { type: "button", class: "leise mini", onclick: () => { zustand.verknuepfen = e.id; zeichneBuch(); } },
+    return h("button", { type: "button", class: "leise mini", onclick: () => { zustand.verknuepfen = e.id; zeichneBuch(true); } },
       "Als Lkw-Kauf verknüpfen");
   }
   const aktiv = zustand.lkw.filter((t) => !t.retired);
   const raus = zustand.lkw.filter((t) => t.retired);
   const wahl = h("select", { "aria-label": "Welcher Lkw wurde gekauft" },
     aktiv.concat(raus).map((t) => h("option", { value: t.id }, t.plate + (t.retired ? " (nicht mehr im Fuhrpark)" : ""))));
-  const zu = () => { zustand.verknuepfen = null; zeichneBuch(); };
+  const zu = () => { zustand.verknuepfen = null; zeichneBuch(true); };
   if (!zustand.lkw.length) {
     return h("div", { class: "verknuepfen" }, h("span", { class: "klein blass" }, "Noch kein Lkw im Fuhrpark."),
       h("button", { type: "button", class: "leise mini", onclick: zu }, "Abbrechen"));
@@ -815,16 +898,139 @@ function kaufKnoepfe(e) {
     h("button", { type: "button", class: "leise mini", onclick: zu }, "Abbrechen"));
 }
 
-function zeichneBuch() {
+/** Das Kassenbuch: fester Rahmen mit dem Zeitraum, darin die Teile, die sich neu zeichnen. */
+function baueBuch() {
+  const von = h("input", { type: "date", value: zustand.filter.von });
+  const bis = h("input", { type: "date", value: zustand.filter.bis });
+  const neu = () => {
+    zustand.filter = { von: von.value, bis: bis.value };
+    zustand.buchStand = null;
+    versuche(() => auffrischen(false));
+  };
+  von.addEventListener("change", neu);
+  bis.addEventListener("change", neu);
+  return h("aside", { class: "buch", id: "buch" },
+    h("header", { id: "buch-kopf" }),
+    h("div", { class: "filter", role: "group", "aria-label": "Zeitraum" },
+      feld("Von (Tag)", von), feld("Bis (Tag)", bis),
+      h("button", { type: "button", class: "leise", onclick: () => { von.value = ""; bis.value = ""; neu(); } }, "Alle Tage")),
+    h("div", { id: "buch-auswahl" }),
+    h("div", { id: "buch-ungeklaert" }),
+    h("div", { id: "buch-liste", class: "eintraege" }));
+}
+
+/** Leiste über dem Kassenbuch: Zahl der ausgewählten Buchungen und was sich damit tun lässt (nur Chef). */
+function zeichneAuswahl() {
+  const box = $("buch-auswahl");
+  if (!box) return;
+  if (zustand.firma.your_role !== "chef") { box.replaceChildren(); box.hidden = true; return; }
+  box.hidden = false;
+  const zahl = zustand.auswahl.size;
+  box.className = "auswahl";
+  box.replaceChildren(
+    h("span", { class: "zaehler", "aria-live": "polite" }, zahl === 1 ? "1 Buchung ausgewählt" : zahl + " Buchungen ausgewählt"),
+    h("button", { type: "button", class: "leise", onclick: () => {
+      for (const e of zustand.sichtbar) zustand.auswahl.set(e.id, { amount: e.amount, account: e.account, kind: e.kind });
+      zeichneBuch(true);
+    }, disabled: !zustand.sichtbar.length }, "Alle sichtbaren auswählen"),
+    h("button", { type: "button", class: "leise", onclick: () => { zustand.auswahl.clear(); zeichneBuch(true); }, disabled: !zahl }, "Auswahl leeren"),
+    h("button", { type: "button", onclick: zeigeStorno, disabled: !zahl }, "Auswahl stornieren"),
+    h("p", { class: "klein blass" }, "\u201eAlle sichtbaren\u201c lässt Betriebskosten aus: Die korrigiert der Server, wenn du die Ereignisse dahinter stornierst."));
+}
+
+/** Bestätigung mit Pflichtgrund, dann stornieren. */
+function zeigeStorno() {
+  const liste = [...zustand.auswahl.entries()];
+  if (!liste.length) return;
+  const summe = (konto) => liste.filter(([, i]) => i.account === konto).reduce((s, [, i]) => s - i.amount, 0);
+  const vz = (n) => (n > 0 ? "+" : "") + euro(n);
+  const kasse = summe("firma");
+  const lohn = summe("fahrer");
+  const kosten = liste.filter(([, i]) => i.kind === "betriebskosten").length;
+  const grund = h("input", { required: true, minlength: 3, maxlength: 200, autocomplete: "off" });
+  const fehler = h("p", { class: "fehlertext klein", role: "alert" });
+  const dialog = h("dialog", { "aria-labelledby": "stornotitel" });
+  const zu = () => { dialog.close(); dialog.remove(); };
+  const senden = async (ev) => {
+    ev.preventDefault();
+    fehler.textContent = "";
+    const knopf = ev.submitter;
+    if (knopf) knopf.disabled = true;
+    try {
+      const r = await api("POST", "/api/companies/" + zustand.firmaId + "/ledger/reverse",
+        { entry_ids: liste.map(([id]) => id), reason: grund.value });
+      zu();
+      zustand.auswahl.clear();
+      zustand.buchStand = null;
+      await auffrischen();
+      melde(stornoMeldung(r));
+    } catch (err) {
+      if (err instanceof ApiFehler && err.status === 401) { zu(); abmeldenLokal(); melde("Deine Anmeldung ist abgelaufen. Melde dich neu an.", true); }
+      else fehler.textContent = err.message || String(err);
+    } finally {
+      if (knopf) knopf.disabled = false;
+    }
+  };
+  dialog.append(...[
+    h("h2", { id: "stornotitel" }, liste.length === 1 ? "1 Buchung stornieren" : liste.length + " Buchungen stornieren"),
+    h("p", {}, "Jede bekommt eine Buchung mit umgekehrtem Betrag. Die Buchungen selbst bleiben stehen und erscheinen durchgestrichen. "
+      + "Ein Storno lässt sich nicht zurücknehmen."),
+    h("p", {}, "Kasse " + vz(kasse) + ", Lohnkonten " + vz(lohn) + "."),
+    h("p", { class: "klein blass" }, "Überweisungen und Haftung werden mit der Gegenseite storniert, Lohn mit einer Gegenbuchung in der Kasse. "
+      + "Liegt ein Ereignis in einem schon abgeglichenen Zeitraum, rechnet der Server den Geldabgleich neu und bucht zu viel gebuchte Betriebskosten zurück."),
+    kosten ? h("p", { class: "klein warnung" }, (kosten === 1 ? "Darunter ist eine Betriebskosten-Buchung" : "Darunter sind " + kosten + " Betriebskosten-Buchungen")
+      + ". Ein Storno erlässt sie der Firma. Sind sie durch stornierte Ereignisse schon korrigiert, lehnt der Server ab.") : null,
+    h("form", { onsubmit: senden },
+      feld("Grund, 3 bis 200 Zeichen", grund),
+      fehler,
+      h("div", { class: "zeile" },
+        h("button", {}, "Stornieren"),
+        h("button", { type: "button", class: "leise", onclick: zu }, "Abbrechen"))),
+  ].filter(Boolean));
+  dialog.addEventListener("cancel", () => setTimeout(() => dialog.remove(), 0));
+  document.body.append(dialog);
+  dialog.showModal();
+  grund.focus();
+}
+
+/** Was nach einem Storno passiert ist, als Meldung. */
+function stornoMeldung(r) {
+  const n = r.entries.length;
+  let text = (n === 1 ? "1 Storno gebucht" : n + " Stornos gebucht") + ". In der Kasse: " + euro(r.balance) + ".";
+  const korr = r.drivers.flatMap((d) => d.corrections);
+  if (korr.length) {
+    const zurueck = korr.flatMap((c) => c.booked).reduce((s, b) => s + b.amount, 0);
+    text += " Geldabgleich neu gerechnet" + (zurueck > 0 ? ", " + euro(zurueck) + " Betriebskosten zurück"
+      : zurueck < 0 ? ", " + euro(-zurueck) + " Betriebskosten nachgebucht" : "") + ".";
+  }
+  const offen = r.drivers.reduce((s, d) => s + d.open_window, 0);
+  if (offen) text += " " + (offen === 1 ? "1 Ereignis zählt" : offen + " Ereignisse zählen") + " beim nächsten Abgleich nicht mehr.";
+  return text;
+}
+
+/** Zeichnet Kopf, Auswahl und Liste des Kassenbuchs. Ohne `immer` nur, wenn sich etwas geändert hat,
+ *  damit das Auffrischen alle 5 Sekunden weder Fokus noch Scrollstand stört. */
+function zeichneBuch(immer) {
+  const chef = zustand.firma.your_role === "chef";
   const ich = zustand.firma.members.find((m) => m.user_id === zustand.ich.user_id);
+  const stand = JSON.stringify([zustand.buch, zustand.laeufe, zustand.ungeklaert, [...zustand.auswahl.keys()], [...zustand.offen],
+    zustand.filter, zustand.firma.balance, ich && [ich.wallet, ich.open_claim], zustand.firma.payroll_time,
+    zustand.lkw.map((t) => [t.id, t.plate, !!t.retired])]);
+  if (!immer && stand === zustand.buchStand) return;
+  zustand.buchStand = stand;
+
   // Buchungen einer Lohnabrechnung stehen nicht einzeln da, sondern als eine Zeile je Abrechnung.
-  const posten = zustand.buch.entries.filter((e) => e.payroll_id == null)
-    .map((e) => ({ t: e.created_at, id: e.id, e }))
+  const einzeln = zustand.buch.entries.filter((e) => e.payroll_id == null);
+  const posten = einzeln.map((e) => ({ t: e.created_at, id: e.id, e }))
     .concat(zustand.laeufe.filter((l) => l.lines.length).map((l) => ({ t: l.created_at, id: Infinity, l })))
     .sort((a, b) => b.t - a.t || b.id - a.id);
+  // "Alle sichtbaren auswählen": stornierbar, ohne Betriebskosten (die korrigiert der Abgleich selbst)
+  zustand.sichtbar = chef ? einzeln.filter((e) => e.reversible && e.kind !== "betriebskosten") : [];
   const zeilen = posten.flatMap(({ e, l }) => {
-    if (l) return laufZeilen(l);
-    const betrag = h("span", { class: e.amount < 0 ? "minus" : "" }, (e.amount > 0 ? "+" : "") + euro(e.amount));
+    if (l) return laufZeilen(l, chef);
+    const weg = e.reversed_by != null;
+    const istStorno = e.kind === "storno";
+    const betrag = h("span", { class: (e.amount < 0 ? "minus " : "") + "durch" }, (e.amount > 0 ? "+" : "") + euro(e.amount));
     const zusatz = [];
     if (e.cargo) zusatz.push(e.cargo);
     if (e.source_city && e.target_city) zusatz.push(e.source_city + " nach " + e.target_city);
@@ -833,30 +1039,52 @@ function zeichneBuch() {
     if (e.distance_km != null) zusatz.push(km(e.distance_km));
     if (e.game_amount != null && e.game_amount !== e.amount && e.kind === "auftrag") zusatz.push("im Spiel " + euro(e.game_amount));
     if (e.note) zusatz.push(e.note);
+    if (istStorno && e.booked_by_user) zusatz.push("von " + e.booked_by_user);
     // Als Lkw-Kauf verknüpfte Betriebskosten stehen mit dem aktuellen Kennzeichen da
-    const art = e.truck_plate != null ? "Lkw-Kauf " + e.truck_plate : ARTEN[e.kind] || e.kind;
+    let art = e.truck_plate != null ? "Lkw-Kauf " + e.truck_plate : ARTEN[e.kind] || e.kind;
+    if (istStorno) {
+      // Art und Buchungszeit des Originals, dahinter Grund und wer storniert hat
+      art = "Storno von " + (ARTEN_STORNO[e.reverses_kind] || e.reverses_kind || "Buchung");
+      if (e.reverses_created_at != null) zusatz.unshift("gebucht " + wann(e.reverses_created_at));
+    }
     const text = [art, e.user ? ", " + e.user : "", zusatz.length ? " (" + zusatz.join(", ") + ")" : ""].join("");
-    return [h("tr", {},
-      h("td", { class: "wann" }, wann(e.created_at)),
-      h("td", {}, text, kaufKnoepfe(e)),
+    const wahl = chef && e.reversible ? auswahlKasten(e.id, { amount: e.amount, account: e.account, kind: e.kind }, text) : null;
+    return [h("tr", { class: weg ? "storniert" : istStorno ? "storno" : "" },
+      h("td", { class: "wann" }, wahl ? h("label", {}, wahl, wann(e.created_at)) : wann(e.created_at)),
+      h("td", {}, h("span", { class: "durch" }, text), weg ? stornoHinweis(e.reversed_at, e.reverse_reason, e.reversed_by_user) : null,
+        weg ? null : kaufKnoepfe(e)),
       h("td", { class: "zahl" }, e.account === "firma" ? betrag : ""),
       h("td", { class: "zahl" }, e.account === "fahrer" ? betrag : ""))];
   });
-  $("buch").replaceChildren(...[
-    h("header", {},
-      h("h2", {}, "Kassenbuch"),
-      h("div", { class: "bestand" + (zustand.firma.balance < 0 ? " minus" : "") }, euro(zustand.firma.balance)),
-      h("div", {}, "in der Firmenkasse"),
-      ich ? h("div", { class: "klein blass" }, "Dein Lohnkonto: " + euro(ich.wallet)
-        + (ich.open_claim ? ", offener Lohn " + euro(ich.open_claim) : "")
-        + ". Abrechnung täglich um " + zustand.firma.payroll_time + " Uhr") : null),
-    baueUngeklaert(),
+
+  const f = zustand.filter;
+  const bereich = f.von || f.bis;
+  $("buch-kopf").replaceChildren(
+    h("h2", {}, "Kassenbuch"),
+    h("div", { class: "bestand" + (zustand.firma.balance < 0 ? " minus" : "") }, euro(zustand.firma.balance)),
+    h("div", {}, "in der Firmenkasse"),
+    ich ? h("div", { class: "klein blass" }, "Dein Lohnkonto: " + euro(ich.wallet)
+      + (ich.open_claim ? ", offener Lohn " + euro(ich.open_claim) : "")
+      + ". Abrechnung täglich um " + zustand.firma.payroll_time + " Uhr") : null);
+  zeichneAuswahl();
+  $("buch-ungeklaert").replaceChildren(...[baueUngeklaert()].filter(Boolean));
+
+  const liste = $("buch-liste");
+  const scroll = liste.scrollTop;
+  const voll = zustand.buch.entries.length >= buchGrenze();
+  liste.replaceChildren(...[
+    bereich ? h("p", { class: "klein blass bereich" }, "Gezeigt "
+      + (f.von ? "ab " + tag(f.von) : "") + (f.von && f.bis ? " " : "") + (f.bis ? "bis einschließlich " + tag(f.bis) : "")
+      + ". Kassenstand und Lohnkonto zählen immer alle Buchungen.") : null,
+    voll ? h("p", { class: "klein blass bereich" }, "Gezeigt sind die neuesten " + buchGrenze() + " Buchungen. Für ältere den Zeitraum eingrenzen.") : null,
     zeilen.length
-      ? h("div", { class: "eintraege" }, h("table", {},
-          h("thead", {}, h("tr", {}, h("th", {}, "Wann"), h("th", {}, "Was"), h("th", { class: "zahl" }, "Kasse"), h("th", { class: "zahl" }, "Lohnkonto"))),
-          h("tbody", {}, zeilen)))
-      : h("p", { style: "padding: 1rem" }, "Noch keine Buchungen. Die erste kommt mit dem ersten abgelieferten Auftrag."),
+      ? h("table", {},
+          h("thead", {}, h("tr", {}, h("th", { class: "wann" }, "Wann"), h("th", {}, "Was"), h("th", { class: "zahl" }, "Kasse"), h("th", { class: "zahl" }, "Lohnkonto"))),
+          h("tbody", {}, zeilen))
+      : h("p", { style: "padding: 1rem" }, bereich ? "In diesem Zeitraum gibt es keine Buchungen."
+        : "Noch keine Buchungen. Die erste kommt mit dem ersten abgelieferten Auftrag."),
   ].filter(Boolean));
+  liste.scrollTop = scroll;
 }
 
 // ---- Büro (nur Chef)

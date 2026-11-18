@@ -7,6 +7,10 @@
 //! Reicht die Kasse nicht, bekommen alle denselben Anteil, der Rest wird offene Lohnforderung.
 //! Offene Forderungen werden bei der nächsten Abrechnung zuerst bedient.
 //!
+//! Stornierte Aufträge zählen nicht, weder mit Kilometern noch für die Pauschale. Das wirkt nur
+//! auf Zeiträume, die noch nicht abgerechnet sind: Schon gezahlten Lohn holt der Server nicht
+//! zurück. Das kann der Chef, indem er die Lohnbuchung storniert (siehe [`crate::reversal`]).
+//!
 //! Jeder Tag wird genau einmal abgerechnet: `payroll_runs` hat einen eindeutigen Index auf Firma
 //! und Tag, und die Abrechnung läuft in einer Transaktion. Nach einem Neustart holt
 //! [`run_due`] verpasste Tage der Reihe nach nach.
@@ -65,7 +69,7 @@ struct Line {
     claim_before: i64,
 }
 
-/// Rechnet die Aufträge mit `created_at` in `[from, to)` ab und bucht. Läuft in der Transaktion
+/// Rechnet die nicht stornierten Aufträge mit `created_at` in `[from, to)` ab und bucht. Läuft in der Transaktion
 /// des Aufrufers. Gibt die id der Abrechnung zurück.
 pub fn run_period(
     tx: &Transaction,
@@ -98,9 +102,10 @@ pub fn run_period(
     for user_id in members {
         let jobs: Vec<(i64, Option<i64>)> = tx
             .prepare(
-                "SELECT created_at, distance_km FROM ledger
-                 WHERE company_id = ?1 AND user_id = ?2 AND kind = 'auftrag' AND account = 'firma'
-                   AND created_at >= ?3 AND created_at < ?4",
+                "SELECT l.created_at, l.distance_km FROM ledger l
+                 WHERE l.company_id = ?1 AND l.user_id = ?2 AND l.kind = 'auftrag'
+                   AND l.account = 'firma' AND l.created_at >= ?3 AND l.created_at < ?4
+                   AND NOT EXISTS (SELECT 1 FROM ledger s WHERE s.reverses_id = l.id)",
             )?
             .query_map(params![company_id, user_id, from, to], |r| {
                 Ok((r.get(0)?, r.get(1)?))
@@ -307,8 +312,13 @@ pub fn run_json(conn: &Connection, pid: i64) -> rusqlite::Result<Value> {
     let lines: Vec<Value> = conn
         .prepare(
             "SELECT p.user_id, u.name, p.km, p.stage, p.cents_per_km, p.flat_days, p.flat, p.wage,
-                    p.claim_before, p.paid, p.claim_after
+                    p.claim_before, p.paid, p.claim_after, e.id, r.id, r.created_at, r.note,
+                    ru.name
              FROM payroll_lines p JOIN users u ON u.id = p.user_id
+             LEFT JOIN ledger e ON e.payroll_id = p.payroll_id AND e.account = 'fahrer'
+                              AND e.user_id = p.user_id AND e.kind = 'lohn'
+             LEFT JOIN ledger r ON r.reverses_id = e.id AND r.account = 'fahrer'
+             LEFT JOIN users ru ON ru.id = r.booked_by
              WHERE p.payroll_id = ?1 ORDER BY u.name",
         )?
         .query_map([pid], |r| {
@@ -318,7 +328,13 @@ pub fn run_json(conn: &Connection, pid: i64) -> rusqlite::Result<Value> {
                 "cents_per_km": r.get::<_, i64>(4)?, "flat_days": r.get::<_, i64>(5)?,
                 "flat": r.get::<_, i64>(6)?, "wage": r.get::<_, i64>(7)?,
                 "claim_before": r.get::<_, i64>(8)?, "paid": r.get::<_, i64>(9)?,
-                "claim_after": r.get::<_, i64>(10)?
+                "claim_after": r.get::<_, i64>(10)?,
+                // Die Lohnbuchung auf dem Lohnkonto, leer, wenn nichts gezahlt wurde, und ihr Storno
+                "entry_id": r.get::<_, Option<i64>>(11)?,
+                "reversed_by": r.get::<_, Option<i64>>(12)?,
+                "reversed_at": r.get::<_, Option<i64>>(13)?,
+                "reverse_reason": r.get::<_, Option<String>>(14)?,
+                "reversed_by_user": r.get::<_, Option<String>>(15)?
             }))
         })?
         .collect::<Result<_, _>>()?;

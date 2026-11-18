@@ -66,7 +66,7 @@ pub struct DriverStanding {
     /// Erfahrungspunkte aus dem letzten Abgleich, `None` ohne Abgleich
     pub xp: Option<i64>,
     pub game_level: i64,
-    /// Kilometer aus abgelieferten Aufträgen für diese Firma
+    /// Kilometer aus abgelieferten Aufträgen für diese Firma, ohne stornierte
     pub company_km: i64,
     pub stage: Option<WageLevel>,
 }
@@ -77,10 +77,12 @@ impl DriverStanding {
     }
 }
 
+/// Kilometer aus abgelieferten Aufträgen für die Firma. Stornierte Aufträge zählen nicht.
 pub fn company_km(conn: &Connection, company_id: i64, user_id: i64) -> rusqlite::Result<i64> {
     conn.query_row(
-        "SELECT COALESCE(SUM(distance_km), 0) FROM ledger
-         WHERE company_id = ?1 AND user_id = ?2 AND kind = 'auftrag' AND account = 'firma'",
+        "SELECT COALESCE(SUM(l.distance_km), 0) FROM ledger l
+         WHERE l.company_id = ?1 AND l.user_id = ?2 AND l.kind = 'auftrag' AND l.account = 'firma'
+           AND NOT EXISTS (SELECT 1 FROM ledger s WHERE s.reverses_id = l.id)",
         params![company_id, user_id],
         |r| r.get(0),
     )
