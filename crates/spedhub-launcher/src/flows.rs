@@ -2,8 +2,9 @@
 //!
 //! - [`lease_package`]: Bauplan einer laufenden Leihe, aus `leases\` oder vom Server
 //! - [`sync_and_write`]: Geldabgleich, auf Wunsch zusammen mit dem Einsetzen eines Lkw
+//! - [`profile_to_report`]: muss das Firmenprofil (wieder) beim Server gemeldet werden?
 
-use crate::client::{Client, SyncResult};
+use crate::client::{Client, Company, SyncResult};
 use crate::error::{Error, Result};
 use crate::savegame::{Deployed, package_from_checkout, prepare_slot, unix_seconds, write_slot};
 use crate::settings::AppPaths;
@@ -95,6 +96,20 @@ pub fn sync_and_write(
         sync,
         confirmed,
     })
+}
+
+/// Das Firmenprofil, das der Launcher dem Server melden soll: der Name des gewählten Profils,
+/// wenn der Server für `user_id` ein anderes oder keins kennt. `None`, wenn nichts zu tun ist
+/// oder kein Profil gewählt ist. Ein gemeldetes Profil löscht der Launcher nie, ohne Wahl
+/// bleibt es beim Server, wie es ist.
+pub fn profile_to_report(company: &Company, user_id: i64, chosen: Option<&str>) -> Option<String> {
+    let chosen = chosen.map(str::trim).filter(|c| !c.is_empty())?;
+    let reported = company
+        .members
+        .iter()
+        .find(|m| m.user_id == user_id)
+        .and_then(|m| m.profile_name.as_deref());
+    (reported != Some(chosen)).then(|| chosen.to_string())
 }
 
 /// Kurze Beschreibung des Abgleichs für die Oberfläche.

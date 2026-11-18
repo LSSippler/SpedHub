@@ -204,7 +204,7 @@ const speicher = {
 };
 
 const zustand = { token: speicher.get("token"), ich: null, firmaId: null, firma: null, lkw: [], buch: null, rueckgabe: null,
-                  laeufe: [], ungeklaert: [], offen: new Set(),
+                  laeufe: [], ungeklaert: [], abgelehnt: [], offen: new Set(),
                   // Verkaufen oder ausmustern: { id, art: "verkauf" | "ausmustern" }
                   abgang: null, abgaengeOffen: false,
                   // Kassenbuch: Buchung, die gerade als Lkw-Kauf verknüpft wird
@@ -267,6 +267,9 @@ function wann(s) {
 const modellName = (m) => m.split(/[._]/).filter(Boolean)
   .map((w) => (w.length <= 3 ? w.toUpperCase() : w[0].toUpperCase() + w.slice(1))).join(" ");
 
+/** Ereignisarten, wie das Plugin sie meldet. */
+const ARTEN_SPIEL = { job_delivered: "Auftrag abgeliefert", job_cancelled: "Auftrag abgebrochen", fined: "Strafe",
+                      tollgate: "Maut", ferry: "Fähre", train: "Zug" };
 const ARTEN = { lohn: "Lohnanteil (altes Modell)", auftrag: "Auftrag", strafe: "Strafe", maut: "Maut", faehre: "Fähre", zug: "Zug",
                 auftrag_abgebrochen: "Auftrag abgebrochen", ueberweisung: "Überweisung", betriebskosten: "Betriebskosten",
                 betriebskosten_korrektur: "Betriebskosten, Korrektur", werkstatt: "Werkstatt", haftung: "Haftung",
@@ -431,10 +434,14 @@ async function ladeFirma() {
     api("GET", "/api/companies/" + id + "/ledger?limit=200"),
     api("GET", "/api/companies/" + id + "/payrolls?limit=60"),
   ]);
-  const ungeklaert = firma.your_role === "chef" ? (await api("GET", "/api/companies/" + id + "/unexplained")).entries : [];
+  const chef = firma.your_role === "chef";
+  const [ungeklaert, abgelehnt] = chef ? await Promise.all([
+    api("GET", "/api/companies/" + id + "/unexplained").then((r) => r.entries),
+    api("GET", "/api/companies/" + id + "/rejected-events?limit=50").then((r) => r.entries),
+  ]) : [[], []];
   if (id !== zustand.firmaId) return;
   zustand.firma = firma; zustand.lkw = lkw.trucks; zustand.buch = buch;
-  zustand.laeufe = laeufe.payrolls; zustand.ungeklaert = ungeklaert;
+  zustand.laeufe = laeufe.payrolls; zustand.ungeklaert = ungeklaert; zustand.abgelehnt = abgelehnt;
 }
 
 async function oeffneFirma(id) {
@@ -481,6 +488,8 @@ function zeichneDaten() {
   zeichneFahrer();
   if (zustand.verknuepfen == null) zeichneBuch();
   zeichneBudget();
+  zeichneAbgelehnt();
+  zeichneMeinProfil();
   fuelleFahrerwahl();
   fuelleKennzeichen();
 }
@@ -692,9 +701,11 @@ function unterwegs(m) {
 
 function zeichneFahrer() {
   const zahl = (inhalt, minus) => h("td", { class: "zahl" + (minus ? " minus" : "") }, inhalt);
+  const chef = zustand.firma.your_role === "chef";
   $("fahrer").replaceChildren(
     h("div", { style: "overflow-x: auto" }, h("table", {},
       h("thead", {}, h("tr", {}, h("th", {}, "Name"), h("th", {}, "Rolle"), h("th", {}, "Unterwegs"),
+        chef ? h("th", {}, "Firmenprofil") : null,
         h("th", { class: "zahl" }, "Level"),
         h("th", { class: "zahl" }, "Firmen-km"), h("th", {}, "Lohnstufe"), h("th", { class: "zahl" }, "Lohnkonto"),
         h("th", { class: "zahl" }, "Offener Lohn"))),
@@ -705,12 +716,20 @@ function zeichneFahrer() {
             : m.last_seen != null ? "zuletzt " + wann(m.last_seen) : "noch nie im Spiel")),
         h("td", {}, m.role === "chef" ? "Chef" : "Fahrer"),
         h("td", { class: "unterwegs" }, unterwegs(m)),
+        chef ? h("td", {}, m.profile_name ? m.profile_name : h("span", { class: "klein blass" }, "nicht gemeldet")) : null,
         zahl(m.xp == null ? "?" : String(m.game_level)),
         zahl(km(m.company_km)),
         h("td", {}, m.stage == null ? "keine" : "Stufe " + m.stage + ", " + cent(m.cents_per_km) + " je km"),
         zahl(euro(m.wallet), m.wallet < 0),
         zahl(m.open_claim ? euro(m.open_claim) : "", m.open_claim > 0)))))),
-    h("p", { class: "klein blass" }, "Online ist, wessen Spiel sich in den letzten 30 Sekunden gemeldet hat. Das Level kommt mit dem Geldabgleich aus dem Spielstand. Ein Fragezeichen heißt: noch kein Abgleich."));
+    h("p", { class: "klein blass" }, "Online ist, wessen Spiel sich in den letzten 30 Sekunden gemeldet hat. Das Level kommt mit dem Geldabgleich aus dem Spielstand. Ein Fragezeichen heißt: noch kein Abgleich."
+      + (chef ? " Das Firmenprofil meldet der Launcher. Ist eins gemeldet, bucht der Server nur Ereignisse aus diesem Profil." : "")));
+}
+
+/** Das eigene gemeldete Firmenprofil, oder null. */
+function meinProfil() {
+  const ich = zustand.firma && zustand.firma.members.find((m) => m.user_id === zustand.ich.user_id);
+  return (ich && ich.profile_name) || null;
 }
 
 // ---- Kassenbuch
@@ -945,6 +964,11 @@ function baueBuero() {
         h("div", { id: "budget-stand" }),
         bForm),
       baueStufen(),
+      h("div", { class: "blatt ganz" },
+        h("h3", {}, "Abgelehnte Ereignisse"),
+        h("p", { class: "klein" }, "Ereignisse aus einem anderen Profil als dem gemeldeten Firmenprofil des Fahrers. "
+          + "Der Server hat sie nicht gebucht, sie stehen nur hier."),
+        h("div", { id: "abgelehnt" })),
       h("div", { class: "blatt" },
         h("h3", {}, "Lkw anlegen"),
         formular(async (f) => {
@@ -972,6 +996,39 @@ function baueBuero() {
           feld("Betrag in Euro", betrag),
           feld("Notiz", notiz),
           h("button", {}, "Überweisen")))));
+}
+
+/** Liste der abgelehnten Ereignisse im Büro. */
+function zeichneAbgelehnt() {
+  const box = $("abgelehnt");
+  if (!box) return;
+  const liste = zustand.abgelehnt;
+  const neu = JSON.stringify(liste.map((e) => e.id));
+  if (box.dataset.stand === neu) return;
+  box.dataset.stand = neu;
+  if (!liste.length) {
+    box.replaceChildren(h("p", { class: "klein blass" }, "Keine. Alles, was ankam, kam aus dem Firmenprofil oder es ist keins gemeldet."));
+    return;
+  }
+  box.replaceChildren(h("div", { style: "overflow-x: auto" }, h("table", {},
+    h("thead", {}, h("tr", {}, h("th", {}, "Zeit"), h("th", {}, "Fahrer"), h("th", {}, "Art"),
+      h("th", { class: "zahl" }, "Betrag"), h("th", {}, "Profil"), h("th", {}, "Grund"))),
+    h("tbody", {}, liste.map((e) => h("tr", {},
+      h("td", { class: "wann" }, wann(e.created_at)),
+      h("td", {}, e.user),
+      h("td", {}, ARTEN_SPIEL[e.type] || e.type),
+      h("td", { class: "zahl" }, euro(e.amount)),
+      h("td", {}, e.profile == null ? h("span", { class: "klein blass" }, "keins") : e.profile),
+      h("td", { class: "klein" }, e.reason)))))));
+}
+
+/** Das Profil, mit dem der Testbereich bucht. */
+function zeichneMeinProfil() {
+  const box = $("mein-profil");
+  if (!box) return;
+  const p = meinProfil();
+  const text = p ? "Gebucht wird wie aus deinem Firmenprofil " + p + "." : "Du hast kein Firmenprofil gemeldet, der Server bucht deshalb ohne Prüfung des Profils.";
+  if (box.textContent !== text) box.textContent = text;
 }
 
 /** Das offene Anschaffungsbudget mit Restbetrag. Ohne offenes Budget erscheint das Formular. */
@@ -1069,9 +1126,12 @@ function baueTestbuchung() {
   return h("details", {},
     h("summary", {}, "Ereignis von Hand buchen"),
     h("p", { class: "klein blass" }, "Zum Testen ohne Spiel. Sonst meldet das Plugin diese Ereignisse von selbst. Gebucht wird auf dich als Fahrer."),
+    h("p", { class: "klein blass", id: "mein-profil" }),
     formular(async (f) => {
         const ereignis = "hand-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
         const daten = { event_id: ereignis, type: art.value, amount: Number(betrag.value), note: notiz.value };
+        // Wie das Plugin: mit dem Firmenprofil, sonst lehnt der Server ab
+        if (meinProfil()) daten.profile = meinProfil();
         if (art.value === "job_delivered" && strecke.value !== "") daten.distance_km = Number(strecke.value);
         const r = await api("POST", "/api/companies/" + id + "/events", daten);
         f.reset();
@@ -1102,6 +1162,7 @@ function baueTestbuchung() {
     h("datalist", { id: "kennzeichen" }),
     formular(async () => {
         const daten = { plate: hbKz.value };
+        if (meinProfil()) daten.profile = meinProfil();
         if (hbKm.value !== "") daten.odometer_km = Number(hbKm.value);
         if (hbTempo.value !== "") daten.speed_kmh = Number(hbTempo.value);
         if (hbStadt.value.trim()) daten.near_city = hbStadt.value;
@@ -1109,6 +1170,7 @@ function baueTestbuchung() {
           ? { cargo: hbFracht.value, source_city: hbVon.value, target_city: hbNach.value } : null;
         const r = await api("POST", "/api/companies/" + id + "/heartbeat", daten);
         await auffrischen();
+        if (r.recorded === false) return melde(r.note || "Herzschlag verworfen.", true);
         melde(r.leased_truck_id != null
           ? "Herzschlag gesendet. Der Stand gilt als letzter bekannter Zustand deines Lkw."
           : "Herzschlag gesendet. Du bist jetzt 30 Sekunden online.");

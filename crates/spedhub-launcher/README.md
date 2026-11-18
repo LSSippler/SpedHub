@@ -2,7 +2,7 @@
 
 Desktop-App für Windows. Hier meldest du dich an, siehst den Fuhrpark der Firma, leihst Lkw aus und gibst sie zurück. Geliehene Lkw schreibt der Launcher in deinen Spielstand, danach startet er das Spiel.
 
-Im Spiel bestätigt ist, dass ETS2 einen eingesetzten Lkw lädt (siehe `docs/save-format.md`). Noch nicht bestätigt ist, ob der neue Speicherplatz im Spiel erscheint und ob das Spiel einen geänderten Kontostand übernimmt. Der Launcher zeigt einen Hinweis dazu an. Er legt immer einen neuen Speicherplatz an und sichert den alten vorher. Leg trotzdem selbst ein Backup deines Profils an, bevor du es zum ersten Mal ausprobierst.
+Im Spiel bestätigt ist (ETS2 1.62, siehe `docs/save-format.md`), dass ETS2 einen eingesetzten Lkw lädt, dass der neue Speicherplatz des Launchers erscheint und dass das Spiel den Kontostand aus dem Geldabgleich übernimmt. Noch nicht bestätigt ist das mit dem Rest eines Anschaffungsbudgets. Er legt immer einen neuen Speicherplatz an und sichert den alten vorher. Leg trotzdem selbst ein Backup deines Profils an, bevor du es zum ersten Mal ausprobierst.
 
 ## Installation
 
@@ -79,7 +79,7 @@ Mit Adminrechten kann der Launcher unter einem anderen Konto laufen, wenn ein St
 
 1. **Anmelden:** Server-Adresse (Standard `http://127.0.0.1:8787`), Name und Passwort. Mit "Konto anlegen" gibt es ein neues Konto. Die Anmeldung bleibt gespeichert.
 2. **Firma wählen:** oben in der Leiste. Eine Firma gründen oder ihr beitreten geht bisher nur im Dashboard.
-3. **Firmenprofil wählen:** das ETS2-Profil, in dem du für die Firma fährst. Der Launcher sucht unter `Dokumente\Euro Truck Simulator 2\profiles` und `steam_profiles`. Liegt das Profil unter `steam_profiles`, erscheint eine Warnung: Steam Cloud kann einen bearbeiteten Spielstand mit einer älteren Fassung überschreiben. Am besten nimmst du ein eigenes Profil ohne Steam Cloud.
+3. **Firmenprofil wählen:** das ETS2-Profil, in dem du für die Firma fährst. Der Launcher sucht unter `Dokumente\Euro Truck Simulator 2\profiles` und `steam_profiles`. Liegt das Profil unter `steam_profiles`, erscheint eine Warnung: Steam Cloud kann einen bearbeiteten Spielstand mit einer älteren Fassung überschreiben. Am besten nimmst du ein eigenes Profil ohne Steam Cloud. Nur was in diesem Profil passiert, zählt für die Firma (siehe Firmenprofil). Ohne gewähltes Profil meldet das Plugin nichts.
 4. **Ausleihen:** Der Server vergibt den Lkw. Der Launcher setzt ihn sofort in den neuesten Spielstand des Profils ein, gleicht dabei das Geld ab (siehe unten) und legt das Ergebnis als neuen Speicherplatz `SpedHub: <Kennzeichen>` an. Im Spiel diesen Speicherplatz laden.
 5. **In Spielstand schreiben:** dasselbe noch einmal, zum Beispiel wenn beim Ausleihen das Spiel lief. Liegt der Bauplan nicht auf diesem Rechner, holt der Launcher ihn vom Server.
 6. **Geld abgleichen:** Liest Kontostand und Erfahrungspunkte aus dem neuesten Spielstand, meldet sie dem Server und legt einen neuen Speicherplatz `SpedHub: Geldabgleich` mit dem Kontostand an, den der Server nennt: dein Lohnkonto plus den Betriebsvorschuss der Firma.
@@ -92,6 +92,15 @@ Läuft das Spiel, schreibt der Launcher nichts in den Spielstand und sagt das au
 Über dem Fuhrpark zeigt der Launcher dein Lohnkonto, offenen Lohn, Level, Firmenkilometer und Lohnstufe. Im Fuhrpark steht bei einem verliehenen Lkw "fährt gerade" mit der Geschwindigkeit, wenn das Plugin des Ausleihers gerade Herzschläge mit genau diesem Lkw schickt.
 
 Die Spalte "Schaden" zeigt den Schaden jedes Lkw in Prozent, so wie der Server ihn aus dem Zustand der letzten Rückgabe rechnet, dazu den dauerhaften Verschleiß, etwa `12,5 %, dauerhaft 3 %`. Liegt ein Lkw nach der Rückgabe über der Schadensgrenze der Firma, steht er "in der Werkstatt" und "Ausleihen" ist ausgegraut, bis der Chef ihn im Dashboard reparieren lässt. Nach der Rückgabe sagt der Launcher, wie viel Schaden der Lkw hat, ob er in die Werkstatt muss und was du an Haftung für neuen Schaden aus dem Lohnkonto zahlst, wenn die Firma eine Haftung eingestellt hat. Details in `server/README.md`, Abschnitt "Schaden und Werkstatt".
+
+## Firmenprofil
+
+Ein Fahrer kann in ETS2 mehrere Profile haben, auch private. Gebucht wird nur, was im Firmenprofil passiert. Dafür sorgt der Launcher an zwei Stellen:
+
+- **`plugin.json`:** Er schreibt den angezeigten Namen des gewählten Profils als `profile_name` hinein (aus dem Hex-Ordnernamen gelesen, wie in der Auswahl) und den vollständigen Pfad zu `Dokumente\Euro Truck Simulator 2\game.log.txt` als `game_log`. Daraus liest das Plugin, welches Profil im Spiel gerade aktiv ist, und meldet nur aus dem Firmenprofil. Die Datei schreibt er neu, sobald Firma oder Firmenprofil gewechselt werden, und bei jedem Laden des Fuhrparks, also auch beim Start. Eine `plugin.json` von einem älteren Launcher ohne `profile_name` wird so beim ersten Start ersetzt. Das Spiel muss danach neu starten, das Plugin liest die Datei nur beim Start.
+- **Server:** Er meldet das Firmenprofil über `PUT /api/companies/{id}/profile`, wenn der Server ein anderes oder keins kennt: beim Wählen des Profils, beim Wechsel der Firma und beim Start. Das läuft nebenher und sperrt nichts. Ab dann bucht der Server für dich nur noch Ereignisse aus diesem Profil, alle anderen lehnt er ab und zeigt sie dem Chef. Ein gemeldetes Profil löscht der Launcher nie, auch nicht, wenn keins gewählt ist.
+
+Klappt die Meldung nicht, etwa mit einem älteren Server, steht der Grund in der Meldung und der Launcher versucht es für dieses Profil erst nach einem Neustart wieder. Details in `crates/spedhub-plugin/README.md` und `server/README.md`, Abschnitt "Nur das Firmenprofil zählt".
 
 ## Lkw-Kauf verknüpfen
 
@@ -121,7 +130,7 @@ Beide Zeitpunkte kommen von der Uhr dieses Rechners, genau wie die Zeitpunkte, d
 
 Startet das Spiel zwischen Schritt 3 und 4, wird nichts geschrieben. Der Server rechnet beim nächsten Abgleich dann vom gelesenen Kontostand weiter.
 
-Wichtig: Ob das Spiel den geänderten Kontostand übernimmt, auch mit dem Rest eines Anschaffungsbudgets, und ob das Level aus den Erfahrungspunkten zum Level im Spiel passt, ist noch nicht im Spiel geprüft.
+Das Spiel übernimmt den geschriebenen Kontostand (im Spiel bestätigt, ETS2 1.62). Noch nicht geprüft ist das mit dem Rest eines Anschaffungsbudgets und ob das Level aus den Erfahrungspunkten zum Level im Spiel passt.
 
 ## Was beim Schreiben in den Spielstand passiert
 
@@ -142,7 +151,7 @@ Alles liegt in `%LOCALAPPDATA%\SpedHub`:
 | Datei | Inhalt |
 |---|---|
 | `launcher.json` | Server, Name, Firma, Profil, ein von Hand gewählter Spielordner und der Token. Der Token ist mit DPAPI für deinen Windows-Benutzer verschlüsselt |
-| `plugin.json` | Server, Token und Firma für das Plugin. Wird geschrieben, sobald eine Firma gewählt ist, und beim Abmelden entfernt. Das Plugin liest den Token im Klartext |
+| `plugin.json` | Server, Token, Firma, Firmenprofil (`profile_name`) und Pfad zu `game.log.txt` (`game_log`) für das Plugin. Wird geschrieben, sobald eine Firma gewählt ist, neu bei jedem Wechsel von Firma oder Firmenprofil, und beim Abmelden entfernt. Das Plugin liest den Token im Klartext |
 | `leases\<id>.json` | Bauplan geliehener Lkw, als Zwischenspeicher. Fehlt er, holt der Launcher ihn vom Server. Das dürfen nur du als Ausleiher und der Chef |
 | `backups\` | Kopien der Speicherplätze, aus denen der Launcher einen neuen gemacht hat |
 
@@ -159,8 +168,8 @@ Die Deinstallation fragt "Anmeldung, Einstellungen und Backups behalten?", Stand
 | `src/update.rs` | GitHub-Releases abfragen, Setup laden und gegen `SHA256SUMS.txt` prüfen |
 | `src/version.rs` | Versionen lesen und vergleichen |
 | `src/client.rs` | Client für den Server |
-| `src/flows.rs` | Bauplan aus der Ablage oder vom Server, Geldabgleich mit neuem Speicherplatz |
-| `src/profiles.rs` | Profile, Hex-Namen, Speicherplätze |
+| `src/flows.rs` | Bauplan aus der Ablage oder vom Server, Geldabgleich mit neuem Speicherplatz, ob das Firmenprofil gemeldet werden muss |
+| `src/profiles.rs` | Profile, Hex-Namen, Name zum Profilordner, Pfad zu `game.log.txt`, Speicherplätze |
 | `src/savegame.rs` | Lkw übernehmen, einsetzen, Kontostand setzen, für die Rückgabe lesen, über `spedhub-save` |
 | `src/settings.rs` | `launcher.json`, `plugin.json`, Ablage der Baupläne |
 | `src/system.rs` | Windows-Anbindung: Dokumente-Ordner, laufendes Spiel, Steam, DPAPI, Registry, MessageBox, Ordnerdialog, Neustart mit Adminrechten |

@@ -200,6 +200,22 @@ CREATE TABLE IF NOT EXISTS purchase_budgets (
 CREATE UNIQUE INDEX IF NOT EXISTS one_open_budget ON purchase_budgets(company_id) WHERE closed_at IS NULL;
 -- Eine Betriebskosten-Buchung ist der Kauf dieses Lkw. Die Buchung selbst bleibt, wie sie ist,
 -- die Verknüpfung ändert nur die Anzeige im Kassenbuch.
+-- Ereignisse, die der Server nicht gebucht hat, weil sie nicht aus dem gemeldeten Firmenprofil
+-- des Fahrers kamen (siehe `profiles.rs`). Kein Journal, nur zum Nachsehen für den Chef. `payload`
+-- ist das Ereignis, wie es ankam, als JSON. Je Fahrer und event_id nur einmal.
+CREATE TABLE IF NOT EXISTS rejected_events (
+    id          INTEGER PRIMARY KEY,
+    company_id  INTEGER NOT NULL REFERENCES companies(id),
+    user_id     INTEGER NOT NULL REFERENCES users(id),
+    event_id    TEXT NOT NULL,
+    type        TEXT NOT NULL,
+    amount      INTEGER NOT NULL,
+    profile     TEXT,
+    reason      TEXT NOT NULL,
+    payload     TEXT NOT NULL DEFAULT '{}',
+    created_at  INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS rejected_event_once ON rejected_events(company_id, user_id, event_id);
 CREATE TABLE IF NOT EXISTS purchase_links (
     ledger_id   INTEGER PRIMARY KEY REFERENCES ledger(id),
     truck_id    INTEGER NOT NULL REFERENCES trucks(id),
@@ -288,6 +304,12 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("trucks", "retired_at", "INTEGER"),
     ("trucks", "retired_reason", "TEXT"),
     ("trucks", "sale_price", "INTEGER"),
+    // Name des ETS2-Profils, das der Launcher als Firmenprofil des Fahrers gemeldet hat. Ist er
+    // gesetzt, bucht der Server nur Ereignisse aus diesem Profil. Leer bei älteren Launchern.
+    ("memberships", "profile_name", "TEXT"),
+    // Profil, aus dem das Plugin das Ereignis gemeldet hat. Leer bei älteren Plugins, beim
+    // Dashboard ohne gemeldetes Profil und bei allen anderen Buchungen.
+    ("ledger", "profile", "TEXT"),
 ];
 
 /// Fünf Lohnstufen von 40 bis 80 Cent je Kilometer: (Level im Spiel, Firmenkilometer, Cent je km).

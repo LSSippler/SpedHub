@@ -19,6 +19,25 @@ use std::{
 
 pub const PROFILES: &str = "profiles";
 pub const STEAM_PROFILES: &str = "steam_profiles";
+/// Das Log des Spiels im Dokumente-Ordner. Daraus liest das Plugin das aktive Profil.
+pub const GAME_LOG: &str = "game.log.txt";
+
+/// `Dokumente\Euro Truck Simulator 2\game.log.txt` zum Dokumente-Ordner des Spiels.
+pub fn game_log(ets2_dir: &Path) -> PathBuf {
+    ets2_dir.join(GAME_LOG)
+}
+
+/// Der Dokumente-Ordner des Spiels zu einem Profilordner (`<ets2>\profiles\<hex>`).
+pub fn ets2_dir_of(profile_dir: &Path) -> Option<&Path> {
+    profile_dir.parent()?.parent()
+}
+
+/// Der angezeigte Name eines Profils aus seinem Ordner, wie [`Profile::name`]: der Ordnername
+/// als Hex gelesen, sonst der Ordnername selbst.
+pub fn profile_name_of(profile_dir: &Path) -> Option<String> {
+    let folder = profile_dir.file_name()?.to_string_lossy().into_owned();
+    Some(decode_hex_name(&folder).unwrap_or(folder))
+}
 
 /// Ein Profil im Dokumente-Ordner.
 #[derive(Debug, Clone, PartialEq, Eq)]

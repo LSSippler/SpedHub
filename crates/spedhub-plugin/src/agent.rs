@@ -1,8 +1,13 @@
 //! Warteschlange und Sender-Thread.
 //!
-//! Der Spiel-Thread ruft nur [`Agent::submit`] auf. Das übersetzt das Event, vergibt die
-//! `event_id`, merkt sich den Zeitpunkt (`occurred_at`, Systemzeit) und legt es in einen
-//! Kanal, der nie blockiert. Kein Dateizugriff, kein Netz.
+//! Der Spiel-Thread ruft nur [`Agent::submit`] auf. Das übersetzt das Event, prüft das aktive
+//! Profil, vergibt die `event_id`, merkt sich den Zeitpunkt (`occurred_at`, Systemzeit) und das
+//! Profil und legt es in einen Kanal, der nie blockiert. Kein Netz. Gelesen werden nur die neuen
+//! Zeilen von `game.log.txt` (siehe [`crate::profile`]), geschrieben wird nichts.
+//!
+//! Nur Ereignisse aus dem Firmenprofil werden angenommen. Ist ein anderes Profil aktiv oder
+//! das Profil unbekannt, kommt das Ereignis nicht in den Postausgang, es steht nur im Log.
+//! Für Herzschläge gilt dasselbe.
 //!
 //! Der Sender-Thread schreibt jedes Event zuerst in den Postausgang und schickt dann alles,
 //! was dort liegt, der Reihe nach an den Server. Ist der Server nicht erreichbar, wartet er
@@ -10,21 +15,23 @@
 //! Start des Spiels geht es mit dem Postausgang weiter.
 //!
 //! Ein eigener Herzschlag-Thread liest alle `heartbeat_interval` den [`Telemetry`]-Snapshot
-//! und schickt einen Herzschlag, wenn das Spiel läuft, nicht pausiert ist und ein Kennzeichen
-//! bekannt ist. Herzschläge kommen nie in den Postausgang: Geht einer nicht durch, ist er
-//! verloren. Weil der Thread eigen ist, hält ein hängender Herzschlag keine Buchung auf.
+//! und schickt einen Herzschlag, wenn das Spiel läuft, nicht pausiert ist, ein Kennzeichen
+//! bekannt ist und das Firmenprofil aktiv ist. Herzschläge kommen nie in den Postausgang: Geht
+//! einer nicht durch, ist er verloren. Weil der Thread eigen ist, hält ein hängender Herzschlag
+//! keine Buchung auf.
 
 use crate::config::{Config, ConfigError, Paths};
 use crate::event::{GameplayData, translate, unix_now};
 use crate::ids::{IdGenerator, StartNote};
 use crate::log::Logger;
 use crate::outbox::{Entry, Outbox};
+use crate::profile::{ProfileGate, ProfileState};
 use crate::send::{Outcome, Sender};
 use crate::telemetry::Telemetry;
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, RecvTimeoutError},
     },
@@ -65,6 +72,8 @@ pub struct HeartbeatStats {
     pub attempts: u64,
     /// Wie viele der Server angenommen hat
     pub delivered: u64,
+    /// Wie oft ein Herzschlag fällig war, aber nicht das Firmenprofil aktiv war
+    pub blocked: u64,
 }
 
 #[derive(Default)]
@@ -72,6 +81,7 @@ struct Counters {
     ticks: AtomicU64,
     attempts: AtomicU64,
     delivered: AtomicU64,
+    blocked: AtomicU64,
 }
 
 /// Was [`Agent::submit`] mit einem Event gemacht hat.
@@ -83,6 +93,19 @@ pub enum Submitted {
     Ignored,
     /// Gebucht hätte werden sollen, aber die Werte fehlen. Steht im Log.
     Invalid,
+    /// Aus diesem Profil, nicht dem Firmenprofil. Nicht angenommen, steht im Log.
+    OtherProfile(String),
+    /// Das aktive Profil ist unbekannt. Nicht angenommen, steht im Log.
+    UnknownProfile,
+    /// `plugin.json` nennt kein Firmenprofil. Nicht angenommen, steht im Log.
+    NoCompanyProfile,
+}
+
+/// Das gemeinsame Tor für Spiel-Thread und Herzschlag-Thread.
+type Gate = Arc<Mutex<ProfileGate>>;
+
+fn check(gate: &Gate) -> (ProfileState, Option<String>) {
+    gate.lock().unwrap_or_else(|e| e.into_inner()).check()
 }
 
 enum Message {
@@ -103,6 +126,7 @@ pub struct Agent {
     heartbeat_stop: Option<mpsc::Sender<()>>,
     heartbeat: Option<JoinHandle<()>>,
     counters: Arc<Counters>,
+    gate: Gate,
 }
 
 impl Agent {
@@ -122,9 +146,25 @@ impl Agent {
             }
         };
         logger.write(&format!(
-            "Server {}, Firma {}",
-            config.server_url, config.company_id
+            "Server {}, Firma {}, Firmenprofil {}, Log des Spiels {}",
+            config.server_url,
+            config.company_id,
+            config
+                .profile_name
+                .as_deref()
+                .map_or_else(|| "fehlt".to_string(), |n| format!("'{n}'")),
+            config
+                .game_log
+                .as_deref()
+                .map_or_else(|| "fehlt".to_string(), |p| p.display().to_string()),
         ));
+        let gate: Gate = Arc::new(Mutex::new(ProfileGate::new(
+            config.profile_name.as_deref(),
+            config.game_log.as_deref(),
+        )));
+        if let (_, Some(note)) = check(&gate) {
+            logger.write(&note);
+        }
 
         let (ids, note) = IdGenerator::start(&paths.state());
         match note {
@@ -165,6 +205,7 @@ impl Agent {
             let counters = counters.clone();
             let logger = logger.clone();
             let config = config.clone();
+            let gate = gate.clone();
             std::thread::Builder::new()
                 .name("spedhub-heartbeat".into())
                 .spawn(move || {
@@ -175,6 +216,7 @@ impl Agent {
                         settings,
                         &counters,
                         &logger,
+                        &gate,
                     )
                 })
         };
@@ -196,6 +238,7 @@ impl Agent {
             heartbeat_stop: Some(heartbeat_stop),
             heartbeat,
             counters,
+            gate,
         })
     }
 
@@ -211,11 +254,22 @@ impl Agent {
             ticks: self.counters.ticks.load(Ordering::SeqCst),
             attempts: self.counters.attempts.load(Ordering::SeqCst),
             delivered: self.counters.delivered.load(Ordering::SeqCst),
+            blocked: self.counters.blocked.load(Ordering::SeqCst),
         }
     }
 
-    /// Nimmt ein Event aus dem Spiel an. Blockiert nie und greift nicht auf Dateien oder das
-    /// Netz zu.
+    /// Prüft jetzt, welches Profil aktiv ist. Liest nur neue Zeilen von `game.log.txt`.
+    pub fn profile_state(&self) -> ProfileState {
+        let (state, note) = check(&self.gate);
+        if let Some(note) = note {
+            let _ = self.tx.send(Message::Log(note));
+        }
+        state
+    }
+
+    /// Nimmt ein Event aus dem Spiel an. Greift nicht auf das Netz zu. Liest nur die neuen
+    /// Zeilen von `game.log.txt`, um das aktive Profil zu prüfen. Warten kann es nur, solange
+    /// der Herzschlag-Thread gerade selbst in die Datei schaut, also ebenso kurz.
     pub fn submit(&self, data: &GameplayData) -> Submitted {
         match translate(data) {
             Ok(Some(draft)) => {
@@ -229,12 +283,43 @@ impl Agent {
                     }
                     _ => None,
                 };
+                // Nur aus dem Firmenprofil. Alles andere kommt nicht in den Postausgang.
+                let profile = match self.profile_state() {
+                    ProfileState::Company(name) => name,
+                    other => {
+                        let (why, result) = match other {
+                            ProfileState::Other(name) => {
+                                let why = format!(
+                                    "aus Profil '{name}', Firmenprofil ist '{}'",
+                                    self.company_profile()
+                                );
+                                (why, Submitted::OtherProfile(name))
+                            }
+                            ProfileState::NotConfigured => (
+                                "plugin.json nennt kein Firmenprofil".to_string(),
+                                Submitted::NoCompanyProfile,
+                            ),
+                            _ => (
+                                "aktives Profil unbekannt".to_string(),
+                                Submitted::UnknownProfile,
+                            ),
+                        };
+                        let _ = self.tx.send(Message::Log(format!(
+                            "Ereignis nicht angenommen: {} {} Euro, {why}",
+                            draft.kind, draft.amount
+                        )));
+                        return result;
+                    }
+                };
                 // Der Zeitpunkt wird hier festgehalten, nicht beim Senden: Das Event kann lange
                 // im Postausgang liegen.
                 let event_id = self.ids.next();
                 let entry = Entry {
                     company_id: self.company_id,
-                    booking: draft.with_id_at(event_id.clone(), unix_now()).with_job(job),
+                    booking: draft
+                        .with_id_at(event_id.clone(), unix_now())
+                        .with_job(job)
+                        .with_profile(&profile),
                 };
                 let _ = self.tx.send(Message::Entry(entry));
                 Submitted::Queued(event_id)
@@ -245,6 +330,15 @@ impl Agent {
                 Submitted::Invalid
             }
         }
+    }
+
+    fn company_profile(&self) -> String {
+        self.gate
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .company()
+            .unwrap_or_default()
+            .to_string()
     }
 
     /// Beendet den Sender-Thread. Wartet höchstens so lange, wie eine laufende Anfrage noch
@@ -287,6 +381,7 @@ fn run_heartbeat(
     settings: Settings,
     counters: &Counters,
     logger: &Logger,
+    gate: &Gate,
 ) {
     let sender = Sender::new(settings.request_timeout);
     let mut failing = false;
@@ -294,10 +389,22 @@ fn run_heartbeat(
     while let Err(RecvTimeoutError::Timeout) = stop.recv_timeout(settings.heartbeat_interval) {
         let beat = catch_unwind(AssertUnwindSafe(|| {
             counters.ticks.fetch_add(1, Ordering::SeqCst);
+            // Auch in der Pause lesen: So bleibt jeder Blick in game.log.txt kurz, und ein
+            // Profilwechsel steht sofort im Log.
+            let (profile, note) = check(gate);
+            if let Some(note) = note {
+                logger.write(&note);
+            }
             // Pausiert oder ohne Kennzeichen: nichts senden
-            let Some(heartbeat) = telemetry.snapshot().heartbeat() else {
+            let Some(mut heartbeat) = telemetry.snapshot().heartbeat() else {
                 return;
             };
+            // Nur aus dem Firmenprofil
+            let Some(name) = profile.company() else {
+                counters.blocked.fetch_add(1, Ordering::SeqCst);
+                return;
+            };
+            heartbeat.profile = Some(name.to_string());
             counters.attempts.fetch_add(1, Ordering::SeqCst);
             match sender.heartbeat(config, config.company_id, &heartbeat) {
                 Ok(()) => {
@@ -349,12 +456,15 @@ fn run(
     for n in notes {
         logger.write(&n);
     }
+    // Ohne Firmenprofil in plugin.json sendet das Plugin nichts, auch den Postausgang nicht.
+    // Er wartet, bis der Launcher die Konfiguration neu geschrieben hat.
+    let configured = config.profile_name.is_some();
     let mut w = Worker {
         config,
         settings,
         stop,
         logger,
-        next_try: (!outbox.is_empty()).then(Instant::now),
+        next_try: (configured && !outbox.is_empty()).then(Instant::now),
         outbox,
         sender: Sender::new(settings.request_timeout),
         backoff: settings.retry_initial,
@@ -404,6 +514,10 @@ impl Worker<'_> {
     /// Schickt den Postausgang der Reihe nach. Bricht beim ersten Fehler ab, der auf einen
     /// nicht erreichbaren Server hindeutet.
     fn flush(&mut self) {
+        if self.config.profile_name.is_none() {
+            self.next_try = None;
+            return;
+        }
         let mut done = 0;
         let mut retry: Option<String> = None;
         for entry in self.outbox.entries() {

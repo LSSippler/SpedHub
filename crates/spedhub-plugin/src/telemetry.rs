@@ -171,6 +171,7 @@ impl Snapshot {
                 .filter(|v| v.is_finite())
                 .map(|v| (f64::from(v.abs()) * 3.6).min(1000.0)),
             job: self.job.clone(),
+            profile: None,
         })
     }
 }
@@ -216,6 +217,9 @@ pub struct Heartbeat {
     /// Der laufende Auftrag, `null` heißt: keiner
     #[serde(default)]
     pub job: Option<JobInfo>,
+    /// Name des aktiven ETS2-Profils. Setzt der Herzschlag-Thread, wenn es das Firmenprofil ist.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
 }
 
 /// Gemeinsamer Zugriff auf den [`Snapshot`] für Spiel-Thread und Herzschlag-Thread.

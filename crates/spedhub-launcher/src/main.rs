@@ -8,9 +8,11 @@ use spedhub_launcher::cli::{self, Command, InstallEnv, InstallOutcome};
 use spedhub_launcher::client::{
     Client, Company, Me, PurchaseCandidate, Truck, format_percent, version_warning,
 };
-use spedhub_launcher::flows::{describe, lease_package, sync_and_write};
+use spedhub_launcher::flows::{describe, lease_package, profile_to_report, sync_and_write};
 use spedhub_launcher::plugin_install::{self, GameSource, PluginStatus};
-use spedhub_launcher::profiles::{Profile, SaveSlot, find_profiles, list_slots};
+use spedhub_launcher::profiles::{
+    Profile, SaveSlot, ets2_dir_of, find_profiles, game_log, list_slots, profile_name_of,
+};
 use spedhub_launcher::savegame::{
     FoundBy, ReturnData, SaveTruck, new_truck_from_save, package_from_checkout, read_for_return,
     trucks_in_save, unix_seconds,
@@ -29,14 +31,16 @@ use std::{
     time::SystemTime,
 };
 
-const UNCONFIRMED: &str = "Hinweis: Ein eingesetzter Lkw lädt im Spiel, das ist bestätigt. \
-Noch nicht bestätigt ist, ob das Spiel den neuen Speicherplatz des Launchers anzeigt und den Kontostand aus dem Geldabgleich übernimmt. \
+const UNCONFIRMED: &str = "Hinweis: Im Spiel bestätigt ist, dass ein eingesetzter Lkw lädt, der neue Speicherplatz des Launchers erscheint und das Spiel den Kontostand aus dem Geldabgleich übernimmt. \
 Der Launcher legt immer einen neuen Speicherplatz an und sichert den alten vorher. \
 Trotzdem gilt: vorher selbst ein Backup des Profils anlegen.";
 
 const STEAM_WARNING: &str = "Achtung: Dieses Profil liegt in steam_profiles und wird mit Steam Cloud abgeglichen. \
 Steam kann einen bearbeiteten Spielstand mit einer älteren Fassung aus der Cloud überschreiben. \
 Besser ein Profil ohne Steam Cloud als Firmenprofil nehmen.";
+
+const NO_PROFILE: &str = "Ohne Firmenprofil meldet das Plugin nichts an den Server. \
+Es zählt nur, was im Firmenprofil passiert.";
 
 const TITLE: &str = "SpedHub";
 
@@ -259,6 +263,11 @@ enum Background {
         dir: Option<PathBuf>,
         then_install: bool,
     },
+    /// Firmenprofil beim Server gemeldet, oder warum nicht
+    ProfileReported {
+        name: String,
+        result: std::result::Result<(), String>,
+    },
     /// Eine Panic in einer dieser Arbeiten
     Failed(String),
 }
@@ -360,6 +369,9 @@ struct App {
     version_warning: Option<String>,
     plugin: PluginView,
     update: UpdateState,
+    /// Zuletzt versuchte Meldung des Firmenprofils (Firma, Name). Verhindert, dass dieselbe
+    /// Meldung nach jedem Laden wieder rausgeht, etwa bei einem älteren Server.
+    profile_report: Option<(i64, String)>,
     bg_tx: Sender<Background>,
     bg_rx: Receiver<Background>,
 }
@@ -404,6 +416,7 @@ impl App {
             version_warning: None,
             plugin,
             update: UpdateState::Checking,
+            profile_report: None,
             bg_tx,
             bg_rx,
         };
@@ -453,16 +466,63 @@ impl App {
         }
     }
 
-    /// Schreibt plugin.json für die gewählte Firma.
+    /// Name des gewählten Firmenprofils, wie das Spiel ihn anzeigt.
+    fn profile_name(&self) -> Option<String> {
+        self.settings
+            .profile_dir
+            .as_deref()
+            .and_then(profile_name_of)
+    }
+
+    /// Schreibt plugin.json für die gewählte Firma und das gewählte Firmenprofil.
     fn write_plugin_config(&mut self) {
         let (Some(paths), Some(token), Some(company)) =
             (&self.paths, &self.token, self.settings.company_id)
         else {
             return;
         };
-        if let Err(e) = write_plugin_config(paths, &self.settings.server_url, token, company) {
+        let profile_dir = self.settings.profile_dir.as_deref();
+        let log = self
+            .ets2_dir
+            .as_deref()
+            .or_else(|| profile_dir.and_then(ets2_dir_of))
+            .map(game_log);
+        let name = self.profile_name();
+        if let Err(e) = write_plugin_config(
+            paths,
+            &self.settings.server_url,
+            token,
+            company,
+            name.as_deref(),
+            log.as_deref(),
+        ) {
             self.error(format!("plugin.json ließ sich nicht schreiben: {e}"));
         }
+    }
+
+    /// Meldet das gewählte Firmenprofil beim Server, wenn er ein anderes oder keins kennt.
+    /// Läuft nebenher und sperrt nichts.
+    fn report_profile(&mut self, ctx: &egui::Context) {
+        let (Some(company), Some(me)) = (&self.company, &self.me) else {
+            return;
+        };
+        let name = self.profile_name();
+        let Some(name) = profile_to_report(company, me.user_id, name.as_deref()) else {
+            return;
+        };
+        let attempt = Some((company.id, name.clone()));
+        if self.profile_report == attempt {
+            return;
+        }
+        self.profile_report = attempt;
+        let client = self.client();
+        let company_id = company.id;
+        self.background(ctx, move || Background::ProfileReported {
+            result: client
+                .set_profile(company_id, Some(&name))
+                .map_err(|e| e.to_string()),
+            name,
+        });
     }
 
     /// Startet eine Arbeit im Hintergrund. Eine Panic darin wird zur Fehlermeldung.
@@ -554,6 +614,7 @@ impl App {
                     self.save_settings();
                 }
                 self.write_plugin_config();
+                self.report_profile(ctx);
             }
             Done::Info(text) => {
                 self.info(text);
@@ -759,6 +820,14 @@ impl App {
                     Err(e) => self.error(e),
                 }
             }
+            Background::ProfileReported { name, result } => match result {
+                Ok(()) => self.info(format!(
+                    "Firmenprofil {name} beim Server gemeldet. Gebucht wird nur, was in diesem Profil passiert"
+                )),
+                Err(e) => self.error(format!(
+                    "Das Firmenprofil ließ sich dem Server nicht melden: {e}"
+                )),
+            },
             Background::Failed(e) => {
                 self.plugin.installing = false;
                 match std::mem::replace(&mut self.update, UpdateState::Current) {
@@ -1183,6 +1252,9 @@ impl App {
                 self.import_slot = None;
                 self.import_trucks.clear();
                 self.save_settings();
+                // Das Plugin meldet nur aus dem Firmenprofil, Plugin und Server müssen es wissen
+                self.write_plugin_config();
+                self.report_profile(ui.ctx());
             }
             if ui.button("Profile neu suchen").clicked() {
                 self.profiles = self
@@ -1198,6 +1270,9 @@ impl App {
                 |d| format!("Keine Profile gefunden unter {}", d.display()),
             );
             ui.label(place);
+        }
+        if self.settings.profile_dir.is_none() {
+            ui.colored_label(egui::Color32::from_rgb(200, 120, 0), NO_PROFILE);
         }
         if self.profile().is_some_and(|p| p.steam_cloud) {
             ui.colored_label(egui::Color32::from_rgb(200, 120, 0), STEAM_WARNING);

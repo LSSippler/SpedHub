@@ -4,7 +4,7 @@
 //!
 //! | Datei | Inhalt |
 //! |---|---|
-//! | `plugin.json` | Server, Token, Firma. Schreibt der Launcher |
+//! | `plugin.json` | Server, Token, Firma, Firmenprofil und Pfad zu `game.log.txt`. Schreibt der Launcher |
 //! | `plugin.log` | Log, rotiert nach `plugin.log.1` |
 //! | `plugin-outbox.jsonl` | Postausgang: Events, die noch nicht beim Server sind |
 //! | `plugin-rejected.jsonl` | Events, die der Server dauerhaft abgelehnt hat |
@@ -64,6 +64,15 @@ pub struct Config {
     pub server_url: String,
     pub token: String,
     pub company_id: i64,
+    /// Name des Firmenprofils, so wie das Spiel ihn anzeigt. Nur aus diesem Profil gehen
+    /// Ereignisse und Herzschläge raus. Fehlt er (`plugin.json` von einem älteren Launcher),
+    /// sendet das Plugin nichts.
+    #[serde(default)]
+    pub profile_name: Option<String>,
+    /// Vollständiger Pfad zu `Dokumente\Euro Truck Simulator 2\game.log.txt`. Daraus liest das
+    /// Plugin das aktive Profil. Fehlt er, ist das Profil unbekannt und es geht nichts raus.
+    #[serde(default)]
+    pub game_log: Option<PathBuf>,
 }
 
 // Der Token gehört nie ins Log, auch nicht über Debug.
@@ -73,6 +82,8 @@ impl fmt::Debug for Config {
             .field("server_url", &self.server_url)
             .field("token", &"***")
             .field("company_id", &self.company_id)
+            .field("profile_name", &self.profile_name)
+            .field("game_log", &self.game_log)
             .finish()
     }
 }
@@ -144,6 +155,9 @@ impl Config {
         if self.company_id <= 0 {
             return Err("company_id muss eine positive Zahl sein".into());
         }
+        // Leer zählt wie fehlend. Der Name selbst bleibt, wie er ist, verglichen wird getrimmt.
+        self.profile_name = self.profile_name.take().filter(|n| !n.trim().is_empty());
+        self.game_log = self.game_log.take().filter(|p| !p.as_os_str().is_empty());
         Ok(())
     }
 }

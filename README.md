@@ -25,7 +25,7 @@ SpedHub macht aus Euro Truck Simulator 2 eine echte Firma. Mehrere Fahrer fahren
 
 Noch nicht gebaut sind das Aufräumen des Firmenprofils beim Start (fremde Firmen-Lkw entfernen), der Lkw-Wechsel im laufenden Spiel, ein Overlay im Spiel und die Anbindung an einen Convoy-Server.
 
-Im Spiel bestätigt ist bisher: ETS2 1.62 lädt einen Spielstand, in den `spedhub-save` einen Lkw eingesetzt hat, und der nächste Autosave ist intakt. Vieles andere ist nur ohne Spiel getestet, etwa ob das Spiel einen geschriebenen Kontostand übernimmt, ob das Plugin die erwarteten Werte liefert und ob Setup und Plugin-Installation auf einem echten Windows laufen. Die Liste steht in `docs/architektur.md`, Abschnitt "Offene Tests im Spiel und auf Windows".
+Im Spiel bestätigt ist bisher (ETS2 1.62): Das Spiel lädt einen Spielstand, in den `spedhub-save` einen Lkw eingesetzt hat, der neue Speicherplatz des Launchers erscheint, das Spiel übernimmt den Kontostand aus dem Geldabgleich, und das Plugin lädt und meldet Herzschläge und abgelieferte Aufträge. Anderes ist nur ohne Spiel getestet, etwa die Einheiten im Herzschlag, das Erkennen des Firmenprofils über `game.log.txt` und ob Setup und Plugin-Installation auf einem echten Windows laufen. Die Liste steht in `docs/architektur.md`, Abschnitt "Offene Tests im Spiel und auf Windows".
 
 ## Installation
 

@@ -676,6 +676,8 @@ fn version_geht_im_header_mit() {
         server_url: url,
         token: "t".repeat(64),
         company_id: 1,
+        profile_name: Some(COMPANY_PROFILE.into()),
+        game_log: None,
     };
     let booking = Booking {
         event_id: "v-1".into(),
@@ -694,4 +696,198 @@ fn version_geht_im_header_mit() {
         head.contains(&format!("x-spedhub-version: {}", env!("CARGO_PKG_VERSION"))),
         "{head}"
     );
+}
+
+// ------------------------------------------------------------------- Nur das Firmenprofil
+
+#[test]
+fn ereignis_aus_dem_firmenprofil_geht_raus_und_traegt_das_profil() {
+    let dir = temp_dir("firmenprofil");
+    let server = TestServer::start(&dir.join("server.db"));
+    let url = server.url();
+    let (token, company) = create_company(&url, "Hanna");
+    // Der Launcher hat das Firmenprofil gemeldet: Der Server bucht nur noch daraus
+    report_profile(&url, &token, company, COMPANY_PROFILE);
+    let paths = Paths::new(dir.join("SpedHub"));
+    write_config(&paths, &url, &token, company);
+
+    let agent = Agent::start(&paths, fast()).unwrap();
+    let toll = all_events().remove(3);
+    let first = queued(agent.submit(&toll));
+    wait_until("gebucht", || ledger(&url, &token, company).len() == 1);
+    wait_until("Postausgang leer", || {
+        read_entries(&paths.outbox()).is_empty()
+    });
+
+    // Profilwechsel im laufenden Spiel: nichts kommt an, nichts in den Postausgang
+    select_profile(&paths, "Privat");
+    for e in all_events() {
+        assert_eq!(agent.submit(&e), Submitted::OtherProfile("Privat".into()));
+    }
+    assert!(read_entries(&paths.outbox()).is_empty());
+    // Zurück ins Firmenprofil
+    select_profile(&paths, COMPANY_PROFILE);
+    let second = queued(agent.submit(&toll));
+    wait_until("zwei Buchungen", || {
+        ledger(&url, &token, company).len() == 2
+    });
+    wait_until("Postausgang leer", || {
+        read_entries(&paths.outbox()).is_empty()
+    });
+    agent.shutdown();
+
+    let l = ledger(&url, &token, company);
+    for id in [&first, &second] {
+        let e = l.iter().find(|e| e["event_id"] == id.as_str()).unwrap();
+        assert_eq!(e["profile"], COMPANY_PROFILE, "{e}");
+    }
+    assert!(rejected_events(&url, &token, company).is_empty());
+    let log = read_log(&paths);
+    assert_eq!(log.matches("Ereignis nicht angenommen").count(), 6, "{log}");
+    assert!(!log.contains(&token), "kein Token im Log");
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn bei_unbekanntem_profil_kommt_nichts_an() {
+    let dir = temp_dir("unbekannt");
+    let server = TestServer::start(&dir.join("server.db"));
+    let url = server.url();
+    let (token, company) = create_company(&url, "Ida");
+    let paths = Paths::new(dir.join("SpedHub"));
+    write_config(&paths, &url, &token, company);
+    // Das Spiel hat noch kein Profil gewählt
+    fs::write(game_log(&paths), "00:00:00.000 : log created\n").unwrap();
+
+    let agent = Agent::start(&paths, fast()).unwrap();
+    for e in all_events() {
+        assert_eq!(agent.submit(&e), Submitted::UnknownProfile);
+    }
+    driving(&agent, "SPED 001");
+    wait_until("drei Takte ohne Herzschlag", || {
+        agent.heartbeat_stats().blocked >= 3
+    });
+    assert_eq!(agent.heartbeat_stats().attempts, 0);
+    agent.shutdown();
+    assert!(ledger(&url, &token, company).is_empty());
+    assert!(!paths.outbox().exists(), "kein Postausgang angelegt");
+    assert!(member(&url, &token, company)["last_seen"].is_null());
+    assert!(read_log(&paths).contains("Aktives Profil unbekannt"));
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn herzschlag_nur_aus_dem_firmenprofil() {
+    let dir = temp_dir("herzschlag-profil");
+    let server = TestServer::start(&dir.join("server.db"));
+    let url = server.url();
+    let (token, company) = create_company(&url, "Jana");
+    report_profile(&url, &token, company, COMPANY_PROFILE);
+    let paths = Paths::new(dir.join("SpedHub"));
+    write_config(&paths, &url, &token, company);
+    select_profile(&paths, "Privat");
+
+    let agent = Agent::start(&paths, fast()).unwrap();
+    driving(&agent, "SPED 001");
+    wait_until("drei verworfene Takte", || {
+        agent.heartbeat_stats().blocked >= 3
+    });
+    assert_eq!(agent.heartbeat_stats().attempts, 0);
+    assert!(member(&url, &token, company)["last_seen"].is_null());
+
+    // Ins Firmenprofil gewechselt: Herzschläge kommen an, mit dem Profil
+    select_profile(&paths, COMPANY_PROFILE);
+    wait_until("online", || member(&url, &token, company)["online"] == true);
+    assert!(agent.heartbeat_stats().delivered >= 1);
+    agent.shutdown();
+    let log = read_log(&paths);
+    assert!(log.contains("Aktives Profil 'Privat' ist nicht das Firmenprofil"));
+    assert!(log.contains("Aktives Profil 'Nordfracht' ist das Firmenprofil"));
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn herzschlag_den_der_server_verwirft_steht_im_log() {
+    let dir = temp_dir("herzschlag-verworfen");
+    let server = TestServer::start(&dir.join("server.db"));
+    let url = server.url();
+    let (token, company) = create_company(&url, "Kai");
+    // Der Server kennt ein anderes Firmenprofil als plugin.json, etwa weil der Launcher das
+    // neue Profil noch nicht melden konnte
+    report_profile(&url, &token, company, "Anderes Profil");
+    let paths = Paths::new(dir.join("SpedHub"));
+    write_config(&paths, &url, &token, company);
+    let agent = Agent::start(&paths, fast()).unwrap();
+    driving(&agent, "SPED 001");
+    wait_until("drei Versuche", || agent.heartbeat_stats().attempts >= 3);
+    assert_eq!(agent.heartbeat_stats().delivered, 0);
+    agent.shutdown();
+    assert!(member(&url, &token, company)["last_seen"].is_null());
+    let log = read_log(&paths);
+    assert_eq!(
+        log.matches("Herzschlag nicht angekommen: Herzschlag verworfen")
+            .count(),
+        1,
+        "{log}"
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn vom_server_wegen_profil_abgelehntes_ereignis_blockiert_den_postausgang_nicht() {
+    let dir = temp_dir("abgelehnt-profil");
+    let server = TestServer::start(&dir.join("server.db"));
+    let url = server.url();
+    let (token, company) = create_company(&url, "Lea");
+    report_profile(&url, &token, company, COMPANY_PROFILE);
+    let paths = Paths::new(dir.join("SpedHub"));
+    write_config(&paths, &url, &token, company);
+
+    // Im Postausgang liegen von einem älteren Plugin zwei Events ohne Profil, dazwischen eins
+    // aus dem Firmenprofil
+    let entry = |id: &str, profile: Option<&str>| Entry {
+        company_id: company,
+        booking: Booking {
+            event_id: id.into(),
+            kind: "tollgate".into(),
+            amount: 40,
+            note: "Maut".into(),
+            profile: profile.map(str::to_string),
+            ..Default::default()
+        },
+    };
+    let lines: Vec<String> = [
+        entry("alt-1", None),
+        entry("neu-1", Some(COMPANY_PROFILE)),
+        entry("alt-2", None),
+    ]
+    .iter()
+    .map(|e| serde_json::to_string(e).unwrap())
+    .collect();
+    fs::write(paths.outbox(), lines.join("\n") + "\n").unwrap();
+
+    let agent = Agent::start(&paths, fast()).unwrap();
+    let id = queued(agent.submit(&all_events()[3]));
+    wait_until("Postausgang leer", || {
+        read_entries(&paths.outbox()).is_empty()
+    });
+    agent.shutdown();
+
+    // Gebucht sind nur die aus dem Firmenprofil, die anderen liegen beim Server im Protokoll
+    // und beim Plugin in den Ablehnungen, ohne erneut gesendet zu werden
+    let l = ledger(&url, &token, company);
+    let mut booked: Vec<&str> = l.iter().map(|e| e["event_id"].as_str().unwrap()).collect();
+    booked.sort();
+    let mut want = vec!["neu-1", id.as_str()];
+    want.sort();
+    assert_eq!(booked, want);
+    let rejected = rejected_events(&url, &token, company);
+    assert_eq!(rejected.len(), 2);
+    let file = fs::read_to_string(paths.rejected()).unwrap();
+    assert!(file.contains("alt-1") && file.contains("alt-2"), "{file}");
+    assert!(file.contains("kein Profil"), "{file}");
+    let log = read_log(&paths);
+    assert_eq!(log.matches("Server lehnt alt-1 ab").count(), 1, "{log}");
+    assert!(!log.contains("bleiben im Postausgang"), "{log}");
+    let _ = fs::remove_dir_all(dir);
 }

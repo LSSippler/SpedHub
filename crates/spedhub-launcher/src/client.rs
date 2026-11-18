@@ -94,6 +94,10 @@ pub struct Member {
     pub stage: Option<i64>,
     #[serde(default)]
     pub cents_per_km: i64,
+    /// Das gemeldete Firmenprofil. Der Server zeigt es dem Chef bei allen, dem Fahrer nur bei
+    /// sich selbst. Ältere Server liefern es nicht.
+    #[serde(default)]
+    pub profile_name: Option<String>,
 }
 
 /// Ein Lkw im Fuhrpark, wie die Liste ihn zeigt.
@@ -523,6 +527,16 @@ impl Client {
         Ok(())
     }
 
+    /// Das Firmenprofil beim Server melden. Ab dann bucht der Server für diesen Fahrer nur
+    /// noch Ereignisse aus diesem Profil. `None` löscht es.
+    pub fn set_profile(&self, company_id: i64, profile_name: Option<&str>) -> Result<()> {
+        let _: Value = self.put(
+            &format!("/api/companies/{company_id}/profile"),
+            &json!({ "profile_name": profile_name }),
+        )?;
+        Ok(())
+    }
+
     /// Betriebskosten-Buchungen des Chefs, die noch mit keinem Lkw verknüpft sind, neueste
     /// zuerst. Nur für den Chef.
     pub fn purchase_candidates(&self, company_id: i64) -> Result<Vec<PurchaseCandidate>> {
@@ -555,6 +569,18 @@ impl Client {
             req = req.header("Authorization", &format!("Bearer {t}"));
         }
         read(req.call())
+    }
+
+    fn put<T: DeserializeOwned>(&self, path: &str, body: &impl Serialize) -> Result<T> {
+        self.check_url()?;
+        let mut req = self
+            .agent
+            .put(&format!("{}{path}", self.base))
+            .header(crate::version::HEADER, crate::version::VERSION);
+        if let Some(t) = &self.token {
+            req = req.header("Authorization", &format!("Bearer {t}"));
+        }
+        read(req.send_json(body))
     }
 
     fn post<T: DeserializeOwned>(&self, path: &str, body: &impl Serialize) -> Result<T> {

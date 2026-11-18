@@ -20,7 +20,7 @@ Nicht Teil des Projekts: ein eigener Multiplayer, Eingriffe in den Arbeitsspeich
 2. Ins Spiel geschrieben wird nur über den Spielstand.
 3. Jeder Schreibvorgang: Backup vorher, Prüfung nachher, Rollback bei Fehler.
 4. Versionssperre: Geschrieben wird nur in Spielstände von Spielversionen, die getestet sind. SCS hat das Schema mit 1.60 ohne Ankündigung geändert.
-5. Jeder Fahrer hat ein eigenes Firmenprofil, das der Launcher verwaltet. Steam Cloud ist dafür aus.
+5. Jeder Fahrer hat ein eigenes Firmenprofil, das der Launcher verwaltet. Steam Cloud ist dafür aus. Für die Firma zählt nur, was in diesem Profil passiert.
 
 ## Bausteine
 
@@ -28,9 +28,9 @@ Nicht Teil des Projekts: ein eigener Multiplayer, Eingriffe in den Arbeitsspeich
 |---|---|---|
 | Server (`server/`) | Accounts, Firma, Kasse, Fuhrpark, Leihen, tägliche Lohnabrechnung, Geldabgleich mit spät gemeldeten Ereignissen, Herzschlag und Online-Status, Schaden und Werkstatt, Anschaffungen, Verkauf und Ausmusterung | läuft |
 | Dashboard (`server/web/`) | Weboberfläche für Chef und Fahrer | läuft |
-| Save-Bibliothek (`crates/spedhub-save`) | Spielstand lesen und schreiben, Lkw exportieren, wiedererkennen, einsetzen, entfernen, Kontostand setzen | erste Fassung. Einsetzen in einen Spielstand ohne eigenen Lkw im Spiel bestätigt (1.62), Kontostand, Einsetzen neben eigene Lkw und Entfernen noch nicht |
+| Save-Bibliothek (`crates/spedhub-save`) | Spielstand lesen und schreiben, Lkw exportieren, wiedererkennen, einsetzen, entfernen, Kontostand setzen | erste Fassung. Einsetzen in einen Spielstand ohne eigenen Lkw, neuer Speicherplatz und Kontostand im Spiel bestätigt (1.62), Einsetzen neben eigene Lkw und Entfernen noch nicht |
 | Launcher (`crates/spedhub-launcher`) | Anmelden, Abgleich, Spielstand vorbereiten, Spiel starten, Abgleich beim Beenden, Plugin installieren, Updates | erste Fassung: Anmelden, Passwort ändern, Fuhrpark mit Schaden und Werkstatt, Ausleihen und Zurückgeben, Lkw übernehmen und Kauf verknüpfen, Lkw in den Spielstand schreiben, Geldabgleich, `plugin.json`, Plugin installieren, Updates, Spiel starten. Aufräumen des Profils und Abgleich beim Beenden: offen |
-| Spiel-Plugin (`crates/spedhub-plugin`) | Telemetrie-Ereignisse und Herzschlag melden, Quicksave und Quickload auslösen (Telemetry SDK und Input SDK) | Gameplay-Events und Herzschlag: erste Fassung, im Spiel noch nicht geprüft. Quicksave und Quickload: offen |
+| Spiel-Plugin (`crates/spedhub-plugin`) | Telemetrie-Ereignisse und Herzschlag melden, Quicksave und Quickload auslösen (Telemetry SDK und Input SDK) | Gameplay-Events und Herzschlag: erste Fassung, im Spiel bestätigt (DLL lädt, Herzschlag kommt an, `job.delivered` vollständig). Meldet nur aus dem Firmenprofil, das Erkennen über `game.log.txt` ist im Spiel noch nicht geprüft. Quicksave und Quickload: offen |
 | Setup (`installer/`, `.github/workflows/release.yml`) | Launcher, Plugin und optional Server installieren, Plugin ins Spiel kopieren, Releases mit Prüfsummen | erste Fassung. Die CI baut das Setup auf dem Windows-Runner, installiert ist es auf einem echten Windows noch nicht |
 | Overlay | Kasse und Fuhrpark im Spiel | offen |
 | Convoy Dedicated Server | Die gemeinsame Session, offizieller Server von SCS | offen |
@@ -43,7 +43,7 @@ Spiel (ETS2)  <->  Plugin  <->  Launcher  <->  Server
 Convoy Dedicated Server (nur gemeinsames Fahren, kennt weder Geld noch Fuhrpark)
 ```
 
-In der ersten Fassung schickt das Plugin Gameplay-Events direkt an den Server, über `POST /api/companies/{id}/events`, und alle 10 Sekunden einen Herzschlag über `POST /api/companies/{id}/heartbeat`. Server, Token und Firma liest es aus `%LOCALAPPDATA%\SpedHub\plugin.json`, die der Launcher schreibt, sobald eine Firma gewählt ist. Ist der Server nicht erreichbar, sammelt das Plugin die Events in einem Postausgang und schickt sie nach. Details in `crates/spedhub-plugin/README.md`.
+In der ersten Fassung schickt das Plugin Gameplay-Events direkt an den Server, über `POST /api/companies/{id}/events`, und alle 10 Sekunden einen Herzschlag über `POST /api/companies/{id}/heartbeat`. Server, Token, Firma, Firmenprofil und den Pfad zu `game.log.txt` liest es aus `%LOCALAPPDATA%\SpedHub\plugin.json`, die der Launcher schreibt, sobald eine Firma gewählt ist, und neu bei jedem Wechsel von Firma oder Firmenprofil. Gemeldet wird nur aus dem Firmenprofil, siehe unten. Ist der Server nicht erreichbar, sammelt das Plugin die Events in einem Postausgang und schickt sie nach. Details in `crates/spedhub-plugin/README.md`.
 
 ## Abläufe
 
@@ -79,6 +79,16 @@ Das Plugin schickt alle 10 Sekunden einen Herzschlag an `POST /api/companies/{id
 - Fährt der Fahrer seinen geliehenen Firmen-Lkw, wird der Herzschlag zum letzten bekannten Zustand des Lkw (`trucks.last_*`). Nur gemeldete Werte überschreiben den Zustand vom Ausleihen, ein Kilometerstand unter dem vom Ausleihen zählt nicht.
 - Fährt er einen Firmen-Lkw, den er nicht geliehen hat, sieht der Chef eine Markierung. Zurückgeschrieben wird nichts, der Spielstand bleibt Sache des Launchers.
 - Im Fuhrpark sehen alle, ob ein verliehener Lkw gerade gefahren wird.
+
+### Nur das Firmenprofil zählt
+
+Ein Fahrer kann in ETS2 mehrere Profile haben, das Plugin läuft in jedem. Beim zweiten Test im Spiel kamen 68 Ereignisse aus einem privaten Profil in die Firmenkasse und aufs Lohnkonto, und der Geldabgleich des Firmenprofils hat daraus falsche Betriebskosten gebucht. Deshalb zählt nur, was im Firmenprofil passiert, an drei Stellen:
+
+1. **Launcher:** schreibt den angezeigten Namen des gewählten Firmenprofils (`profile_name`) und den Pfad zu `Dokumente\Euro Truck Simulator 2\game.log.txt` (`game_log`) in `plugin.json` und meldet das Profil dem Server (`PUT /api/companies/{id}/profile`, gespeichert je Mitgliedschaft).
+2. **Plugin:** liest aus `game.log.txt` die letzte Zeile `New profile selected: '<Name>'`, beim Annehmen jedes Ereignisses und vor jedem Herzschlag, immer nur die neuen Bytes. Nur aus dem Firmenprofil nimmt es Ereignisse an und schickt Herzschläge, beide tragen dann `profile`. Bei einem anderen oder unbekannten Profil steht nur etwas im Log, der Postausgang enthält nur Ereignisse aus dem Firmenprofil. Das Telemetry SDK nennt das Profil nicht, deshalb der Umweg über das Log. Gelesen wird nur die Datei, kein Eingriff ins Spiel.
+3. **Server:** Ist ein Firmenprofil gemeldet, bucht er nur Ereignisse mit genau diesem `profile`. Andere und solche ohne lehnt er mit 422 ab, legt sie in `rejected_events` und ins Log, der Chef sieht sie im Büro. Herzschläge aus anderen Profilen verwirft er, ohne Fehlerstatus. Ohne gemeldetes Profil (ältere Launcher) bucht er wie bisher und merkt sich das Profil nur an der Buchung.
+
+Abgelehnte Ereignisse zählen auch im Geldabgleich nicht. Verglichen wird nach dem Trimmen genau, mit Groß- und Kleinschreibung. Details in `crates/spedhub-plugin/README.md` und `server/README.md`, jeweils "Nur das Firmenprofil".
 
 ### Anmeldung
 
@@ -204,20 +214,19 @@ So liegt ein Firmen-Lkw auf dem Server (`trucks.package` und `trucks.state`):
 
 ## Offene Tests im Spiel und auf Windows
 
-Bestätigt ist mit 1.62: Ein mit `spedhub-save` eingesetzter Lkw lädt als eigener, aktiver Lkw in der Heimatgarage, mit Zubehör, Kilometern, Verschleiß und Tank, und der nächste Autosave ist intakt. Das Spiel vergibt dabei alle `_nameless`-Namen neu und kann das Kennzeichen ersetzen. Details in `docs/save-format.md`, Abschnitt "Im Spiel bestätigt". Offen ist:
+Bestätigt ist mit 1.62: Ein mit `spedhub-save` eingesetzter Lkw lädt als eigener, aktiver Lkw in der Heimatgarage, mit Zubehör, Kilometern, Verschleiß und Tank, und der nächste Autosave ist intakt. Das Spiel vergibt dabei alle `_nameless`-Namen neu und kann das Kennzeichen ersetzen, auch durch eins, das ein anderer Firmen-Lkw trägt. Der zweite Test hat außerdem bestätigt: Ein vom Launcher angelegter Speicherplatz erscheint im Spiel und lädt, das Spiel übernimmt den beim Geldabgleich geschriebenen Kontostand, mit einem frischen Profil gibt es kein `Economy reset - company mismatch` (der Reset im ersten Test lag am alten Spielstand), und das Plugin lädt, Herzschläge kommen an und `job.delivered` kommt mit Fracht, Städten, Strecke und Zeitpunkt. Details in `docs/save-format.md`, Abschnitt "Im Spiel bestätigt". Offen ist:
 
 | Test | Frage |
 |---|---|
-| Kennzeichen | Warum ersetzt das Spiel das Kennzeichen, bei jedem Laden oder nur einmal? Woher kommt `Economy reset - company mismatch`? |
+| Kennzeichen | Warum ersetzt das Spiel das Kennzeichen, bei jedem Laden oder nur einmal? |
 | Einsetzen neben eigene Lkw | Lädt ein Spielstand, in dem der bisherige eigene Lkw in einen freien Stellplatz gezogen ist? |
-| Neuer Speicherplatz | Erscheint ein vom Launcher angelegter Speicherplatz im Spiel? |
 | Save-Cache | Übernimmt das laufende Spiel einen geänderten Spielstand zuverlässig, auch beim zweiten Mal? Seit 1.50 gibt es einen Datei-Cache, der alte Versionen liefern kann |
-| Kontostand | Übernimmt das Spiel den beim Geldabgleich geschriebenen Kontostand, auch mit dem Rest eines Anschaffungsbudgets beim Chef? |
+| Kontostand mit Budget | Übernimmt das Spiel den beim Geldabgleich geschriebenen Kontostand auch mit dem Rest eines Anschaffungsbudgets beim Chef? Ohne Budget ist es bestätigt |
 | Level | Passt das aus `info_players_experience` berechnete Level zu dem, das das Spiel anzeigt? |
 | Reparierter Lkw | Nimmt das Spiel einen nach der Werkstatt mit reparierbarem Verschleiß 0 eingesetzten Lkw so an? |
 | Lkw entfernen | Lädt ein Spielstand, dessen aktiver Lkw ersatzlos entfernt wurde? |
-| Plugin und Events | Lädt das Spiel die DLL, kommen die Gameplay-Events mit den erwarteten Beträgen an? |
-| Herzschlag | Liefern die Kanäle die erwarteten Einheiten (Kilometer, Verschleiß 0 bis 1, Liter, Meter je Sekunde)? Welches Format hat `license.plate` genau? Ist die Job-Konfiguration bei `job.delivered` noch gefüllt? |
+| Herzschlag | Liefern die Kanäle die erwarteten Einheiten (Kilometer, Verschleiß 0 bis 1, Liter, Meter je Sekunde)? Welches Format hat `license.plate` genau? |
+| Firmenprofil im Log | Heißt die Zeile in `game.log.txt` genau `New profile selected: '<Name>'`, und steht der Name so drin wie im Ordnernamen (Groß- und Kleinschreibung)? Schreibt das Spiel die Datei während des Spiels laufend (Flush), sodass ein Profilwechsel sofort zu lesen ist? Erkennt das Plugin einen Profilwechsel im laufenden Spiel? Lässt das Spiel die Datei zum Lesen offen, während es schreibt? |
 | Plugin-Installation | Findet der Launcher ETS2 auf einem echten Windows über Registry und `libraryfolders.vdf`? Klappen Neustart über UAC, Ersetzen und Entfernen bei laufendem Spiel? |
 | Setup | Installation, Deinstallation und Update über den Launcher auf einem echten Windows, auch mit einem Standardbenutzer, der im UAC-Dialog einen Admin angibt |
 | Laden im Convoy | Bleibt die Verbindung beim Laden stehen? |

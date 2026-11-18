@@ -9,6 +9,7 @@ pub mod error;
 pub mod levels;
 pub mod payroll;
 pub mod presence;
+pub mod profiles;
 pub mod purchases;
 pub mod reconcile;
 pub mod version;

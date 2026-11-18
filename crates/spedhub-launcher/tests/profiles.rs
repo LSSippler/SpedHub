@@ -3,7 +3,8 @@ mod common;
 
 use common::*;
 use spedhub_launcher::profiles::{
-    decode_hex_name, encode_hex_name, find_profiles, list_slots, newest_slot, next_free_slot_id,
+    decode_hex_name, encode_hex_name, ets2_dir_of, find_profiles, game_log, list_slots,
+    newest_slot, next_free_slot_id, profile_name_of,
 };
 
 #[test]
@@ -83,4 +84,22 @@ fn speicherplaetze_und_der_neueste() {
     // Nächster freier Platz: 1 ist belegt, quicksave zählt nicht
     assert_eq!(next_free_slot_id(&docs.nordfracht), "2");
     assert_eq!(next_free_slot_id(&docs.mueller), "1");
+}
+
+#[test]
+fn name_und_log_zum_firmenprofil() {
+    let docs = documents("profilname");
+    // Derselbe Name wie in der Liste der Profile
+    for p in find_profiles(&docs.ets2) {
+        assert_eq!(profile_name_of(&p.dir).as_deref(), Some(p.name.as_str()));
+    }
+    assert_eq!(
+        profile_name_of(&docs.mueller).as_deref(),
+        Some("Müller Logistik")
+    );
+    assert_eq!(profile_name_of(&docs.steam).as_deref(), Some("Alex Steam"));
+    // Das Log liegt im Dokumente-Ordner des Spiels, neben profiles und steam_profiles
+    assert_eq!(ets2_dir_of(&docs.nordfracht), Some(docs.ets2.as_path()));
+    assert_eq!(ets2_dir_of(&docs.steam), Some(docs.ets2.as_path()));
+    assert_eq!(game_log(&docs.ets2), docs.ets2.join("game.log.txt"));
 }

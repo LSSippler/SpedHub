@@ -6,6 +6,7 @@ use crate::{
     levels::{WageLevel, standing, wage_levels},
     payroll,
     presence::{self, HeartbeatReq},
+    profiles,
     purchases::{self, Budget},
     reconcile::{client_time, correct_late, kind_label, last_point, plausible_time, window_sum},
     version,
@@ -22,7 +23,7 @@ use axum::{
     routing::{get, post, put},
 };
 use rusqlite::{Connection, OptionalExtension, params};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -73,6 +74,11 @@ pub fn router_with(db: Db, clock: Clock) -> Router {
         )
         .route("/api/companies/{id}/wage-levels", put(set_wage_levels))
         .route("/api/companies/{id}/events", post(post_event))
+        .route("/api/companies/{id}/profile", put(set_profile))
+        .route(
+            "/api/companies/{id}/rejected-events",
+            get(list_rejected_events),
+        )
         .route("/api/companies/{id}/heartbeat", post(heartbeat))
         .route("/api/companies/{id}/ledger", get(get_ledger))
         .route(
@@ -575,16 +581,18 @@ async fn get_company(
         )?;
     let levels = wage_levels(&conn, id)?;
     let ds = damage_settings(&conn, id)?;
-    let people: Vec<(i64, String, String)> = conn
+    type Person = (i64, String, String, Option<String>);
+    let people: Vec<Person> = conn
         .prepare(
-            "SELECT u.id, u.name, m.role FROM memberships m JOIN users u ON u.id = m.user_id
+            "SELECT u.id, u.name, m.role, m.profile_name FROM memberships m
+             JOIN users u ON u.id = m.user_id
              WHERE m.company_id = ?1 ORDER BY m.role, u.name",
         )?
-        .query_map([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .query_map([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
         .collect::<Result<_, _>>()?;
     let seen = presence::all(&conn, id)?;
     let mut members = Vec::new();
-    for (uid, uname, urole) in people {
+    for (uid, uname, urole, profile_name) in people {
         let s = standing(&conn, &levels, id, uid)?;
         let mut m = json!({
             "user_id": uid, "name": uname, "role": urole,
@@ -594,6 +602,10 @@ async fn get_company(
             "stage": s.stage.map(|w| w.position), "cents_per_km": s.cents_per_km(),
             "online": false, "last_seen": Value::Null
         });
+        // Das gemeldete Firmenprofil: der Chef sieht alle, ein Fahrer nur seins
+        if role == "chef" || uid == user.id {
+            m["profile_name"] = json!(profile_name);
+        }
         if let Some(p) = seen.get(&uid) {
             m["last_seen"] = json!(p.last_seen);
             if p.online(now) {
@@ -1521,25 +1533,36 @@ async fn heartbeat(
     State(clock): State<Clock>,
     user: AuthUser,
     Path(company_id): Path<i64>,
-    Json(b): Json<HeartbeatReq>,
+    Json(mut b): Json<HeartbeatReq>,
 ) -> ApiResult<Json<Value>> {
+    let profile =
+        profiles::clean_name(b.profile.take().as_deref()).map_err(|e| ApiError::bad(&e))?;
     let hb = b.validate().map_err(|e| ApiError::bad(&e))?;
     let now = clock.now();
     let mut conn = db.lock().unwrap();
     let tx = conn.transaction()?;
     role_in(&tx, company_id, user.id)?;
+    // Aus einem anderen Profil als dem gemeldeten Firmenprofil: verwerfen, ohne Fehler. Ein
+    // Herzschlag wird nie wiederholt, und das Plugin schreibt den Hinweis ins Log.
+    let reported = profiles::reported(&tx, company_id, user.id)?;
+    if let Some(m) = profiles::mismatch(reported.as_deref(), profile.as_deref()) {
+        return Ok(Json(json!({
+            "ok": true, "recorded": false, "note": format!("Herzschlag verworfen. {}", m.message),
+            "last_seen": Value::Null, "leased_truck_id": Value::Null
+        })));
+    }
     let rec = presence::record(&tx, company_id, user.id, &hb, now)?;
     tx.commit()?;
     // Nur der eigene geliehene Lkw kommt zurück. Einen fremden sieht nur der Chef.
     Ok(Json(json!({
-        "ok": true, "last_seen": now,
+        "ok": true, "recorded": true, "last_seen": now,
         "leased_truck_id": rec.truck_id.filter(|_| rec.own_lease)
     })))
 }
 
 // ---------------------------------------------------------------- Kasse
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct EventReq {
     /// Vom Client vergeben und eindeutig. Verhindert doppelte Buchungen.
     event_id: String,
@@ -1564,6 +1587,10 @@ struct EventReq {
     source_city: Option<String>,
     #[serde(default)]
     target_city: Option<String>,
+    /// Name des ETS2-Profils, aus dem das Plugin das Ereignis meldet. Ist für den Fahrer ein
+    /// Firmenprofil gemeldet, muss es genau dieses sein.
+    #[serde(default)]
+    profile: Option<String>,
 }
 
 /// Ereignis aus dem Spiel buchen. Die Regeln:
@@ -1579,6 +1606,12 @@ struct EventReq {
 /// Ist das Ereignis laut Client vor einem Abgleich passiert, der es nicht kannte, steckte sein Spielbetrag
 /// schon im damaligen Kontostand. Dann wird dieser Abgleich korrigiert (siehe
 /// [`correct_late`]), und die Antwort sagt das unter `late`.
+///
+/// Hat der Fahrer ein Firmenprofil gemeldet und kommt das Ereignis aus einem anderen oder nennt
+/// es keins, wird nichts gebucht: Antwort 422, das Ereignis landet in `rejected_events` und im
+/// Log des Servers. 422 statt 409, weil das Plugin 422 als endgültig behandelt und das Ereignis
+/// beiseitelegt, während es bei 409 den Postausgang immer wieder senden und dahinter stauen
+/// würde. Siehe [`crate::profiles`].
 async fn post_event(
     State(db): State<Db>,
     State(clock): State<Clock>,
@@ -1593,6 +1626,7 @@ async fn post_event(
     if b.amount < 0 || b.amount > 1_000_000_000 {
         return Err(ApiError::bad("Der Betrag darf nicht negativ sein"));
     }
+    let profile = profiles::clean_name(b.profile.as_deref()).map_err(|e| ApiError::bad(&e))?;
     let distance = match b.distance_km {
         None => None,
         Some(d) if d.is_finite() && (0.0..=100_000.0).contains(&d) => Some(d.round() as i64),
@@ -1616,6 +1650,36 @@ async fn post_event(
             "duplicate": true, "booked": [],
             "balance": company_balance(&tx, company_id)?, "wallet": wallet(&tx, company_id, user.id)?
         })));
+    }
+
+    // Nur aus dem gemeldeten Firmenprofil
+    let reported = profiles::reported(&tx, company_id, user.id)?;
+    if let Some(m) = profiles::mismatch(reported.as_deref(), profile.as_deref()) {
+        let payload = serde_json::to_value(&b).unwrap_or(Value::Null);
+        let reason = format!("Ereignis {}", m.reason);
+        profiles::record_rejected(
+            &tx,
+            &profiles::Rejected {
+                company_id,
+                user_id: user.id,
+                event_id,
+                kind: &b.kind,
+                amount: b.amount,
+                profile: profile.as_deref(),
+                reason: &reason,
+                payload: &payload,
+                now: clock.now(),
+            },
+        )?;
+        tx.commit()?;
+        eprintln!(
+            "Abgelehnt: Firma {company_id}, {}: {} {} Euro ({event_id}), {reason}",
+            user.name, b.kind, b.amount
+        );
+        return Err(ApiError(
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+            format!("Ereignis nicht gebucht. {}", m.message),
+        ));
     }
 
     // (Konto, Buchungsart, gebuchter Betrag, Betrag im Spiel), beide mit Vorzeichen
@@ -1664,8 +1728,9 @@ async fn post_event(
     };
     tx.execute(
         "INSERT INTO ledger (company_id, account, user_id, kind, amount, event_id, note, created_at,
-                             game_amount, distance_km, occurred_at, cargo, source_city, target_city)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                             game_amount, distance_km, occurred_at, cargo, source_city, target_city,
+                             profile)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         params![
             company_id,
             account,
@@ -1680,7 +1745,8 @@ async fn post_event(
             reported_at,
             cargo,
             source_city,
-            target_city
+            target_city,
+            profile
         ],
     )?;
     let balance = company_balance(&tx, company_id)?;
@@ -1699,6 +1765,47 @@ async fn post_event(
         res["late"] = late;
     }
     Ok(Json(res))
+}
+
+#[derive(Deserialize)]
+struct ProfileReq {
+    /// Name des Firmenprofils, so wie das Spiel ihn anzeigt. `null` oder leer löscht ihn.
+    #[serde(default)]
+    profile_name: Option<String>,
+}
+
+/// Der Launcher meldet das Firmenprofil des angemeldeten Fahrers. Ab dann bucht der Server nur
+/// noch Ereignisse aus diesem Profil, siehe [`crate::profiles`].
+async fn set_profile(
+    State(db): State<Db>,
+    user: AuthUser,
+    Path(company_id): Path<i64>,
+    Json(b): Json<ProfileReq>,
+) -> ApiResult<Json<Value>> {
+    let name = profiles::clean_name(b.profile_name.as_deref()).map_err(|e| ApiError::bad(&e))?;
+    let conn = db.lock().unwrap();
+    role_in(&conn, company_id, user.id)?;
+    profiles::report(&conn, company_id, user.id, name.as_deref())?;
+    Ok(Json(json!({ "profile_name": name })))
+}
+
+#[derive(Deserialize)]
+struct RejectedQuery {
+    limit: Option<i64>,
+}
+
+/// Ereignisse, die der Server wegen des Profils nicht gebucht hat. Nur der Chef.
+async fn list_rejected_events(
+    State(db): State<Db>,
+    user: AuthUser,
+    Path(company_id): Path<i64>,
+    Query(q): Query<RejectedQuery>,
+) -> ApiResult<Json<Value>> {
+    let limit = q.limit.unwrap_or(100).clamp(1, 500);
+    let conn = db.lock().unwrap();
+    require_chef(&conn, company_id, user.id)?;
+    let entries = profiles::list_rejected(&conn, company_id, limit)?;
+    Ok(Json(json!({ "entries": entries })))
 }
 
 #[derive(Deserialize)]
@@ -1766,7 +1873,7 @@ async fn get_ledger(
     let mut stmt = conn.prepare(
         "SELECT l.id, l.account, u.name, l.kind, l.amount, l.note, l.created_at, l.user_id,
                 l.game_amount, l.distance_km, l.payroll_id, l.occurred_at, l.event_id,
-                l.cargo, l.source_city, l.target_city, pl.truck_id, tr.plate
+                l.cargo, l.source_city, l.target_city, pl.truck_id, tr.plate, l.profile
          FROM ledger l LEFT JOIN users u ON u.id = l.user_id
          LEFT JOIN purchase_links pl ON pl.ledger_id = l.id
          LEFT JOIN trucks tr ON tr.id = pl.truck_id
@@ -1789,7 +1896,9 @@ async fn get_ledger(
                 "target_city": r.get::<_, Option<String>>(15)?,
                 // Als Lkw-Kauf verknüpft: der Lkw und sein aktuelles Kennzeichen
                 "truck_id": r.get::<_, Option<i64>>(16)?,
-                "truck_plate": r.get::<_, Option<String>>(17)?
+                "truck_plate": r.get::<_, Option<String>>(17)?,
+                // Aus diesem ETS2-Profil hat das Plugin das Ereignis gemeldet
+                "profile": r.get::<_, Option<String>>(18)?
             }))
         })?
         .collect::<Result<Vec<_>, _>>()?;

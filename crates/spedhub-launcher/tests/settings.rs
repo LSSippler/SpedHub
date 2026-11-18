@@ -2,6 +2,7 @@
 mod common;
 
 use common::*;
+use spedhub_launcher::profiles::{game_log, profile_name_of};
 use spedhub_launcher::settings::{
     AppPaths, DEFAULT_SERVER, Settings, remove_plugin_config, write_plugin_config,
 };
@@ -59,24 +60,81 @@ fn einstellungen_mit_token_speichern_und_laden() {
 fn plugin_json_passt_zum_plugin() {
     let dir = temp_dir("plugin");
     let paths = AppPaths::new(&dir);
-    write_plugin_config(&paths, " http://127.0.0.1:8787/ ", "abc123", 7).unwrap();
+    let docs = documents("plugin-docs");
+    let log = game_log(&docs.ets2);
+    let name = profile_name_of(&docs.nordfracht).unwrap();
+    assert_eq!(name, "Nordfracht");
+    write_plugin_config(
+        &paths,
+        " http://127.0.0.1:8787/ ",
+        "abc123",
+        7,
+        Some(&name),
+        Some(&log),
+    )
+    .unwrap();
 
     // Genau so liest das Plugin die Datei
     let config = spedhub_plugin::Config::load(&paths.plugin_config()).unwrap();
     assert_eq!(config.server_url, "http://127.0.0.1:8787");
     assert_eq!(config.token, "abc123");
     assert_eq!(config.company_id, 7);
+    assert_eq!(config.profile_name.as_deref(), Some("Nordfracht"));
+    assert_eq!(config.game_log.as_deref(), Some(log.as_path()));
     let plugin_paths = spedhub_plugin::Paths::new(&dir);
     assert_eq!(plugin_paths.config(), paths.plugin_config(), "derselbe Ort");
 
+    // Das Plugin erkennt mit dieser Datei das Firmenprofil, wenn das Spiel es wählt
+    fs::write(&log, "00:00:12.345 : New profile selected: 'Nordfracht'\n").unwrap();
+    let mut gate = spedhub_plugin::ProfileGate::new(
+        config.profile_name.as_deref(),
+        config.game_log.as_deref(),
+    );
+    assert_eq!(
+        gate.check().0,
+        spedhub_plugin::ProfileState::Company("Nordfracht".into())
+    );
+
+    // Anderes Firmenprofil (Name mit Umlaut und Leerzeichen): Datei wird ersetzt
+    let other = profile_name_of(&docs.mueller).unwrap();
+    write_plugin_config(
+        &paths,
+        "http://127.0.0.1:8787",
+        "abc123",
+        7,
+        Some(&other),
+        Some(&log),
+    )
+    .unwrap();
+    let config = spedhub_plugin::Config::load(&paths.plugin_config()).unwrap();
+    assert_eq!(config.profile_name.as_deref(), Some("Müller Logistik"));
+
     // Andere Firma: Datei wird ersetzt
-    write_plugin_config(&paths, "http://127.0.0.1:8787", "abc123", 9).unwrap();
+    write_plugin_config(
+        &paths,
+        "http://127.0.0.1:8787",
+        "abc123",
+        9,
+        Some(&name),
+        Some(&log),
+    )
+    .unwrap();
     assert_eq!(
         spedhub_plugin::Config::load(&paths.plugin_config())
             .unwrap()
             .company_id,
         9
     );
+
+    // Kein Firmenprofil gewählt: die Felder fehlen, das Plugin meldet dann nichts
+    write_plugin_config(&paths, "http://127.0.0.1:8787", "abc123", 9, None, None).unwrap();
+    let text = fs::read_to_string(paths.plugin_config()).unwrap();
+    assert!(
+        !text.contains("profile_name") && !text.contains("game_log"),
+        "{text}"
+    );
+    let config = spedhub_plugin::Config::load(&paths.plugin_config()).unwrap();
+    assert_eq!(config.profile_name, None);
 
     remove_plugin_config(&paths).unwrap();
     assert!(!paths.plugin_config().exists());

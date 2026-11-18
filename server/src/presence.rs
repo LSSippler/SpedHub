@@ -69,6 +69,8 @@ pub struct HeartbeatReq {
     pub speed_kmh: Option<f64>,
     /// Laufender Auftrag, `null` oder fehlend heißt: keiner
     pub job: Option<JobReq>,
+    /// Name des aktiven ETS2-Profils, siehe [`crate::profiles`]
+    pub profile: Option<String>,
 }
 
 /// Ein geprüfter Herzschlag.

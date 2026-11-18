@@ -1083,3 +1083,106 @@ fn version_geht_bei_jeder_anfrage_mit() {
     assert!(head.starts_with("get /api/health"), "{head}");
     assert!(head.contains(&expected), "{head}");
 }
+
+#[test]
+fn firmenprofil_beim_server_melden() {
+    use spedhub_launcher::flows::profile_to_report;
+    use spedhub_launcher::profiles::profile_name_of;
+    let dir = temp_dir("profil-melden");
+    let server = TestServer::start(&dir.join("server.db"));
+    let url = server.url();
+    let docs = documents("profil-melden-docs");
+
+    let mut chef = Client::new(&url);
+    let chef_login = chef.register("Chefin", "geheim1234").unwrap();
+    let firma = post_raw(
+        &format!("{url}/api/companies"),
+        &chef_login.token,
+        json!({ "name": "Nordfracht" }),
+    );
+    let company = firma["id"].as_i64().unwrap();
+    let mut fahrer = Client::new(&url);
+    let fahrer_login = fahrer.register("Fahrer", "geheim1234").unwrap();
+    post_raw(
+        &format!("{url}/api/companies/join"),
+        &fahrer_login.token,
+        json!({ "invite_code": firma["invite_code"] }),
+    );
+
+    // Noch nichts gemeldet: Der Launcher meldet das gewählte Profil, ohne Wahl nichts
+    let chosen = profile_name_of(&docs.mueller).unwrap();
+    let c = fahrer.company(company).unwrap();
+    let me = c
+        .members
+        .iter()
+        .find(|m| m.user_id == fahrer_login.user_id)
+        .unwrap();
+    assert_eq!(me.profile_name, None);
+    assert_eq!(profile_to_report(&c, fahrer_login.user_id, None), None);
+    assert_eq!(
+        profile_to_report(&c, fahrer_login.user_id, Some("  ")),
+        None
+    );
+    let name = profile_to_report(&c, fahrer_login.user_id, Some(&chosen)).unwrap();
+    assert_eq!(name, "Müller Logistik");
+    fahrer.set_profile(company, Some(&name)).unwrap();
+
+    // Danach kennt der Server es, eine zweite Meldung ist nicht nötig
+    let c = fahrer.company(company).unwrap();
+    let me = c
+        .members
+        .iter()
+        .find(|m| m.user_id == fahrer_login.user_id)
+        .unwrap();
+    assert_eq!(me.profile_name.as_deref(), Some("Müller Logistik"));
+    assert_eq!(
+        profile_to_report(&c, fahrer_login.user_id, Some(&chosen)),
+        None
+    );
+    // Ein anderes Profil gewählt: wieder melden
+    assert_eq!(
+        profile_to_report(&c, fahrer_login.user_id, Some("Nordfracht")).as_deref(),
+        Some("Nordfracht")
+    );
+    // Der Chef sieht das Profil des Fahrers
+    let c = chef.company(company).unwrap();
+    let f = c
+        .members
+        .iter()
+        .find(|m| m.user_id == fahrer_login.user_id)
+        .unwrap();
+    assert_eq!(f.profile_name.as_deref(), Some("Müller Logistik"));
+
+    // Ab jetzt bucht der Server nur noch aus diesem Profil
+    let event =
+        |id: &str, profile: &str| send_event(&url, &fahrer_login.token, company, id, profile);
+    assert_eq!(event("e-1", "Müller Logistik"), 200);
+    assert_eq!(event("e-2", "Privat"), 422);
+
+    // Fehler im Klartext
+    let e = Client::new(&url)
+        .set_profile(company, Some("X"))
+        .unwrap_err();
+    assert!(e.is_unauthorized(), "{e:?}");
+    let e = fahrer
+        .set_profile(company, Some(&"x".repeat(101)))
+        .unwrap_err();
+    assert!(e.to_string().contains("höchstens 100 Zeichen"), "{e}");
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Ein Ereignis, wie es das Plugin schickt. Liefert den Status.
+fn send_event(url: &str, token: &str, company: i64, id: &str, profile: &str) -> u16 {
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .proxy(None)
+        .build()
+        .into();
+    agent
+        .post(&format!("{url}/api/companies/{company}/events"))
+        .header("Authorization", &format!("Bearer {token}"))
+        .send_json(json!({ "event_id": id, "type": "tollgate", "amount": 5, "profile": profile }))
+        .unwrap()
+        .status()
+        .as_u16()
+}

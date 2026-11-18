@@ -4452,3 +4452,406 @@ async fn lkw_verkaufen() {
         json!(0)
     );
 }
+
+// ------------------------------------------------------------ Nur das Firmenprofil zählt
+
+impl Firma {
+    async fn put(&self, token: &str, path: &str, body: Value) -> (StatusCode, Value) {
+        call(&self.app, "PUT", path, Some(token), Some(body)).await
+    }
+
+    /// Das Firmenprofil melden, wie es der Launcher tut
+    async fn report_profile(&self, token: &str, name: Value) -> (StatusCode, Value) {
+        self.put(
+            token,
+            &format!("/api/companies/{}/profile", self.id),
+            json!({ "profile_name": name }),
+        )
+        .await
+    }
+
+    /// Ereignis wie vom Plugin, mit Profil. Liefert Status und Antwort, ohne zu prüfen.
+    async fn event_from(
+        &self,
+        token: &str,
+        event_id: &str,
+        kind: &str,
+        amount: i64,
+        profile: Option<&str>,
+        occurred_at: Option<i64>,
+    ) -> (StatusCode, Value) {
+        let mut body = json!({ "event_id": event_id, "type": kind, "amount": amount });
+        if let Some(p) = profile {
+            body["profile"] = json!(p);
+        }
+        if let Some(t) = occurred_at {
+            body["occurred_at"] = json!(t);
+        }
+        self.post(token, &format!("/api/companies/{}/events", self.id), body)
+            .await
+    }
+
+    async fn rejected(&self, token: &str) -> (StatusCode, Value) {
+        self.get(
+            token,
+            &format!("/api/companies/{}/rejected-events", self.id),
+        )
+        .await
+    }
+}
+
+#[tokio::test]
+async fn firmenprofil_melden_und_sehen() {
+    let f = Firma::new().await;
+    // Noch nichts gemeldet
+    assert!(f.member(f.fahrer_id).await["profile_name"].is_null());
+
+    // Der Fahrer meldet sein Firmenprofil, Leerraum am Rand zählt nicht
+    let (s, r) = f
+        .report_profile(&f.fahrer, json!("  Nordfracht Müller  "))
+        .await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!(r["profile_name"], "Nordfracht Müller");
+    let (s, _) = f.report_profile(&f.chef, json!("Chefin")).await;
+    assert_eq!(s, StatusCode::OK);
+
+    // Der Chef sieht die Profile aller, der Fahrer nur seins
+    assert_eq!(
+        f.member_as(&f.chef, f.fahrer_id).await["profile_name"],
+        "Nordfracht Müller"
+    );
+    assert_eq!(
+        f.member_as(&f.chef, f.chef_id).await["profile_name"],
+        "Chefin"
+    );
+    assert_eq!(
+        f.member_as(&f.fahrer, f.fahrer_id).await["profile_name"],
+        "Nordfracht Müller"
+    );
+    let chef_seen_by_driver = f.member_as(&f.fahrer, f.chef_id).await;
+    assert!(
+        chef_seen_by_driver.get("profile_name").is_none(),
+        "{chef_seen_by_driver}"
+    );
+
+    // Unsinn: zu lang, Steuerzeichen
+    for bad in [json!("x".repeat(101)), json!("Nord\nfracht")] {
+        let (s, v) = f.report_profile(&f.fahrer, bad).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    }
+    assert_eq!(
+        f.member(f.fahrer_id).await["profile_name"],
+        "Nordfracht Müller",
+        "unverändert"
+    );
+
+    // Fremde, ohne Anmeldung, unbekannte Firma
+    let fremder = register(&f.app, "Fremder").await;
+    let (s, _) = f.report_profile(&fremder, json!("X")).await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    let (s, _) = call(
+        &f.app,
+        "PUT",
+        &format!("/api/companies/{}/profile", f.id),
+        None,
+        Some(json!({ "profile_name": "X" })),
+    )
+    .await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+    let (s, _) = f
+        .put(
+            &f.fahrer,
+            "/api/companies/999/profile",
+            json!({ "profile_name": "X" }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+
+    // Leer oder null löscht das gemeldete Profil
+    let (s, r) = f.report_profile(&f.fahrer, json!("")).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(r["profile_name"].is_null());
+    assert!(f.member(f.fahrer_id).await["profile_name"].is_null());
+    let (s, _) = f.report_profile(&f.fahrer, Value::Null).await;
+    assert_eq!(s, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn ereignis_aus_dem_firmenprofil_wird_gebucht_andere_abgelehnt() {
+    let f = Firma::new().await;
+    let (s, _) = f.report_profile(&f.fahrer, json!("Nordfracht")).await;
+    assert_eq!(s, StatusCode::OK);
+    first_sync(&f).await;
+
+    // Aus dem Firmenprofil: gebucht, mit Profil im Kassenbuch
+    let (s, r) = f
+        .event_from(
+            &f.fahrer,
+            "a-1",
+            "job_delivered",
+            1000,
+            Some("Nordfracht"),
+            Some(t(5)),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!(f.balance().await, 1000);
+    let l = f.ledger().await;
+    assert_eq!(l.len(), 1);
+    assert_eq!(l[0]["profile"], "Nordfracht");
+
+    // Aus einem privaten Profil: nicht gebucht, 422 mit Meldung, protokolliert
+    let (s, v) = f
+        .event_from(
+            &f.fahrer,
+            "p-1",
+            "job_delivered",
+            10_000,
+            Some("Privat"),
+            Some(t(10)),
+        )
+        .await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{v}");
+    let msg = v["error"].as_str().unwrap();
+    assert!(
+        msg.contains("'Privat'") && msg.contains("'Nordfracht'"),
+        "{msg}"
+    );
+    let (s, _) = f
+        .event_from(&f.fahrer, "p-2", "fined", 300, Some("Privat"), Some(t(11)))
+        .await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+    // Andere Schreibweise ist ein anderes Profil, Leerraum am Rand zählt nicht
+    let (s, _) = f
+        .event_from(
+            &f.fahrer,
+            "p-3",
+            "tollgate",
+            40,
+            Some("nordfracht"),
+            Some(t(12)),
+        )
+        .await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+    let (s, r) = f
+        .event_from(
+            &f.fahrer,
+            "a-2",
+            "tollgate",
+            40,
+            Some(" Nordfracht "),
+            Some(t(13)),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    // Ohne Profil, etwa von einem älteren Plugin: ebenso abgelehnt
+    let (s, v) = f
+        .event_from(&f.fahrer, "o-1", "fined", 100, None, Some(t(14)))
+        .await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{v}");
+    assert!(v["error"].as_str().unwrap().contains("kein Profil"));
+    // Noch einmal geschickt: wieder abgelehnt, aber nur einmal protokolliert
+    let (s, _) = f
+        .event_from(
+            &f.fahrer,
+            "p-1",
+            "job_delivered",
+            10_000,
+            Some("Privat"),
+            Some(t(10)),
+        )
+        .await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+
+    // Nichts davon ist gebucht: Kasse, Lohnkonto, Kassenbuch
+    assert_eq!(f.balance().await, 1000 - 40);
+    assert_eq!(f.wallet(f.fahrer_id).await, 0);
+    let l = f.ledger().await;
+    assert_eq!(l.len(), 2, "{l:?}");
+    assert!(l.iter().all(|e| e["profile"] == "Nordfracht"));
+
+    // Der Geldabgleich zählt nur gebuchte Ereignisse: keine Betriebskosten aus dem privaten
+    // Auftrag über 10000 Euro
+    let r = sync_written_at(&f, 2000 + 1000 - 40, 30).await;
+    assert_eq!(n(&r["expected"]), 2000 + 1000 - 40, "{r}");
+    assert_eq!(r["booked"], json!([]));
+    assert!(r["unexplained"].is_null());
+
+    // Der Chef sieht die abgelehnten Ereignisse, neueste zuerst
+    let (s, list) = f.rejected(&f.chef).await;
+    assert_eq!(s, StatusCode::OK, "{list}");
+    let e = list["entries"].as_array().unwrap();
+    assert_eq!(e.len(), 4, "{list}");
+    let ids: Vec<&str> = e.iter().map(|x| x["event_id"].as_str().unwrap()).collect();
+    assert_eq!(ids, vec!["o-1", "p-3", "p-2", "p-1"]);
+    let p1 = &e[3];
+    assert_eq!(p1["user"], "Fahrer");
+    assert_eq!(n(&p1["user_id"]), f.fahrer_id);
+    assert_eq!(p1["type"], "job_delivered");
+    assert_eq!(n(&p1["amount"]), 10_000);
+    assert_eq!(p1["profile"], "Privat");
+    assert!(p1["reason"].as_str().unwrap().contains("'Privat'"));
+    // Abgelehnt, als die Uhr des Servers noch auf 10:00 stand
+    assert_eq!(n(&p1["created_at"]), t(0));
+    assert_eq!(p1["payload"]["event_id"], "p-1");
+    assert_eq!(n(&p1["payload"]["occurred_at"]), t(10));
+    assert!(e[0]["profile"].is_null());
+    assert!(e[0]["reason"].as_str().unwrap().contains("ohne Profil"));
+
+    // Der Fahrer sieht die Liste nicht
+    let (s, _) = f.rejected(&f.fahrer).await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn ohne_gemeldetes_firmenprofil_wird_wie_bisher_gebucht() {
+    let f = Firma::new().await;
+    // Kein Profil gemeldet, etwa mit einem älteren Launcher: alles wird gebucht
+    let (s, _) = f
+        .event_from(&f.fahrer, "a-1", "job_delivered", 1000, None, None)
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    let (s, _) = f
+        .event_from(&f.fahrer, "a-2", "tollgate", 40, Some("Privat"), None)
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(f.balance().await, 960);
+    // Das Profil steht trotzdem an der Buchung
+    let l = f.ledger().await;
+    let by = |id: &str| l.iter().find(|e| e["event_id"] == id).unwrap().clone();
+    assert!(by("a-1")["profile"].is_null());
+    assert_eq!(by("a-2")["profile"], "Privat");
+    let (_, list) = f.rejected(&f.chef).await;
+    assert_eq!(list["entries"], json!([]));
+
+    // Das Firmenprofil eines anderen Fahrers gilt nicht für diesen
+    let (s, _) = f.report_profile(&f.chef, json!("Chefin")).await;
+    assert_eq!(s, StatusCode::OK);
+    let (s, _) = f
+        .event_from(&f.fahrer, "a-3", "tollgate", 10, Some("Privat"), None)
+        .await;
+    assert_eq!(s, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn herzschlag_aus_anderem_profil_aendert_presence_nicht() {
+    let f = Firma::new().await;
+    let truck = f.truck("SPED 001", 1000, full_state(1000)).await;
+    f.checkout(&f.fahrer, truck).await;
+    // Ohne gemeldetes Profil zählt jeder Herzschlag
+    let (s, r) = f
+        .beat(
+            &f.fahrer,
+            json!({ "plate": "SPED 001", "odometer_km": 1100, "profile": "Privat" }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!(r["recorded"], true);
+    let start = f.clock.now();
+    assert_eq!(n(&f.member(f.fahrer_id).await["last_seen"]), start);
+
+    let (s, _) = f.report_profile(&f.fahrer, json!("Nordfracht")).await;
+    assert_eq!(s, StatusCode::OK);
+
+    // Aus dem privaten Profil und ohne Profil: 200, aber verworfen
+    f.clock.set(start + 20);
+    for body in [
+        json!({ "plate": "SPED 001", "odometer_km": 5000, "speed_kmh": 80, "profile": "Privat" }),
+        json!({ "plate": "SPED 001", "odometer_km": 5000 }),
+    ] {
+        let (s, r) = f.beat(&f.fahrer, body.clone()).await;
+        assert_eq!(s, StatusCode::OK, "{body} {r}");
+        assert_eq!(r["recorded"], false, "{r}");
+        assert!(r["note"].as_str().unwrap().contains("Nordfracht"), "{r}");
+        assert!(r["leased_truck_id"].is_null());
+    }
+    // Presence und letzter bekannter Zustand bleiben, wie sie waren
+    let m = f.member(f.fahrer_id).await;
+    assert_eq!(n(&m["last_seen"]), start);
+    assert!(m["speed_kmh"].is_null(), "{m}");
+    let (_, _, seen_at, last_km, _) = f.truck_row(truck);
+    assert_eq!((seen_at, last_km), (Some(start), Some(1100)));
+    // Nach 31 Sekunden offline, die verworfenen Herzschläge halten ihn nicht online
+    f.clock.set(start + 31);
+    assert_eq!(f.member(f.fahrer_id).await["online"], false);
+
+    // Aus dem Firmenprofil: wieder online
+    let (s, r) = f
+        .beat(
+            &f.fahrer,
+            json!({ "plate": "SPED 001", "odometer_km": 1200, "profile": "Nordfracht" }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(r["recorded"], true);
+    assert_eq!(n(&r["leased_truck_id"]), truck);
+    let m = f.member(f.fahrer_id).await;
+    assert_eq!(m["online"], true);
+    assert_eq!(n(&m["last_seen"]), start + 31);
+    assert_eq!(f.truck_row(truck).3, Some(1200));
+}
+
+#[tokio::test]
+async fn alte_datenbank_bekommt_firmenprofil_und_protokoll() {
+    let path = std::env::temp_dir().join(format!("spedhub-profil-{}.db", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    {
+        let c = rusqlite::Connection::open(&path).unwrap();
+        c.execute_batch(
+            "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                pw_hash TEXT NOT NULL, created_at INTEGER NOT NULL);
+             CREATE TABLE companies (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                invite_code TEXT NOT NULL UNIQUE,
+                wage_percent INTEGER NOT NULL DEFAULT 30 CHECK (wage_percent BETWEEN 0 AND 100),
+                created_at INTEGER NOT NULL);
+             CREATE TABLE memberships (company_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
+                role TEXT NOT NULL, joined_at INTEGER NOT NULL, PRIMARY KEY (company_id, user_id));
+             CREATE TABLE ledger (id INTEGER PRIMARY KEY, company_id INTEGER NOT NULL,
+                account TEXT NOT NULL CHECK (account IN ('firma', 'fahrer')), user_id INTEGER,
+                kind TEXT NOT NULL, amount INTEGER NOT NULL, event_id TEXT,
+                note TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL);
+             INSERT INTO users VALUES (1, 'Alt', 'x', 1000);
+             INSERT INTO companies VALUES (1, 'Altfracht', 'ABCD1234', 30, 1000);
+             INSERT INTO memberships VALUES (1, 1, 'chef', 1000);
+             INSERT INTO ledger VALUES (1, 1, 'firma', 1, 'maut', -50, 'toll-1', '', 2000);",
+        )
+        .unwrap();
+    }
+    let db = spedhub_server::db::open(path.to_str().unwrap()).unwrap();
+    {
+        let conn = db.lock().unwrap();
+        // Die alte Mitgliedschaft und die alte Buchung haben kein Profil
+        let profile: Option<String> = conn
+            .query_row("SELECT profile_name FROM memberships", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(profile, None);
+        let (amount, profile): (i64, Option<String>) = conn
+            .query_row("SELECT amount, profile FROM ledger", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!((amount, profile), (-50, None));
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM rejected_events", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0);
+    }
+    // Zweites Öffnen geht auch, danach läuft alles wie in einer neuen Datenbank
+    drop(db);
+    let db = spedhub_server::db::open(path.to_str().unwrap()).unwrap();
+    let f = Firma::with_db(db).await;
+    let (s, _) = f.report_profile(&f.fahrer, json!("Nordfracht")).await;
+    assert_eq!(s, StatusCode::OK);
+    let (s, _) = f
+        .event_from(&f.fahrer, "x-1", "tollgate", 10, Some("Privat"), None)
+        .await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+    let (s, _) = f
+        .event_from(&f.fahrer, "x-2", "tollgate", 10, Some("Nordfracht"), None)
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    let (_, list) = f.rejected(&f.chef).await;
+    assert_eq!(list["entries"].as_array().unwrap().len(), 1);
+    drop(f);
+    let _ = std::fs::remove_file(&path);
+}
