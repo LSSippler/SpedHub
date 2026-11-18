@@ -268,6 +268,8 @@ Beträge sind ganze Euro. `amount` ist immer positiv, das Vorzeichen ergibt sich
 | `fined` | minus Betrag | | minus Betrag |
 | `tollgate`, `ferry`, `train` | | minus Betrag | minus Betrag |
 
+Der Erlösfaktor ist für die Wirtschafts-Mod gedacht, die Aufträge im Spiel nur 1 Prozent zahlen lässt. Mit ihr steht er auf 100, siehe `docs/wirtschafts-mod.md`.
+
 Jede Buchung merkt sich in `game_amount` den vollen Betrag aus dem Spiel, mit dem Vorzeichen, mit dem er den Kontostand im Spiel verändert hat, und in `occurred_at`, wann das Ereignis im Spiel passiert ist. Der Erlösfaktor wirkt nur auf die Firmenkasse. Bei `job_delivered` zählt `distance_km` als Firmenkilometer des Fahrers. Die Lohnabrechnung zählt Aufträge nach dem Empfang beim Server (`created_at`), damit abgeschlossene Abrechnungen unberührt bleiben.
 
 Dazu kommen Buchungen aus dem Geldabgleich, alle auf die Firmenkasse und mit dem Fahrer als `user_id`:

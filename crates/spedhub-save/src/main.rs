@@ -7,8 +7,9 @@
 )]
 
 use spedhub_save::{
-    Error, InsertOptions, Save, TruckPackage, check, export_truck, info_money, insert_truck, money,
-    plate_text, remove_truck, set_info_money, set_money, write_save, write_saves,
+    Error, Factor, InsertOptions, ModOptions, Save, ScaleOptions, TruckPackage, build_mod, check,
+    economy, export_truck, info_money, insert_truck, money, plate_text, remove_truck,
+    scale_economy, set_info_money, set_money, write_mod, write_save, write_saves,
 };
 use std::{collections::HashMap, fs, path::Path, process::ExitCode};
 
@@ -32,6 +33,12 @@ Befehle:
       Eigenen Lkw entfernen. Beim aktiven Lkw ist --replacement Pflicht.
   money <game.sii> [--info <info.sii>] [--set <betrag>]
       Kontostand anzeigen. Mit --set in game.sii und info.sii setzen.
+  economy-mod <economy_data.sii> [-o <ziel.scs>] [--factor 0.01] [--also <schlüssel>]...
+              [--version <x>] [--compatible 1.62.*] [--icon <bild.jpg>] [--force]
+      Wirtschafts-Mod bauen: die Werte für den Erlös aus economy_data.sii mal Faktor,
+      als spedhub_economy.scs. Ein vorhandenes Ziel wird nur mit --force ersetzt.
+      --also skaliert weitere Schlüssel mit, mehrfach oder mit Komma getrennt.
+      Anleitung in docs/wirtschafts-mod.md.
 ";
 
 fn main() -> ExitCode {
@@ -46,12 +53,18 @@ fn main() -> ExitCode {
             eprintln!("Fehler: {e}");
             ExitCode::from(1)
         }
+        Err(Failure::Guide(m, code)) => {
+            eprintln!("{m}");
+            ExitCode::from(code)
+        }
     }
 }
 
 enum Failure {
     Usage(String),
     Lib(Error),
+    /// Meldung mit Anleitung statt der Hilfe, und der Exit-Code
+    Guide(String, u8),
 }
 
 impl From<Error> for Failure {
@@ -62,15 +75,29 @@ impl From<Error> for Failure {
 
 type Run = Result<(), Failure>;
 
-/// Positionsargumente und Optionen. Optionen mit Wert stehen in `VALUE_FLAGS`.
+/// Positionsargumente und Optionen. Optionen mit Wert stehen in `VALUE_FLAGS`. Eine Option
+/// darf mehrfach vorkommen, [`Args::value`] nimmt dann die letzte, [`Args::all`] alle.
 struct Args {
     positional: Vec<String>,
-    values: HashMap<String, String>,
+    values: HashMap<String, Vec<String>>,
     switches: Vec<String>,
 }
 
-const VALUE_FLAGS: &[&str] = &["--plate", "--replacement", "--info", "--set"];
-const SWITCHES: &[&str] = &["--keep-names"];
+const VALUE_FLAGS: &[&str] = &[
+    "--plate",
+    "--replacement",
+    "--info",
+    "--set",
+    "--output",
+    "--factor",
+    "--also",
+    "--version",
+    "--compatible",
+    "--icon",
+];
+const SWITCHES: &[&str] = &["--keep-names", "--force"];
+/// Kurze Optionen und ihre langen Namen
+const ALIASES: &[(&str, &str)] = &[("-o", "--output")];
 
 impl Args {
     fn parse(raw: &[String]) -> Result<Args, Failure> {
@@ -81,11 +108,15 @@ impl Args {
         };
         let mut it = raw.iter();
         while let Some(a) = it.next() {
+            let a = &ALIASES
+                .iter()
+                .find(|(short, _)| short == a)
+                .map_or_else(|| a.clone(), |(_, long)| long.to_string());
             if VALUE_FLAGS.contains(&a.as_str()) {
                 let v = it
                     .next()
                     .ok_or_else(|| Failure::Usage(format!("Nach {a} fehlt ein Wert")))?;
-                args.values.insert(a.clone(), v.clone());
+                args.values.entry(a.clone()).or_default().push(v.clone());
             } else if SWITCHES.contains(&a.as_str()) {
                 args.switches.push(a.clone());
             } else if a.starts_with("--") {
@@ -120,7 +151,21 @@ impl Args {
     }
 
     fn value(&self, flag: &str) -> Option<&str> {
-        self.values.get(flag).map(String::as_str)
+        self.values
+            .get(flag)
+            .and_then(|v| v.last())
+            .map(String::as_str)
+    }
+
+    fn all(&self, flag: &str) -> Vec<&str> {
+        self.values
+            .get(flag)
+            .map(|v| v.iter().map(String::as_str).collect())
+            .unwrap_or_default()
+    }
+
+    fn switch(&self, flag: &str) -> bool {
+        self.switches.iter().any(|s| s == flag)
     }
 }
 
@@ -137,6 +182,7 @@ fn run(raw: &[String]) -> Run {
         "insert-truck" => insert(&args),
         "remove-truck" => remove(&args),
         "money" => money_cmd(&args),
+        "economy-mod" => economy_mod(&args),
         "help" | "--help" | "-h" => {
             println!("{HELP}");
             Ok(())
@@ -236,7 +282,7 @@ fn insert(args: &Args) -> Run {
     })?;
     let package = TruckPackage::from_json(&text)?;
     let options = InsertOptions {
-        keep_names: args.switches.iter().any(|s| s == "--keep-names"),
+        keep_names: args.switch("--keep-names"),
     };
     let report = insert_truck(&mut save, &package, &options)?;
     if report.removed_quick_job {
@@ -309,5 +355,131 @@ fn money_cmd(args: &Args) -> Run {
         report_written(&w);
     }
     println!("Kontostand auf {amount} gesetzt");
+    Ok(())
+}
+
+fn economy_mod(args: &Args) -> Run {
+    args.allow(
+        "economy-mod",
+        &[
+            "--output",
+            "--factor",
+            "--also",
+            "--version",
+            "--compatible",
+            "--icon",
+            "--force",
+        ],
+    )?;
+    let input = match args.positional.as_slice() {
+        [] => {
+            return Err(Failure::Guide(
+                format!(
+                    "economy-mod braucht die Datei economy_data.sii aus dem Spiel. Sie gehört SCS und liegt deshalb nicht bei SpedHub.\n\n{}",
+                    economy::GUIDE
+                ),
+                2,
+            ));
+        }
+        [one] => one.as_str(),
+        _ => {
+            return Err(Failure::Usage(
+                "economy-mod braucht genau eine Angabe: <economy_data.sii>".into(),
+            ));
+        }
+    };
+    if !Path::new(input).is_file() {
+        return Err(Failure::Guide(
+            format!("Die Datei {input} gibt es nicht.\n\n{}", economy::GUIDE),
+            1,
+        ));
+    }
+    let factor = Factor::parse(args.value("--factor").unwrap_or(economy::DEFAULT_FACTOR))?;
+    let also: Vec<String> = args
+        .all("--also")
+        .iter()
+        .flat_map(|v| v.split(','))
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+        .map(String::from)
+        .collect();
+    let mut options = ModOptions::default();
+    if let Some(v) = args.value("--version") {
+        options.version = v.into();
+    }
+    if let Some(c) = args.value("--compatible") {
+        options.compatible = c.into();
+    }
+    if let Some(icon) = args.value("--icon") {
+        options.icon = Some(economy::read_icon(icon)?);
+    }
+    let output = args.value("--output").unwrap_or(economy::MOD_FILE_NAME);
+
+    let data = fs::read(input).map_err(|e| Error::Io {
+        path: input.into(),
+        message: e.to_string(),
+    })?;
+    let edit = scale_economy(&data, &ScaleOptions { factor, also })?;
+    println!(
+        "Gelesen: {input}. Faktor {}, also {} Prozent des Erlöses",
+        edit.factor.text(),
+        edit.factor.percent()
+    );
+    println!("Geändert:");
+    for c in &edit.changes {
+        let component = c
+            .component
+            .map(|n| format!(" (Komponente {n})"))
+            .unwrap_or_default();
+        let note = if c.became_fraction {
+            "  (war eine ganze Zahl, bitte prüfen, ob das Spiel hier eine Kommazahl annimmt)"
+        } else {
+            ""
+        };
+        println!(
+            "  Zeile {}: {}{component}: {} -> {}{note}",
+            c.line, c.key, c.old, c.new
+        );
+    }
+    for key in &edit.missing {
+        println!("Warnung: {key} kommt in der Datei nicht vor");
+    }
+    if !edit.candidates.is_empty() {
+        println!("Nicht verändert, bitte prüfen (mit --also <schlüssel> mitskalieren):");
+        for c in &edit.candidates {
+            println!("  Zeile {}: {}: {}", c.line, c.key, c.value);
+        }
+    }
+    for i in &edit.includes {
+        println!(
+            "Hinweis: Zeile {} bindet eine Datei ein ({}). Was dort steht, ist nicht geprüft und nicht verändert",
+            i.line, i.text
+        );
+    }
+    for s in &edit.skipped {
+        println!(
+            "Hinweis: Zeile {} nicht verstanden und unverändert: {}",
+            s.line, s.text
+        );
+    }
+    let zip = build_mod(&edit, &options)?;
+    let written = write_mod(output, &zip, args.switch("--force"))?;
+    println!(
+        "Geschrieben: {} ({} Bytes, mit {}, {}{} und {})",
+        written.display(),
+        zip.len(),
+        economy::MANIFEST_PATH,
+        economy::DESCRIPTION_PATH,
+        if options.icon.is_some() {
+            format!(", {}", economy::ICON_PATH)
+        } else {
+            String::new()
+        },
+        economy::SII_PATH,
+    );
+    println!(
+        "Weiter: Datei nach Dokumente\\Euro Truck Simulator 2\\mod kopieren, im Mod-Manager aktivieren und im Dashboard im Büro den Erlösfaktor auf {} stellen. Anleitung in docs/wirtschafts-mod.md",
+        edit.factor.revenue_factor()
+    );
     Ok(())
 }

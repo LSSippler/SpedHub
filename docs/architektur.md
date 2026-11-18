@@ -28,7 +28,7 @@ Nicht Teil des Projekts: ein eigener Multiplayer, Eingriffe in den Arbeitsspeich
 |---|---|---|
 | Server (`server/`) | Accounts, Firma, Kasse mit Storno, Fuhrpark, Leihen, tägliche Lohnabrechnung, Geldabgleich mit spät gemeldeten Ereignissen, Herzschlag und Online-Status, Schaden und Werkstatt, Anschaffungen, Verkauf und Ausmusterung | läuft |
 | Dashboard (`server/web/`) | Weboberfläche für Chef und Fahrer | läuft |
-| Save-Bibliothek (`crates/spedhub-save`) | Spielstand lesen und schreiben, Lkw exportieren, wiedererkennen, einsetzen, entfernen, Kontostand setzen | erste Fassung. Einsetzen in einen Spielstand ohne eigenen Lkw, neuer Speicherplatz und Kontostand im Spiel bestätigt (1.62), Einsetzen neben eigene Lkw und Entfernen noch nicht |
+| Save-Bibliothek (`crates/spedhub-save`) | Spielstand lesen und schreiben, Lkw exportieren, wiedererkennen, einsetzen, entfernen, Kontostand setzen, Wirtschafts-Mod bauen | erste Fassung. Einsetzen in einen Spielstand ohne eigenen Lkw, neuer Speicherplatz und Kontostand im Spiel bestätigt (1.62), Einsetzen neben eigene Lkw und Entfernen noch nicht |
 | Launcher (`crates/spedhub-launcher`) | Anmelden, Abgleich, Spielstand vorbereiten, Spiel starten, Abgleich beim Beenden, Plugin installieren, Updates | erste Fassung: Anmelden, Passwort ändern, Fuhrpark mit Schaden und Werkstatt, Ausleihen und Zurückgeben, Lkw übernehmen und Kauf verknüpfen, Lkw in den Spielstand schreiben, Geldabgleich, `plugin.json`, Plugin installieren, Updates, Spiel starten. Aufräumen des Profils und Abgleich beim Beenden: offen |
 | Spiel-Plugin (`crates/spedhub-plugin`) | Telemetrie-Ereignisse und Herzschlag melden, Quicksave und Quickload auslösen (Telemetry SDK und Input SDK) | Gameplay-Events und Herzschlag: erste Fassung, im Spiel bestätigt (DLL lädt, Herzschlag kommt an, `job.delivered` vollständig). Meldet nur aus dem Firmenprofil, das Erkennen über `game.log.txt` ist im Spiel noch nicht geprüft. Quicksave und Quickload: offen |
 | Setup (`installer/`, `.github/workflows/release.yml`) | Launcher, Plugin und optional Server installieren, Plugin ins Spiel kopieren, Releases mit Prüfsummen | erste Fassung. Die CI baut das Setup auf dem Windows-Runner, installiert ist es auf einem echten Windows noch nicht |
@@ -116,7 +116,7 @@ Das Plugin meldet Ereignisse aus dem Spiel, der Server bucht sie:
 | Auftrag abgebrochen, Strafe | minus Betrag | |
 | Maut, Fähre, Zug | | minus Betrag |
 
-Der Erlösfaktor ist je Firma einstellbar, Standard 1. Gedacht ist er für eine Wirtschafts-Mod, die die Auszahlung im Spiel auf 1 Prozent senkt: Mit Faktor 100 kommt in der Kasse wieder der volle Erlös an, im Spiel bekommt der Fahrer fast nichts.
+Der Erlösfaktor ist je Firma einstellbar, Standard 1. Gedacht ist er für eine Wirtschafts-Mod, die die Auszahlung im Spiel auf 1 Prozent senkt: Mit Faktor 100 kommt in der Kasse wieder der volle Erlös an, im Spiel bekommt der Fahrer fast nichts. Die Mod baut `spedhub-save economy-mod` aus der `economy_data.sii` des Spiels, die jeder selbst aus `def.scs` entpackt (sie gehört SCS und liegt nicht im Repo). Anleitung, auch für den Convoy-Server, in `docs/wirtschafts-mod.md`. Im Spiel ist die Mod noch nicht geprüft.
 
 Jede Buchung merkt sich neben dem gebuchten Betrag den vollen Betrag aus dem Spiel (`game_amount`), mit dem Vorzeichen, mit dem er den Kontostand im Spiel verändert hat. Alte Buchungen bleiben unverändert, die Spalte ist dort leer.
 
@@ -199,7 +199,7 @@ Tag v0.2.1 --> GitHub Actions (release.yml)
                  Release: SHA256SUMS.txt, Notes aus git log                    --> GitHub-Release
 ```
 
-- **Setup** (`installer/spedhub.iss`, Inno Setup 6, deutsch): Launcher und Plugin-DLL nach `Programme\SpedHub`, Verknüpfungen im Startmenü und, abwählbar, auf dem Desktop. Optional, standardmäßig abgewählt, "Server für lokale Tests" mit einer Verknüpfung, die `spedhub-server.exe --local` startet. Am Ende ruft das Setup mit seinen Adminrechten `spedhub-launcher.exe --install-plugin` auf.
+- **Setup** (`installer/spedhub.iss`, Inno Setup 6, deutsch): Launcher, Plugin-DLL und `spedhub-save.exe` (für die Wirtschafts-Mod, mit `Wirtschafts-Mod.md`) nach `Programme\SpedHub`, Verknüpfungen im Startmenü und, abwählbar, auf dem Desktop. Optional, standardmäßig abgewählt, "Server für lokale Tests" mit einer Verknüpfung, die `spedhub-server.exe --local` startet. Am Ende ruft das Setup mit seinen Adminrechten `spedhub-launcher.exe --install-plugin` auf.
 - **Plugin installieren**: Die Suche nach ETS2 steckt im Launcher (`src/steam.rs`), damit sie in Rust getestet ist: Steam-Ordner aus der Registry, alle Bibliotheken aus `libraryfolders.vdf`, App-ID 227300, `installdir` aus dem App-Manifest. Ziel ist `bin\win_x64\plugins`. Kopiert wird über eine temporäre Datei, eine ältere DLL wird ersetzt, bei laufendem Spiel nichts. Der Launcher zeigt "Plugin installiert / veraltet / fehlt" über die SHA-256 und startet sich für "Plugin installieren" über UAC neu. Ist das Spiel nicht gefunden, wählt er den Ordner vorher ohne Adminrechte und übergibt ihn, denn mit Adminrechten kann er unter einem anderen Konto laufen. Aus demselben Grund meldet das Setup einen von Hand gewählten Ordner über eine Datei zurück und merkt ihn als ursprünglicher Benutzer (`--report-game-dir`, `--remember-game-dir`).
 - **Deinstallation**: entfernt Programm und Plugin (`--uninstall-plugin`, still mit `--quiet`), das Plugin zuerst, solange der Launcher noch da ist. Läuft das Spiel, fragt der Launcher mit Wiederholen und Abbrechen. Bei Abbrechen und bei einer stillen Deinstallation wird die DLL umbenannt, sodass das Spiel sie nicht mehr lädt, und zum Löschen beim nächsten Neustart von Windows vorgemerkt. Reste räumt die nächste Installation weg. "Anmeldung, Einstellungen und Backups behalten?" steht auf Ja, mit Nein wird `%LOCALAPPDATA%\SpedHub` des deinstallierenden Benutzers gelöscht.
 - **Updates**: Der Launcher fragt beim Start die öffentliche API der GitHub-Releases ab. Bei einer neueren Version zeigt er einen Hinweis. Erst auf Knopfdruck lädt er Setup und `SHA256SUMS.txt`, prüft die SHA-256 und startet das Setup nur, wenn sie passt. Kein stilles Update.
@@ -225,7 +225,7 @@ So liegt ein Firmen-Lkw auf dem Server (`trucks.package` und `trucks.state`):
 2. Save-Bibliothek in Rust: erste Fassung
 3. Launcher mit Leihe vor dem Start, Plugin für Telemetrie, Geldabgleich: erste Fassung. Dazu gekommen sind spät gemeldete Ereignisse, Herzschlag und Online-Status, Werkstatt und Haftung, Setup und Updates
 4. Aufräumen des Profils beim Start, Lkw-Wechsel im laufenden Spiel, Overlay: offen
-5. Lkw-Kauf für die Firma (Anschaffungsbudget, Kauf verknüpfen, Verkauf): erste Fassung. Convoy-Server und Wirtschafts-Mod: offen
+5. Lkw-Kauf für die Firma (Anschaffungsbudget, Kauf verknüpfen, Verkauf): erste Fassung. Wirtschafts-Mod: Werkzeug vorhanden (`spedhub-save economy-mod`, `docs/wirtschafts-mod.md`), im Spiel ungeprüft. Convoy-Server: offen
 6. Härten: Backups vor jedem Schreiben gibt es. Versionssperre und Mod-Lkw: offen
 
 ## Offene Tests im Spiel und auf Windows
@@ -249,6 +249,7 @@ Bestätigt ist mit 1.62: Ein mit `spedhub-save` eingesetzter Lkw lädt als eigen
 | Laden im Convoy | Bleibt die Verbindung beim Laden stehen? |
 | Sicht der anderen | Sehen Mitspieler nach einem Lkw-Wechsel sofort den neuen Lkw? |
 | Session-Ende | Welcher Spielstand liegt nach "behalten" oder "zurücksetzen" auf der Platte? |
+| Wirtschafts-Mod | Lädt das Spiel `spedhub_economy.scs` (unkomprimiertes ZIP, Kategorie `other`)? Zahlen Aufträge dann 1 Prozent? Meldet die Telemetrie bei `job.delivered` den gekürzten Betrag? Nimmt `fixed_revenue` eine Kommazahl an? Macht `mp_mod_optional: false` die Mod im Convoy zur Pflicht? Liste in `docs/wirtschafts-mod.md`, "Ungeprüft" |
 
 Was hier offen ist, gilt als vorläufig. Code am Spielstand bleibt so gebaut, dass sich die Feldliste in `crates/spedhub-save/src/layout.rs` leicht anpassen lässt.
 

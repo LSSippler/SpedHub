@@ -1,4 +1,4 @@
-# Baut das Setup: Launcher, Plugin und Server im Release-Modus, dann Inno Setup.
+# Baut das Setup: Launcher, Plugin, spedhub-save und Server im Release-Modus, dann Inno Setup.
 #
 #   pwsh installer/build.ps1                     # Ergebnis in dist\
 #   pwsh installer/build.ps1 -OutDir dist-setup  # anderer Zielordner (CI)
@@ -29,9 +29,9 @@ $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 Push-Location $root
 try {
     if (-not $SkipBuild) {
-        Write-Host "Baue Launcher, Plugin und Server im Release-Modus"
+        Write-Host "Baue Launcher, Plugin, spedhub-save und Server im Release-Modus"
         Invoke-Checked 'cargo build' {
-            cargo build --release --locked -p spedhub-launcher -p spedhub-plugin -p spedhub-server
+            cargo build --release --locked -p spedhub-launcher -p spedhub-plugin -p spedhub-save -p spedhub-server
         }
     }
 
@@ -45,7 +45,7 @@ try {
     }
     Write-Host "Version $version"
 
-    foreach ($file in 'spedhub-launcher.exe', 'spedhub_plugin.dll', 'spedhub-server.exe') {
+    foreach ($file in 'spedhub-launcher.exe', 'spedhub_plugin.dll', 'spedhub-save.exe', 'spedhub-server.exe') {
         $path = Join-Path $root "target\release\$file"
         if (-not (Test-Path $path)) { throw "$path fehlt. Erst ohne -SkipBuild bauen" }
     }

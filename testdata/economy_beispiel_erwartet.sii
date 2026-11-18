@@ -1,0 +1,44 @@
+SiiNunit
+{
+# Selbst geschriebene Beispieldatei für die Tests von spedhub-save economy-mod.
+# Sie ist nicht die economy_data.sii von SCS: Nur die Schlüsselnamen sind übernommen,
+# Aufbau und alle Zahlen sind ausgedacht.
+// Auskommentiert, bleibt unverändert: fixed_revenue: 999
+/* Ein Block über
+   mehrere Zeilen mit revenue_coef_per_km: 77
+*/
+@include "beispiel_zusatz.sui"
+
+beispiel_vorher : beispiel.vorher {
+	name: "Kein Auftrag"
+	gewicht: 12
+}
+
+economy_data : economy.data
+{
+	fuel_price: 1.9
+	loan_interest: &3c23d70a
+	allow_tolls: true
+
+	fixed_revenue: 4.5 # Kommentar mit fixed_revenue: 999
+	revenue_coef_per_km: 0.0275
+	cargo_market_revenue_coef_per_km: &3ccccccd
+	driver_revenue_coef_per_km: 12
+
+	driver_cargo_market_revenue_coef_per_km: 2
+	driver_cargo_market_revenue_coef_per_km[0]: 0.015
+	driver_cargo_market_revenue_coef_per_km[1]: 0.3
+
+	job_bonus_per_km: 0.4
+	urgency_bonus[]: 0.1
+	urgency_bonus[]: 0.2
+	reward_scale: (1, 2.5, &3f800000)
+	experience_per_km: 3
+}
+
+beispiel_nachher : .beispiel.nachher {
+	notiz: "revenue_coef_per_km: 5"
+	ziel: beispiel.vorher
+}
+
+}

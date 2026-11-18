@@ -266,7 +266,7 @@ Quellen:
 - TS SE Tool (Apache-2.0), `FormMethods.cs`, Tabelle `PlayerLevelUps` für ETS2, und `Economy.getPlayerLvl()` für die Rechnung ab Level 31. Der Server rechnet nach dieser Tabelle (`server/src/levels.rs`), Code ist nicht übernommen.
 - Unabhängig davon nennt die Spielanleitung von gamepressure.com ("ETS2: Experience") dieselben Summen für Level 1 bis 9 (200, 700, 1400, 2300, 3300, 4400, 5700, 7300, 9000).
 
-Eigentlich stehen die Werte in `def/economy_data.sii` im Archiv des Spiels. Die Datei ist hier nicht nachgelesen. Wirtschafts-Mods können die Tabelle ändern. Der Server speichert deshalb immer die Erfahrungspunkte selbst und rechnet das Level erst bei Bedarf, eine andere Tabelle lässt sich also nachträglich einsetzen. Ob das berechnete Level zu dem passt, das das Spiel anzeigt, ist im Spiel noch nicht geprüft.
+Eigentlich stehen die Werte in `def/economy_data.sii` im Archiv des Spiels. Die Datei ist hier nicht nachgelesen. Wirtschafts-Mods können die Tabelle ändern. Die Mod von SpedHub (`docs/wirtschafts-mod.md`) ändert nur die Werte für den Erlös, die Erfahrung bleibt. Der Server speichert deshalb immer die Erfahrungspunkte selbst und rechnet das Level erst bei Bedarf, eine andere Tabelle lässt sich also nachträglich einsetzen. Ob das berechnete Level zu dem passt, das das Spiel anzeigt, ist im Spiel noch nicht geprüft.
 
 ## Neuer Speicherplatz
 

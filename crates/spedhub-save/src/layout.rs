@@ -150,3 +150,24 @@ pub const NAME_LOW_START: u32 = 0x0008;
 pub const NAME_STEP: u32 = 0x10;
 
 pub const NULL: &str = "null";
+
+/// `def/economy_data.sii` aus `def.scs`, für die Wirtschafts-Mod (siehe `docs/wirtschafts-mod.md`).
+/// Das ist kein Spielstand, sondern eine Datei des Spiels. Die Schlüssel stammen aus Notizen
+/// der Community und dem Auftrag, an einer echten Datei aus 1.62 sind sie hier nicht
+/// nachgelesen. Was die übergebene Datei wirklich enthält, meldet `spedhub-save economy-mod`.
+pub mod economy_data {
+    /// Werte, die den Erlös eines Auftrags bestimmen. Sie werden skaliert.
+    pub const REVENUE_KEYS: &[&str] = &[
+        "revenue_coef_per_km",
+        "cargo_market_revenue_coef_per_km",
+        "driver_revenue_coef_per_km",
+        "driver_cargo_market_revenue_coef_per_km",
+        "fixed_revenue",
+    ];
+    /// Teile von Schlüsselnamen, die nach Geld für Aufträge klingen. Solche Schlüssel werden
+    /// gemeldet, aber nur mit `--also` skaliert.
+    pub const CANDIDATE_WORDS: &[&str] = &[
+        "revenue", "reward", "payment", "pay", "bonus", "income", "profit", "salary", "wage",
+        "earning",
+    ];
+}

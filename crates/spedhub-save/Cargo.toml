@@ -2,7 +2,7 @@
 name = "spedhub-save"
 version.workspace = true
 edition.workspace = true
-description = "Spielstände von ETS2 lesen und schreiben, Lkw exportieren, einsetzen und entfernen"
+description = "Spielstände von ETS2 lesen und schreiben, Lkw exportieren, einsetzen und entfernen, Wirtschafts-Mod bauen"
 
 [lib]
 name = "spedhub_save"

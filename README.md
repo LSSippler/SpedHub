@@ -6,33 +6,34 @@ SpedHub macht aus Euro Truck Simulator 2 eine echte Firma. Mehrere Fahrer fahren
 
 ## Was SpedHub kann
 
-- **Kasse und Lohn.** Erlöse aus Aufträgen gehen ganz in die Firmenkasse, auf Wunsch mit einem Erlösfaktor für Wirtschafts-Mods. Einmal am Tag bekommt jeder Fahrer seinen Lohn: Kilometer mal Cent je km seiner Lohnstufe, dazu eine Tagespauschale. Die Lohnstufe hängt am Level im Spiel und an den Firmenkilometern. Reicht die Kasse nicht, bleibt der Rest als offene Lohnforderung stehen. Die Kasse ist ein Journal, Korrekturen sind neue Buchungen.
+- **Kasse und Lohn.** Erlöse aus Aufträgen gehen ganz in die Firmenkasse, auf Wunsch mit einem Erlösfaktor für die Wirtschafts-Mod. Einmal am Tag bekommt jeder Fahrer seinen Lohn: Kilometer mal Cent je km seiner Lohnstufe, dazu eine Tagespauschale. Die Lohnstufe hängt am Level im Spiel und an den Firmenkilometern. Reicht die Kasse nicht, bleibt der Rest als offene Lohnforderung stehen. Die Kasse ist ein Journal, Korrekturen sind neue Buchungen.
 - **Geldabgleich.** Im Spiel hat jeder Fahrer sein Lohnkonto plus einen Betriebsvorschuss der Firma. Der Launcher gleicht den Kontostand im Spielstand mit dem Server ab: Was fehlt, etwa fürs Tanken, bucht die Firma als Betriebskosten, was nicht erklärbar mehr ist, sieht der Chef. Ereignisse, die erst nach dem Abgleich ankommen, ordnet der Server über ihren Zeitpunkt im Spiel dem richtigen Abgleich zu und korrigiert ihn mit einer neuen Buchung.
 - **Fuhrpark und Leihe.** Der Chef übernimmt Lkw aus seinem Spielstand in den Fuhrpark. Fahrer leihen sie im Launcher aus, der sie in einen neuen Speicherplatz einsetzt, und geben sie zurück. Der Lkw wird über Modell und Teile wiedererkannt, auch wenn das Spiel das Kennzeichen ersetzt hat.
 - **Herzschlag und Online-Status.** Das Plugin meldet Aufträge, Strafen, Maut, Fähre und Zug und schickt alle 10 Sekunden einen Herzschlag. Das Dashboard zeigt, wer online ist, mit welchem Lkw und welchem Auftrag, der Launcher, welcher geliehene Lkw gerade fährt. Nach einem Absturz nimmt der Chef einen Lkw mit dem letzten bekannten Zustand zurück.
 - **Werkstatt und Haftung.** Der Server rechnet aus dem Verschleiß einen Schaden in Prozent. Über der Schadensgrenze steht ein Lkw nach der Rückgabe in der Werkstatt, bis der Chef ihn aus der Kasse reparieren lässt. Mit einem Haftungsanteil zahlt der Fahrer einen Teil des neuen Schadens aus seinem Lohnkonto.
 - **Anschaffungen.** Der Chef gibt ein Anschaffungsbudget frei, das beim Geldabgleich zusätzlich in seinen Spielstand kommt. Den Kauf im Spiel bucht der Abgleich genau einmal, danach lässt er sich als Lkw-Kauf mit dem Lkw verknüpfen. Lkw lassen sich verkaufen oder ausmustern.
+- **Wirtschafts-Mod.** `spedhub-save economy-mod` baut aus der `economy_data.sii` deines Spiels die Mod `spedhub_economy.scs`, mit der Aufträge im Spiel nur 1 Prozent zahlen. Der Server rechnet mit dem Erlösfaktor 100 zurück, so hat der Fahrer im Spiel nur sein Lohnkonto und den Vorschuss. Im Convoy ist die Mod Pflicht. Die Originaldatei gehört SCS und liegt nicht im Repo, Anleitung in `docs/wirtschafts-mod.md`. Im Spiel noch nicht geprüft.
 - **Setup und Updates.** Ein Setup für Windows installiert Launcher und Plugin und findet das Spiel über Steam. Der Launcher meldet neue Versionen und installiert sie auf Knopfdruck nach geprüfter Prüfsumme. Für den eigenen Server gibt es ein statisches Linux-Programm.
 
 | Baustein | Stand |
 |---|---|
 | Server mit Accounts, Kasse, Lohn, Fuhrpark, Geldabgleich, Online-Status, Werkstatt und Anschaffungen | läuft, siehe `server/` |
 | Web-Dashboard | läuft, wird vom Server ausgeliefert |
-| Save-Bibliothek mit Kommandozeile | erste Fassung, siehe `crates/spedhub-save` und `tools/README.md` |
+| Save-Bibliothek mit Kommandozeile, auch für die Wirtschafts-Mod | erste Fassung, siehe `crates/spedhub-save`, `tools/README.md` und `docs/wirtschafts-mod.md` |
 | Launcher | erste Fassung, siehe `crates/spedhub-launcher` |
 | Spiel-Plugin für Telemetrie | erste Fassung, meldet Gameplay-Events und Herzschlag, siehe `crates/spedhub-plugin` |
 | Setup und Updates | erste Fassung, siehe Installation und `installer/` |
 
 Noch nicht gebaut sind das Aufräumen des Firmenprofils beim Start (fremde Firmen-Lkw entfernen), der Lkw-Wechsel im laufenden Spiel, ein Overlay im Spiel und die Anbindung an einen Convoy-Server.
 
-Im Spiel bestätigt ist bisher (ETS2 1.62): Das Spiel lädt einen Spielstand, in den `spedhub-save` einen Lkw eingesetzt hat, der neue Speicherplatz des Launchers erscheint, das Spiel übernimmt den Kontostand aus dem Geldabgleich, und das Plugin lädt und meldet Herzschläge und abgelieferte Aufträge. Anderes ist nur ohne Spiel getestet, etwa die Einheiten im Herzschlag, das Erkennen des Firmenprofils über `game.log.txt` und ob Setup und Plugin-Installation auf einem echten Windows laufen. Die Liste steht in `docs/architektur.md`, Abschnitt "Offene Tests im Spiel und auf Windows".
+Im Spiel bestätigt ist bisher (ETS2 1.62): Das Spiel lädt einen Spielstand, in den `spedhub-save` einen Lkw eingesetzt hat, der neue Speicherplatz des Launchers erscheint, das Spiel übernimmt den Kontostand aus dem Geldabgleich, und das Plugin lädt und meldet Herzschläge und abgelieferte Aufträge. Anderes ist nur ohne Spiel getestet, etwa die Einheiten im Herzschlag, die Wirtschafts-Mod, das Erkennen des Firmenprofils über `game.log.txt` und ob Setup und Plugin-Installation auf einem echten Windows laufen. Die Liste steht in `docs/architektur.md`, Abschnitt "Offene Tests im Spiel und auf Windows".
 
 ## Installation
 
 Für Fahrer gibt es ein Setup für Windows (64 Bit):
 
 1. Auf GitHub unter [Releases](https://github.com/LSSippler/SpedHub/releases) beim neuesten Release `SpedHub-Setup-<Version>.exe` laden. Wer sichergehen will, vergleicht die SHA-256 mit `SHA256SUMS.txt` aus demselben Release: `Get-FileHash .\SpedHub-Setup-0.2.0.exe`.
-2. Setup starten und die Nachfrage nach Adminrechten bestätigen. Es installiert den Launcher nach `Programme\SpedHub`, legt eine Verknüpfung im Startmenü an und, wenn nicht abgewählt, auf dem Desktop.
+2. Setup starten und die Nachfrage nach Adminrechten bestätigen. Es installiert den Launcher (und daneben `spedhub-save.exe`, unter anderem für die Wirtschafts-Mod) nach `Programme\SpedHub`, legt eine Verknüpfung im Startmenü an und, wenn nicht abgewählt, auf dem Desktop.
 3. Am Ende kopiert das Setup das Plugin in den Spielordner von Euro Truck Simulator 2. Den Spielordner sucht es über Steam, in allen Bibliotheken. Findet es ihn nicht, sagt es das und lässt den Ordner wählen.
 4. Wahlweise, standardmäßig abgewählt: "Server für lokale Tests". Dann gibt es im Startmenü "SpedHub-Server (lokaler Test)", der einen Server auf http://127.0.0.1:8787 mit Datenbank in `%LOCALAPPDATA%\SpedHub\server` startet.
 5. Launcher starten, die Adresse des Firmenservers eintragen, anmelden und die Firma wählen. Eine Firma gründen oder ihr beitreten geht im Dashboard des Servers. Sobald eine Firma gewählt ist, schreibt der Launcher die Anmeldung für das Plugin. Beim nächsten Spielstart fragt ETS2 einmal, ob es Plugins laden darf, das mit OK bestätigen.
@@ -91,7 +92,7 @@ Ein Release baut GitHub Actions aus einem Tag. Von Hand gebaut wird nichts.
    Der Tag muss genau `v` plus die Version aus der `Cargo.toml` sein, sonst bricht der Workflow mit einer Meldung ab.
 
 4. **Was der Workflow tut** (`.github/workflows/release.yml`):
-   - Windows: prüft Tag gegen Version, führt alle Tests aus, baut Launcher, Plugin und Server im Release-Modus und daraus mit `installer/build.ps1` und Inno Setup `SpedHub-Setup-0.2.1.exe`.
+   - Windows: prüft Tag gegen Version, führt alle Tests aus, baut Launcher, Plugin, `spedhub-save` und Server im Release-Modus und daraus mit `installer/build.ps1` und Inno Setup `SpedHub-Setup-0.2.1.exe`.
    - Linux: baut `spedhub-server` für x86_64, statisch mit musl gelinkt, und prüft, dass er keine Bibliotheken braucht.
    - Release: legt eine gemeinsame `SHA256SUMS.txt` an, schreibt die Release-Notes aus `git log` und veröffentlicht das Release "SpedHub 0.2.1" mit Setup, `spedhub-server-linux-x86_64` und `SHA256SUMS.txt`.
 
@@ -125,21 +126,21 @@ Ein Release baut GitHub Actions aus einem Tag. Von Hand gebaut wird nichts.
 
 Ging etwas schief: Release auf GitHub löschen, den Tag löschen (`git push --delete origin v0.2.1` und `git tag -d v0.2.1`), Fehler beheben und mit derselben oder einer neuen Version wieder ab Schritt 3. Ein schon veröffentlichtes Release, das Launcher eventuell geladen haben, besser nicht ersetzen, sondern eine neue Version machen.
 
-Die normale CI (`.github/workflows/ci.yml`) baut bei jedem Pull Request ebenfalls das Setup und den Linux-Server und lädt sie als Artefakte hoch, dazu Plugin und Launcher einzeln (`spedhub-setup-windows-x64`, `spedhub-server-linux-x86_64`, `spedhub-plugin-windows-x64`, `spedhub-launcher-windows-x64`).
+Die normale CI (`.github/workflows/ci.yml`) baut bei jedem Pull Request ebenfalls das Setup und den Linux-Server und lädt sie als Artefakte hoch, dazu Plugin, Launcher und `spedhub-save.exe` einzeln (`spedhub-setup-windows-x64`, `spedhub-server-linux-x86_64`, `spedhub-plugin-windows-x64`, `spedhub-launcher-windows-x64`, `spedhub-save-windows-x64`).
 
 ## Aufbau
 
 | Ordner | Inhalt |
 |---|---|
 | `server/` | Backend und Dashboard: Kasse, Lohn, Fuhrpark, Geldabgleich, Online-Status, Werkstatt, Anschaffungen. Details in `server/README.md` |
-| `crates/spedhub-save/` | Save-Bibliothek und Kommandozeile `spedhub-save`: Spielstand lesen, prüfen, schreiben, Lkw exportieren, wiedererkennen und einsetzen, Kontostand setzen |
+| `crates/spedhub-save/` | Save-Bibliothek und Kommandozeile `spedhub-save`: Spielstand lesen, prüfen, schreiben, Lkw exportieren, wiedererkennen und einsetzen, Kontostand setzen, Wirtschafts-Mod bauen |
 | `crates/spedhub-plugin/` | Plugin für ETS2: meldet Aufträge, Strafen, Maut, Fähre und Zug und schickt den Herzschlag. Details in `crates/spedhub-plugin/README.md` |
 | `crates/spedhub-launcher/` | Launcher für Windows: anmelden, Fuhrpark, Lkw in den Spielstand schreiben, Geldabgleich, Spiel starten, Plugin installieren, Updates. Details in `crates/spedhub-launcher/README.md` |
 | `installer/` | Setup mit Inno Setup (`spedhub.iss`) und das Bauskript `build.ps1`, nur unter Windows |
 | `.github/workflows/` | `ci.yml` prüft jeden Pull Request unter Linux und Windows und baut Setup und Linux-Server mit, `release.yml` baut aus einem Tag das Release |
 | `tools/` | Bedienung von `spedhub-save` und die Python-Referenz, Details in `tools/README.md` |
 | `testdata/` | Kleine, anonymisierte Test-Spielstände aus ETS2 1.62 |
-| `docs/` | Architektur (`architektur.md`) und Spielstand-Format (`save-format.md`) |
+| `docs/` | Architektur (`architektur.md`), Spielstand-Format (`save-format.md`) und Wirtschafts-Mod (`wirtschafts-mod.md`) |
 
 ## Hinweis
 
