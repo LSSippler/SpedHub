@@ -140,6 +140,10 @@ pub struct Truck {
     /// in der Liste. Ältere Server liefern das nicht.
     #[serde(default)]
     pub retired: Option<Retired>,
+    /// Kilometerstand für die Anzeige: höher aus der letzten Meldung des Spiels, sonst wie
+    /// gespeichert. Ältere Server liefern das nicht.
+    #[serde(default)]
+    pub current_km: Option<i64>,
 }
 
 /// Wann und warum ein Lkw den Fuhrpark verlassen hat.
@@ -189,6 +193,13 @@ impl Truck {
         } else {
             TruckState::Free
         }
+    }
+
+    /// Kilometerstand für die Karte. Gerechnet wird beim Zurückgeben weiter mit `odometer_km`.
+    pub fn shown_km(&self) -> i64 {
+        self.current_km
+            .unwrap_or(self.odometer_km)
+            .max(self.odometer_km)
     }
 
     /// Schaden für die Fuhrparkliste, etwa `12,5 %, dauerhaft 3 %`.

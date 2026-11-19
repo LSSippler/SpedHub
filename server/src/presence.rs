@@ -28,6 +28,16 @@ pub const PLATE_MAX: usize = 64;
 
 /// Kennzeichen zum Vergleichen: ohne Markup, ohne Land, Leerraum zusammengefasst, groß
 /// geschrieben. `DD<img src=...>RI 772|germany` und `dd ri 772` ergeben dasselbe.
+/// Kilometerstand für die Anzeige: der zuletzt aus dem Spiel gemeldete, wenn er höher ist als
+/// der gespeicherte (der vom Ausleihen oder der letzten Rückgabe). Das zweite Feld sagt, ob er
+/// aus der Meldung stammt. Gebucht und abgerechnet wird weiter nur mit dem gespeicherten.
+pub fn current_odometer(stored_km: i64, reported_km: Option<i64>) -> (i64, bool) {
+    match reported_km {
+        Some(r) if r > stored_km => (r, true),
+        _ => (stored_km, false),
+    }
+}
+
 pub fn plate_key(plate: &str) -> String {
     spedhub_save::plate_text(plate).to_uppercase()
 }
@@ -434,6 +444,15 @@ pub fn all(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kilometerstand_aus_der_letzten_meldung() {
+        assert_eq!(current_odometer(1000, None), (1000, false));
+        assert_eq!(current_odometer(1000, Some(1523)), (1523, true));
+        // Weniger oder gleich viel gemeldet: der gespeicherte bleibt
+        assert_eq!(current_odometer(1000, Some(1000)), (1000, false));
+        assert_eq!(current_odometer(1000, Some(900)), (1000, false));
+    }
 
     #[test]
     fn kennzeichen_vergleichen() {

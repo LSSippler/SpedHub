@@ -902,6 +902,10 @@ fn zustand_im_fuhrpark() {
         truck(json!({ "in_workshop": true, "retired": retired })).state(),
         TruckState::Retired
     );
+    // Kilometerstand: der gemeldete, wenn der Server einen höheren kennt
+    assert_eq!(truck(json!({})).shown_km(), 1000);
+    assert_eq!(truck(json!({ "current_km": 1523 })).shown_km(), 1523);
+    assert_eq!(truck(json!({ "current_km": 900 })).shown_km(), 1000);
 }
 
 #[test]

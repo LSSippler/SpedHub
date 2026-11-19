@@ -1693,11 +1693,9 @@ impl App {
             });
         }
         let (state, tone) = plugin_state(self.plugin.status);
-        let note = match (&self.plugin.game_dir, &self.plugin.problem) {
-            (Some(dir), _) => dir.display().to_string(),
-            (None, Some(problem)) => problem.clone(),
-            (None, None) => String::new(),
-        };
+        // Kurz, damit nichts abgeschnitten wird. Ordner und Fehler stehen in den Einstellungen
+        // und in der Hinweiskarte.
+        let note = self.plugin.status.short_note().to_string();
         tiles.push(Kpi {
             icon: Icon::Plugin,
             tone,
@@ -1943,7 +1941,7 @@ impl App {
                 theme::column(ui, half, |ui| {
                     ui.spacing_mut().item_spacing.y = 2.0;
                     ui.label(text("Kilometerstand", regular(FS_XS), p.text_2));
-                    ui.label(text(theme::km(t.odometer_km), semibold(FS_MD), p.text));
+                    ui.label(text(theme::km(t.shown_km()), semibold(FS_MD), p.text));
                 });
                 theme::column(ui, half, |ui| {
                     ui.spacing_mut().item_spacing.y = 2.0;

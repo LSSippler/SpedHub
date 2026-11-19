@@ -83,6 +83,18 @@ pub enum PluginStatus {
 }
 
 impl PluginStatus {
+    /// Kurzer Satz für die Kachel "Plugin", passt in eine Zeile. Die ausführliche Meldung steht
+    /// in der Hinweiskarte darüber.
+    pub fn short_note(self) -> &'static str {
+        match self {
+            PluginStatus::Installed => "aktuell, im Spielordner",
+            PluginStatus::Outdated => "neue Version installieren",
+            PluginStatus::Missing => "noch nicht installiert",
+            PluginStatus::GameNotFound => "Spiel nicht gefunden",
+            PluginStatus::NoBundledDll => "nicht im Paket enthalten",
+        }
+    }
+
     /// Text für die Oberfläche.
     pub fn label(self) -> &'static str {
         match self {
