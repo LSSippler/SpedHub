@@ -589,3 +589,21 @@ fn spielordner_fuer_das_setup_melden_und_merken() {
     assert_eq!(Settings::load(&other).game_dir, None);
     assert!(cli::remember_game_dir(None, &game).is_err());
 }
+
+#[test]
+fn kurzer_text_fuer_die_kachel() {
+    assert_eq!(
+        PluginStatus::GameNotFound.short_note(),
+        "Spiel nicht gefunden"
+    );
+    for s in [
+        PluginStatus::Installed,
+        PluginStatus::Outdated,
+        PluginStatus::Missing,
+        PluginStatus::GameNotFound,
+        PluginStatus::NoBundledDll,
+    ] {
+        // Passt in eine Zeile der Kachel
+        assert!(s.short_note().chars().count() <= 26, "{s:?}");
+    }
+}

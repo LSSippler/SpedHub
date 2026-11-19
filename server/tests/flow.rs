@@ -2803,6 +2803,11 @@ async fn chef_nimmt_ohne_kilometer_zurueck_mit_dem_letzten_zustand() {
     .await;
     let l = f.truck_as(&f.chef, t).await;
     assert_eq!(l["last_known"], json!({ "at": seen, "odometer_km": 1523 }));
+    // Angezeigt wird der gemeldete Kilometerstand, gespeichert bleibt der vom Ausleihen
+    assert_eq!(
+        (&l["odometer_km"], &l["current_km"], &l["km_from_game"]),
+        (&json!(1000), &json!(1523), &json!(true))
+    );
 
     // Der Fahrer kann es auch jetzt nicht ohne Kilometer
     let (s, _) = f.checkin(&f.fahrer, t, json!({})).await;
@@ -2829,6 +2834,10 @@ async fn chef_nimmt_ohne_kilometer_zurueck_mit_dem_letzten_zustand() {
     assert_eq!((last_seen, last_km, last), (None, None, None), "geleert");
     let l = f.truck_as(&f.chef, t).await;
     assert!(l["leased_by"].is_null() && l["last_known"].is_null());
+    assert_eq!(
+        (&l["current_km"], &l["km_from_game"]),
+        (&json!(1523), &json!(false))
+    );
 
     // Beim nächsten Fahrer gilt der alte Zustand nicht mehr
     f.checkout(&f.fahrer, t).await;

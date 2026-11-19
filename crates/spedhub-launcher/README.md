@@ -17,11 +17,17 @@ cargo build --release -p spedhub-launcher -p spedhub-plugin
 
 Dann liegen `spedhub-launcher.exe` und `spedhub_plugin.dll` unter `target\release`. Der Launcher braucht keine Installation, für "Plugin installieren" muss die DLL aber neben ihm liegen. Das Setup selbst baut `installer\build.ps1`, siehe `README.md`.
 
-Unten im Fenster steht die Version des Launchers, etwa `SpedHub 0.2.0`.
+Unten in der Seitenleiste steht die Version des Launchers, etwa `Version 0.2.1, aktuell`.
+
+## Aussehen
+
+Der Launcher sieht aus wie das Dashboard: dieselben Farben, Schriftgrößen und Bausteine aus `docs/design-system.md`, im Code an einer Stelle in `src/theme.rs`. Links die Seitenleiste mit den Bereichen Fuhrpark, Geld und Spielstand, Übernehmen (nur Chef) und Einstellungen, unten Nutzer, Version und Server. Ein Klick auf den Nutzer öffnet ein Menü mit Einstellungen, Abmelden und, bei mehreren Firmen, Firma wechseln. Oben im Inhalt stehen Hinweise als farbige Karten (Update, Version, Plugin, Firmenprofil) und die Kennzahlen Lohnkonto, Firmenkasse, Plugin und Firmenprofil.
+
+Hell oder dunkel richtet sich nach der Einstellung von Windows. Mit der Umgebungsvariablen `SPEDHUB_THEME=hell` oder `SPEDHUB_THEME=dunkel` lässt sich das festlegen, etwa für Screenshots unter Linux, wo das System nichts meldet (dann ist es hell). Als Schrift nimmt der Launcher Segoe UI aus `C:\Windows\Fonts` (normal und Semibold), fehlt sie, die eingebaute Schrift von egui.
 
 ## Plugin
 
-Über dem Fuhrpark, und vor der Anmeldung unter dem Anmelden, zeigt der Launcher den Stand des Plugins:
+Den Stand des Plugins zeigt der Launcher oben als Kennzahl "Plugin", vor der Anmeldung unter dem Anmelden und in den Einstellungen in einer eigenen Karte. Fehlt das Plugin, ist es veraltet oder ist das Spiel nicht gefunden, steht oben zusätzlich eine Hinweiskarte mit den Knöpfen:
 
 | Anzeige | Bedeutung |
 |---|---|
@@ -44,9 +50,9 @@ Ein von Hand gewählter Ordner aus den Einstellungen geht der Suche vor, solange
 
 ## Updates
 
-Beim Start fragt der Launcher im Hintergrund die GitHub-Releases von `LSSippler/SpedHub` ab (`GET https://api.github.com/repos/LSSippler/SpedHub/releases/latest`, ohne Anmeldung). Unten im Fenster steht leise "aktuell" oder warum die Prüfung nicht ging (offline, noch kein Release, Abfragelimit von GitHub). Das stört nichts.
+Beim Start fragt der Launcher im Hintergrund die GitHub-Releases von `LSSippler/SpedHub` ab (`GET https://api.github.com/repos/LSSippler/SpedHub/releases/latest`, ohne Anmeldung). Unten in der Seitenleiste steht leise "aktuell", warum die Prüfung nicht ging (offline, noch kein Release, Abfragelimit von GitHub) steht im Tooltip und in den Einstellungen unter "Version". Das stört nichts.
 
-Ist das neueste Release neuer als der Launcher, steht oben "Version X verfügbar" mit dem Knopf "Herunterladen und installieren". Erst der Knopf
+Ist das neueste Release neuer als der Launcher, steht oben eine Hinweiskarte "Version X verfügbar" mit dem Knopf "Herunterladen und installieren". Erst der Knopf
 
 1. lädt `SHA256SUMS.txt` und `SpedHub-Setup-<Version>.exe` aus dem Release in `%TEMP%\SpedHub-Update`,
 2. vergleicht die SHA-256 des Setups mit der Zeile in `SHA256SUMS.txt`,
@@ -56,7 +62,7 @@ Fehlt das Setup oder `SHA256SUMS.txt` im Release oder passt die Prüfsumme nicht
 
 ## Version und Server
 
-Der Launcher schickt bei jeder Anfrage seine Version im Header `X-SpedHub-Version`. Beim Anmelden und beim Laden des Fuhrparks vergleicht er sie mit der Version des Servers. Passen Haupt- und Nebenversion nicht (`0.2.x` gegen `0.3.x`), oder meldet der Server keine Version, steht unter der Leiste ein gelber Hinweis. Anmelden geht trotzdem, aber manches kann fehlschlagen.
+Der Launcher schickt bei jeder Anfrage seine Version im Header `X-SpedHub-Version`. Beim Anmelden und beim Laden des Fuhrparks vergleicht er sie mit der Version des Servers. Passen Haupt- und Nebenversion nicht (`0.2.x` gegen `0.3.x`), oder meldet der Server keine Version, steht oben eine gelbe Hinweiskarte. Anmelden geht trotzdem, aber manches kann fehlschlagen.
 
 ## Kommandozeile
 
@@ -78,20 +84,20 @@ Mit Adminrechten kann der Launcher unter einem anderen Konto laufen, wenn ein St
 ## Bedienung
 
 1. **Anmelden:** Server-Adresse (Standard `http://127.0.0.1:8787`), Name und Passwort. Mit "Konto anlegen" gibt es ein neues Konto. Die Anmeldung bleibt gespeichert.
-2. **Firma wählen:** oben in der Leiste. Eine Firma gründen oder ihr beitreten geht bisher nur im Dashboard.
-3. **Firmenprofil wählen:** das ETS2-Profil, in dem du für die Firma fährst. Der Launcher sucht unter `Dokumente\Euro Truck Simulator 2\profiles` und `steam_profiles`. Liegt das Profil unter `steam_profiles`, erscheint eine Warnung: Steam Cloud kann einen bearbeiteten Spielstand mit einer älteren Fassung überschreiben. Am besten nimmst du ein eigenes Profil ohne Steam Cloud. Nur was in diesem Profil passiert, zählt für die Firma (siehe Firmenprofil). Ohne gewähltes Profil meldet das Plugin nichts.
+2. **Firma wählen:** im Menü des Nutzers unten in der Seitenleiste oder in den Einstellungen. Eine Firma gründen oder ihr beitreten geht bisher nur im Dashboard.
+3. **Firmenprofil wählen** (Geld und Spielstand): das ETS2-Profil, in dem du für die Firma fährst. Der Launcher sucht unter `Dokumente\Euro Truck Simulator 2\profiles` und `steam_profiles`. Liegt das Profil unter `steam_profiles`, erscheint eine Warnung: Steam Cloud kann einen bearbeiteten Spielstand mit einer älteren Fassung überschreiben. Am besten nimmst du ein eigenes Profil ohne Steam Cloud. Nur was in diesem Profil passiert, zählt für die Firma (siehe Firmenprofil). Ohne gewähltes Profil meldet das Plugin nichts.
 4. **Ausleihen:** Der Server vergibt den Lkw. Der Launcher setzt ihn sofort in den neuesten Spielstand des Profils ein, mit dem Kennzeichen, das der Lkw in der Firma hat (siehe Kennzeichen), gleicht dabei das Geld ab (siehe unten) und legt das Ergebnis als neuen Speicherplatz `SpedHub: <Kennzeichen>` an. Im Spiel diesen Speicherplatz laden.
 5. **In Spielstand schreiben:** dasselbe noch einmal, zum Beispiel wenn beim Ausleihen das Spiel lief. Liegt der Bauplan nicht auf diesem Rechner, holt der Launcher ihn vom Server.
-6. **Geld abgleichen:** Liest Kontostand und Erfahrungspunkte aus dem neuesten Spielstand, meldet sie dem Server und legt einen neuen Speicherplatz `SpedHub: Geldabgleich` mit dem Kontostand an, den der Server nennt: dein Lohnkonto plus den Betriebsvorschuss der Firma.
+6. **Geld abgleichen** (Geld und Spielstand): Liest Kontostand und Erfahrungspunkte aus dem neuesten Spielstand, meldet sie dem Server und legt einen neuen Speicherplatz `SpedHub: Geldabgleich` mit dem Kontostand an, den der Server nennt: dein Lohnkonto plus den Betriebsvorschuss der Firma.
 7. **Zurückgeben:** Der Launcher liest Kilometerstand und Zustand des Lkw aus dem neuesten Spielstand und meldet sie dem Server. Er sucht den Lkw zuerst über das Kennzeichen, und nur einen mit dem Modell aus dem Bauplan: Ein eigener Lkw mit zufällig gleichem Kennzeichen zählt nicht. Das Spiel kann das Kennzeichen aber ersetzen. Findet er so keinen, oder haben zwei Lkw das Kennzeichen, erkennt er den Lkw über Modell, Teile und Kilometerstand wieder und meldet das neue Kennzeichen mit. Trägt das neue Kennzeichen schon ein anderer Firmen-Lkw, gibt er ohne neues Kennzeichen zurück und sagt das. Dafür braucht er den Bauplan, aus `leases\` oder vom Server. Passen zwei Lkw gleich gut, sagt er das und rät nicht. Erst wenn beides nichts findet, gibst du den Kilometerstand von Hand ein.
-8. **Lkw in den Fuhrpark übernehmen** (nur Chef): Spielstand wählen, Lkw wählen, Kennzeichen in der Firma festlegen, übernehmen. Das Feld ist mit dem Vorschlag des Servers vorbelegt (Kürzel der Firma und nächste freie Nummer, etwa `NL 003`) und lässt sich ändern. Das Kennzeichen aus dem Spielstand wird nicht das Firmen-Kennzeichen, es kann einem anderen Lkw gehören, etwa das Wunschkennzeichen eines Profils. Der Lkw kommt mit Bauplan, Kilometerstand und Zustand auf den Server. Danach bietet der Launcher an, den Kauf zu verknüpfen (siehe unten).
-9. **Spiel starten:** öffnet `steam://rungameid/227300`.
+8. **Lkw in den Fuhrpark übernehmen** (Bereich Übernehmen, nur Chef): Spielstand wählen, Lkw wählen, Kennzeichen in der Firma festlegen, übernehmen. Das Feld ist mit dem Vorschlag des Servers vorbelegt (Kürzel der Firma und nächste freie Nummer, etwa `NL 003`) und lässt sich ändern. Das Kennzeichen aus dem Spielstand wird nicht das Firmen-Kennzeichen, es kann einem anderen Lkw gehören, etwa das Wunschkennzeichen eines Profils. Der Lkw kommt mit Bauplan, Kilometerstand und Zustand auf den Server. Danach bietet der Launcher an, den Kauf zu verknüpfen (siehe unten).
+9. **Spiel starten:** oben rechts in jedem Bereich, öffnet `steam://rungameid/227300`.
 
 Läuft das Spiel, schreibt der Launcher nichts in den Spielstand und sagt das auch.
 
-Über dem Fuhrpark zeigt der Launcher dein Lohnkonto, offenen Lohn, Level, Firmenkilometer und Lohnstufe. Im Fuhrpark steht bei einem verliehenen Lkw "fährt gerade" mit der Geschwindigkeit, wenn das Plugin des Ausleihers gerade Herzschläge mit genau diesem Lkw schickt.
+Oben steht dein Lohnkonto als Kennzahl, unter Geld und Spielstand mit offenem Lohn, Level, Firmenkilometern und Lohnstufe. Der Fuhrpark zeigt jeden Lkw als Karte mit Kennzeichen, Modell, einer Plakette für den Zustand (frei, bei dir, verliehen, wird gefahren, in der Werkstatt), Kilometerstand, Schadensbalken und einer Hauptaktion. Darüber filtern Pillen nach Alle, Frei, Unterwegs und Werkstatt. Bei einem verliehenen Lkw steht "fährt gerade" mit der Geschwindigkeit, wenn das Plugin des Ausleihers gerade Herzschläge mit genau diesem Lkw schickt.
 
-Die Spalte "Schaden" zeigt den Schaden jedes Lkw in Prozent, so wie der Server ihn aus dem Zustand der letzten Rückgabe rechnet, dazu den dauerhaften Verschleiß, etwa `12,5 %, dauerhaft 3 %`. Liegt ein Lkw nach der Rückgabe über der Schadensgrenze der Firma, steht er "in der Werkstatt" und "Ausleihen" ist ausgegraut, bis der Chef ihn im Dashboard reparieren lässt. Nach der Rückgabe sagt der Launcher, wie viel Schaden der Lkw hat, ob er in die Werkstatt muss und was du an Haftung für neuen Schaden aus dem Lohnkonto zahlst, wenn die Firma eine Haftung eingestellt hat. Details in `server/README.md`, Abschnitt "Schaden und Werkstatt".
+Der Balken "Schaden" zeigt den Schaden jedes Lkw in Prozent, so wie der Server ihn aus dem Zustand der letzten Rückgabe rechnet: grün unter 10 %, bernstein bis zur Schadensgrenze der Firma (der Strich im Balken), rot darüber. Darunter steht der dauerhafte Verschleiß, etwa `dauerhaft 3 %`. Liegt ein Lkw nach der Rückgabe über der Schadensgrenze der Firma, steht er "in der Werkstatt" und "Ausleihen" ist ausgegraut, bis der Chef ihn im Dashboard reparieren lässt. Nach der Rückgabe sagt der Launcher, wie viel Schaden der Lkw hat, ob er in die Werkstatt muss und was du an Haftung für neuen Schaden aus dem Lohnkonto zahlst, wenn die Firma eine Haftung eingestellt hat. Details in `server/README.md`, Abschnitt "Schaden und Werkstatt".
 
 ## Kennzeichen
 
@@ -114,13 +120,13 @@ Klappt die Meldung nicht, etwa mit einem älteren Server, steht der Grund in der
 
 Hat der Chef den Lkw im Spiel gekauft, hat der Geldabgleich den Kaufpreis als Betriebskosten aus der Firmenkasse gebucht. Das Geld dafür bekommt er vorher über ein Anschaffungsbudget, das er im Büro des Dashboards freigibt: Beim nächsten Geldabgleich schreibt der Launcher dann Lohnkonto plus Vorschuss plus den Rest des Budgets in den Spielstand, und die Meldung nach dem Abgleich nennt das Budget.
 
-Nach "Lkw übernehmen" holt der Launcher die letzten Betriebskosten-Buchungen des Chefs, die noch mit keinem Lkw verknüpft sind (Betrag, wie lange her, Notiz des Abgleichs). Gibt es welche, erscheint über dem Fuhrpark "Kauf von <Kennzeichen> verknüpfen": Buchung wählen und "Als Lkw-Kauf verknüpfen", oder "Nicht verknüpfen". Die Buchung bleibt unverändert, im Kassenbuch steht danach "Lkw-Kauf <Kennzeichen>" statt "Betriebskosten". Später geht das auch im Kassenbuch des Dashboards.
+Nach "Lkw übernehmen" holt der Launcher die letzten Betriebskosten-Buchungen des Chefs, die noch mit keinem Lkw verknüpft sind (Betrag, wie lange her, Notiz des Abgleichs). Gibt es welche, erscheint ein Dialog "Kauf von <Kennzeichen> verknüpfen": Buchung wählen und "Als Lkw-Kauf verknüpfen", oder "Nicht verknüpfen". Die Buchung bleibt unverändert, im Kassenbuch steht danach "Lkw-Kauf <Kennzeichen>" statt "Betriebskosten". Später geht das auch im Kassenbuch des Dashboards.
 
 Verkaufte und ausgemusterte Lkw stehen eingeklappt unter "Ausgemustert und verkauft", ohne Knöpfe. Verkaufen und ausmustern geht im Dashboard. Details in `server/README.md`, Abschnitt "Anschaffungen".
 
 ## Einstellungen
 
-Unten im Fenster, zum Aufklappen. Dort lässt sich das Passwort ändern: altes Passwort, neues (mindestens 8 Zeichen) und die Wiederholung, dann "Passwort ändern". Danach sind alle anderen Anmeldungen mit diesem Konto abgemeldet, zum Beispiel das Dashboard auf einem anderen Rechner. Der Launcher behält seinen Token und bleibt angemeldet, ebenso das Plugin, das denselben Token aus `plugin.json` nimmt. Ein falsches altes Passwort meldet der Launcher im Klartext und meldet dich dabei nicht ab.
+Eigener Bereich in der Seitenleiste mit Konto (Firma, Abmelden), Plugin und Version. Dort lässt sich auch das Passwort ändern: altes Passwort, neues (mindestens 8 Zeichen) und die Wiederholung, dann "Passwort ändern". Danach sind alle anderen Anmeldungen mit diesem Konto abgemeldet, zum Beispiel das Dashboard auf einem anderen Rechner. Der Launcher behält seinen Token und bleibt angemeldet, ebenso das Plugin, das denselben Token aus `plugin.json` nimmt. Ein falsches altes Passwort meldet der Launcher im Klartext und meldet dich dabei nicht ab.
 
 Ein Token läuft nach 30 Tagen ohne Benutzung ab. Dann meldet der Launcher, dass die Anmeldung abgelaufen ist, und du meldest dich neu an.
 
@@ -180,7 +186,8 @@ Die Deinstallation fragt "Anmeldung, Einstellungen und Backups behalten?", Stand
 | `src/profiles.rs` | Profile, Hex-Namen, Name zum Profilordner, Pfad zu `game.log.txt`, Speicherplätze |
 | `src/savegame.rs` | Lkw übernehmen, Kennzeichen der Firma ins Paket setzen, einsetzen, Kontostand setzen, für die Rückgabe lesen, über `spedhub-save` |
 | `src/settings.rs` | `launcher.json`, `plugin.json`, Ablage der Baupläne |
-| `src/system.rs` | Windows-Anbindung: Dokumente-Ordner, laufendes Spiel, Steam, DPAPI, Registry, MessageBox, Ordnerdialog, Neustart mit Adminrechten |
+| `src/system.rs` | Windows-Anbindung: Dokumente-Ordner, laufendes Spiel, Steam, DPAPI, Registry, MessageBox, Ordnerdialog, Neustart mit Adminrechten, Systemschrift |
+| `src/theme.rs` | Aussehen nach `docs/design-system.md`: Farben hell und dunkel, Schrift, Abstände, Bausteine (Karte, Plakette, Kennzahl, Hinweiskarte, Kennzeichen, Schadensbalken, Knöpfe, Seitenleiste), Zahlen und Modellnamen formatieren |
 
 Außer `main.rs` lässt sich alles ohne Fenster testen:
 

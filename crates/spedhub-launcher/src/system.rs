@@ -103,6 +103,15 @@ pub fn run_elevated_and_wait(exe: &std::path::Path, parameters: &str) -> Result<
     imp::run_elevated_and_wait(exe, parameters)
 }
 
+/// Systemschrift für die Oberfläche: normal und mit Gewicht 600, jeweils die erste Datei, die
+/// sich lesen lässt. Unter Windows Segoe UI aus dem Ordner `Fonts`, sonst gängige Schriften
+/// unter Linux. `None`, wenn keine da ist, dann bleibt die eingebaute Schrift von egui.
+pub fn ui_fonts() -> (Option<Vec<u8>>, Option<Vec<u8>>) {
+    let (regular, semibold) = imp::ui_font_files();
+    let first = |files: Vec<PathBuf>| files.iter().find_map(|f| std::fs::read(f).ok());
+    (first(regular), first(semibold))
+}
+
 /// Öffnet eine Datei wie ein Doppelklick, für das geladene Setup.
 pub fn open_path(path: &std::path::Path) -> Result<(), String> {
     imp::open_path(path)
@@ -148,6 +157,17 @@ mod imp {
 
     fn wide(s: &str) -> Vec<u16> {
         std::ffi::OsStr::new(s).encode_wide().chain([0]).collect()
+    }
+
+    pub fn ui_font_files() -> (Vec<PathBuf>, Vec<PathBuf>) {
+        let windows = std::env::var_os("WINDIR")
+            .or_else(|| std::env::var_os("SystemRoot"))
+            .map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
+        let fonts = windows.join("Fonts");
+        (
+            vec![fonts.join("segoeui.ttf")],
+            vec![fonts.join("seguisb.ttf"), fonts.join("segoeuib.ttf")],
+        )
     }
 
     pub fn documents_dir() -> Option<PathBuf> {
@@ -512,6 +532,28 @@ mod imp {
     /// Ohne Windows gibt es kein DPAPI. Der Token wird dann unverschlüsselt gespeichert. Das ist
     /// nur für Entwicklung und Tests gedacht, der Launcher ist eine Windows-Anwendung.
     pub const PLAIN: &str = "none";
+
+    pub fn ui_font_files() -> (Vec<PathBuf>, Vec<PathBuf>) {
+        let dirs = ["/usr/share/fonts/truetype", "/usr/share/fonts/opentype"];
+        let files = |names: &[&str]| -> Vec<PathBuf> {
+            names
+                .iter()
+                .flat_map(|n| dirs.iter().map(move |d| PathBuf::from(d).join(n)))
+                .collect()
+        };
+        (
+            files(&[
+                "noto/NotoSans-Regular.ttf",
+                "inter/Inter-Regular.otf",
+                "dejavu/DejaVuSans.ttf",
+            ]),
+            files(&[
+                "noto/NotoSans-SemiBold.ttf",
+                "inter/Inter-SemiBold.otf",
+                "dejavu/DejaVuSans-Bold.ttf",
+            ]),
+        )
+    }
 
     pub fn documents_dir() -> Option<PathBuf> {
         // ETS2 für Linux legt seine Daten hier ab.

@@ -1111,10 +1111,15 @@ async fn list_trucks(
             let driving = holder
                 .and_then(|h| seen.get(&h))
                 .filter(|p| p.online(now) && p.own_lease && p.truck_id == Some(id));
+            let stored_km: i64 = r.get(3)?;
+            let reported_km = last_seen_at.and(r.get::<_, Option<i64>>(9)?);
+            let (current_km, km_from_game) = presence::current_odometer(stored_km, reported_km);
             let mut t = json!({
                 "id": id, "plate": r.get::<_, String>(1)?, "model": r.get::<_, String>(2)?,
                 "old_plates": old.get(&id).cloned().unwrap_or_default(),
-                "odometer_km": r.get::<_, i64>(3)?, "rev": r.get::<_, i64>(4)?,
+                "odometer_km": stored_km, "rev": r.get::<_, i64>(4)?,
+                // Für die Anzeige: höher aus der letzten Meldung des Spiels, sonst wie gespeichert
+                "current_km": current_km, "km_from_game": km_from_game,
                 "leased_by": holder.map(|id| json!({
                     "user_id": id,
                     "name": r.get::<_, String>(6).unwrap_or_default(),
