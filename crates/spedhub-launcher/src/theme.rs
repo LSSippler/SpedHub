@@ -124,8 +124,11 @@ pub const FS_XL: f32 = 28.0;
 pub const NAV_WIDTH: f32 = 224.0;
 /// Höhe der Knöpfe und Eingaben
 pub const CONTROL_HEIGHT: f32 = 32.0;
-/// Kleinste Breite einer Lkw-Karte
-pub const CARD_MIN_WIDTH: f32 = 320.0;
+/// Kleinste Breite einer Lkw-Karte. Breiter als die 320 px im Dashboard, weil die eigene Leihe
+/// zwei Knöpfe nebeneinander hat ("Zurückgeben" und "In Spielstand schreiben", zusammen mit
+/// Innenabstand rund 366 px). egui bricht die Knopfreihe nicht um, eine schmalere Karte würde
+/// breiter als ihre Spalte und die Nachbarkarte aus dem Fenster schieben.
+pub const CARD_MIN_WIDTH: f32 = 380.0;
 /// Größte Breite des Inhalts
 pub const CONTENT_MAX_WIDTH: f32 = 1280.0;
 
@@ -148,10 +151,42 @@ pub fn semibold(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name(SEMIBOLD.into()))
 }
 
-/// Schriften: die Systemschrift (unter Windows Segoe UI), falls sie sich lesen ließ, sonst die
-/// eingebaute von egui. Die Familie [`SEMIBOLD`] gibt es immer, notfalls mit der normalen
-/// Schrift.
+/// Lässt sich mit dieser Schriftdatei Text auslegen? egui bricht mit einem Panic ab, wenn eine
+/// Datei nicht als TTF/OTF lesbar ist, und zwar erst beim ersten Zeichnen. Eine leere oder
+/// kaputte Systemschrift würde den Launcher also beim Start ohne Meldung schließen. Deshalb
+/// ein Probelauf in einem eigenen Kontext, bevor die Schrift genommen wird.
+pub fn font_works(data: &[u8]) -> bool {
+    if data.is_empty() {
+        return false;
+    }
+    let data = data.to_vec();
+    std::panic::catch_unwind(move || {
+        let ctx = egui::Context::default();
+        let mut fonts = FontDefinitions::default();
+        fonts
+            .font_data
+            .insert("probe".into(), Arc::new(FontData::from_owned(data)));
+        if let Some(family) = fonts.families.get_mut(&FontFamily::Proportional) {
+            family.insert(0, "probe".into());
+        }
+        ctx.set_fonts(fonts);
+        for _ in 0..2 {
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                ui.label("Probe: Lkw Äöü ß 1.234 €");
+            });
+            // Ohne Grafikkarte gibt es niemanden, der die Texturen abnimmt
+            out.textures_delta.clear();
+        }
+    })
+    .is_ok()
+}
+
+/// Schriften: die Systemschrift (unter Windows Segoe UI), falls sie sich lesen ließ und der
+/// Probelauf in [`font_works`] klappt, sonst die eingebaute von egui. Die Familie [`SEMIBOLD`]
+/// gibt es immer, notfalls mit der normalen Schrift.
 pub fn font_definitions(regular: Option<Vec<u8>>, semibold: Option<Vec<u8>>) -> FontDefinitions {
+    let regular = regular.filter(|d| font_works(d));
+    let semibold = semibold.filter(|d| font_works(d));
     let mut fonts = FontDefinitions::default();
     let fallback = fonts
         .families
@@ -366,14 +401,33 @@ pub fn km(n: i64) -> String {
     format!("{} km", thousands(n))
 }
 
-/// Modell lesbar wie im Dashboard: `scania.s_2016` wird zu `Scania S 2016`, `volvo.fh_2024`
-/// zu `Volvo FH 2024`. Kurze Teile bis drei Zeichen sind Kürzel und stehen groß.
+/// Kürzel, die im Modellnamen ganz groß stehen, zusätzlich zu Teilen mit höchstens zwei
+/// Buchstaben. Gleiche Liste wie `MODELL_KUERZEL` im Dashboard.
+const MODEL_ABBREVIATIONS: [&str; 6] = ["daf", "man", "tgx", "tgs", "tgm", "tgl"];
+
+/// Modell lesbar, mit denselben Regeln wie `modellName` im Dashboard: `daf.xf_euro6` wird zu
+/// `DAF XF Euro 6`, `volvo.fh16_2012` zu `Volvo FH16 2012`, `mercedes.actros2014` zu
+/// `Mercedes Actros 2014`. Ein Wort mit mindestens vier Buchstaben und Zahl dahinter wird
+/// getrennt, Mischungen aus Buchstaben und Ziffern und kurze Kürzel stehen groß.
 pub fn model_name(model: &str) -> String {
     model
-        .split(['.', '_'])
+        .split(['.', '_', ' '])
         .filter(|w| !w.is_empty())
+        .flat_map(|w| {
+            let letters = w.chars().take_while(char::is_ascii_alphabetic).count();
+            let rest = &w[letters..];
+            if letters >= 4 && !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()) {
+                vec![&w[..letters], rest]
+            } else {
+                vec![w]
+            }
+        })
         .map(|w| {
-            if w.chars().count() <= 3 {
+            let has_digit = w.chars().any(|c| c.is_ascii_digit());
+            let has_letter = w.chars().any(|c| c.is_ascii_alphabetic());
+            let short = w.chars().count() <= 2 && w.chars().all(|c| c.is_ascii_alphabetic());
+            let known = MODEL_ABBREVIATIONS.contains(&w.to_ascii_lowercase().as_str());
+            if (has_digit && has_letter) || short || known {
                 w.to_uppercase()
             } else {
                 let mut c = w.chars();
@@ -1529,11 +1583,31 @@ mod tests {
     }
 
     #[test]
+    fn card_fits_both_buttons_of_an_own_lease() {
+        // Zwei Knöpfe der eigenen Leihe brauchen mit Innenabstand rund 366 px
+        const { assert!(CARD_MIN_WIDTH >= 370.0) };
+        // Bei der kleinsten Breite jeder Spalte bleibt die Karte mindestens so breit
+        for full in [400.0, 700.0, 736.0, 960.0, 1121.0, 1400.0] {
+            let (cols, width) = grid_columns(full, CARD_MIN_WIDTH, SP_4);
+            assert!(
+                cols == 1 || width >= CARD_MIN_WIDTH,
+                "{full}: {cols} Spalten zu {width}"
+            );
+        }
+    }
+
+    #[test]
     fn model_names_read_like_the_dashboard() {
         assert_eq!(model_name("scania.s_2016"), "Scania S 2016");
         assert_eq!(model_name("volvo.fh_2024"), "Volvo FH 2024");
         assert_eq!(model_name("mercedes.actros"), "Mercedes Actros");
-        assert_eq!(model_name("daf.xf_euro6"), "DAF XF Euro6");
+        assert_eq!(model_name("daf.xf_euro6"), "DAF XF Euro 6");
+        assert_eq!(model_name("volvo.fh16_2012"), "Volvo FH16 2012");
+        assert_eq!(model_name("mercedes.actros2014"), "Mercedes Actros 2014");
+        assert_eq!(model_name("man.tgx_euro6"), "MAN TGX Euro 6");
+        // Kein Wort ganz groß, nur weil es kurz ist
+        assert_eq!(model_name("mercedes.new_actros"), "Mercedes New Actros");
+        assert_eq!(model_name("daf.2021"), "DAF 2021");
         assert_eq!(model_name("renault.t"), "Renault T");
         assert_eq!(model_name(""), "");
         assert_eq!(model_name("._"), "");
@@ -1594,12 +1668,41 @@ mod tests {
             assert!(!fonts.families[&family].is_empty());
             assert!(!fonts.families[&FontFamily::Proportional].is_empty());
         }
-        let fonts = font_definitions(Some(vec![1]), Some(vec![2]));
+        // Eine lesbare Schrift (hier eine von egui selbst) kommt nach vorn
+        let good = builtin_font();
+        let fonts = font_definitions(Some(good.clone()), Some(good));
         assert_eq!(
             fonts.families[&FontFamily::Name(SEMIBOLD.into())][0],
             "system-semibold"
         );
         assert_eq!(fonts.families[&FontFamily::Proportional][0], "system");
+    }
+
+    /// Bytes einer eingebauten Schrift von egui, als Beispiel für eine gültige Datei.
+    fn builtin_font() -> Vec<u8> {
+        let fonts = FontDefinitions::default();
+        let name = &fonts.families[&FontFamily::Proportional][0];
+        (*fonts.font_data[name].font).as_ref().to_vec()
+    }
+
+    #[test]
+    fn broken_font_falls_back_instead_of_crashing() {
+        assert!(font_works(&builtin_font()));
+        // Leer oder Müll: nicht nehmen. (Eine abgeschnittene Datei mit gültigem Kopf lässt egui
+        // durchgehen, ohne abzustürzen, dann zeichnet es mit den eingebauten Schriften weiter.)
+        for bad in [Vec::new(), vec![1, 2, 3], vec![0; 4096]] {
+            assert!(!font_works(&bad), "{} Bytes", bad.len());
+            let fonts = font_definitions(Some(bad.clone()), Some(bad));
+            assert!(!fonts.font_data.contains_key("system"));
+            assert!(!fonts.font_data.contains_key("system-semibold"));
+            // Mit den eingebauten Schriften lässt sich Text auslegen, ohne Panic
+            let ctx = egui::Context::default();
+            ctx.set_fonts(fonts);
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                ui.label(text("Probe", semibold(FS_BASE), Color32::BLACK));
+            });
+            out.textures_delta.clear();
+        }
     }
 
     #[test]

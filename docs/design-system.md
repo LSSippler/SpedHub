@@ -208,6 +208,6 @@ Der Launcher nutzt dieselben Farben (`src/theme.rs`, Hell und Dunkel nach System
 - **Aufbau:**
   - Links eine schmale Seitenleiste in `--nav-bg` mit Logo, Bereichen (Fuhrpark, Geld und Spielstand, Übernehmen nur Chef, Einstellungen) und unten Nutzer, Version und Server.
   - Oben im Inhalt Kennzahl-Kacheln: Lohnkonto, Firmenkasse, Plugin-Status, Firmenprofil.
-- **Fuhrpark:** Lkw als Karten nach demselben Muster wie im Dashboard, mit Kennzeichen, Plakette, Balken für den Schaden und einer Hauptaktion.
+- **Fuhrpark:** Lkw als Karten nach demselben Muster wie im Dashboard, mit Kennzeichen, Plakette, Balken für den Schaden und einer Hauptaktion. Karten sind mindestens 380 px breit, weil die eigene Leihe zwei Knöpfe nebeneinander hat (Zurückgeben, In Spielstand schreiben) und egui die Reihe nicht umbricht. Modellnamen folgen denselben Regeln wie im Dashboard (`theme::model_name` und `modellName`).
 - **Hinweise:** Warnungen (Steam Cloud, Version, Plugin) als farbige Hinweiskarten mit Symbol statt farbigem Text.
 - **Text und Bedienung:** Systemschrift, Abstände nach demselben Raster, Knöpfe 32 px hoch mit `--r-sm`.

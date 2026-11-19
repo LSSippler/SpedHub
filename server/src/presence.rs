@@ -26,8 +26,6 @@ pub const TEXT_MAX: usize = 64;
 /// Längstes Kennzeichen in Zeichen, mit Markup.
 pub const PLATE_MAX: usize = 64;
 
-/// Kennzeichen zum Vergleichen: ohne Markup, ohne Land, Leerraum zusammengefasst, groß
-/// geschrieben. `DD<img src=...>RI 772|germany` und `dd ri 772` ergeben dasselbe.
 /// Kilometerstand für die Anzeige: der zuletzt aus dem Spiel gemeldete, wenn er höher ist als
 /// der gespeicherte (der vom Ausleihen oder der letzten Rückgabe). Das zweite Feld sagt, ob er
 /// aus der Meldung stammt. Gebucht und abgerechnet wird weiter nur mit dem gespeicherten.
@@ -38,6 +36,8 @@ pub fn current_odometer(stored_km: i64, reported_km: Option<i64>) -> (i64, bool)
     }
 }
 
+/// Kennzeichen zum Vergleichen: ohne Markup, ohne Land, Leerraum zusammengefasst, groß
+/// geschrieben. `DD<img src=...>RI 772|germany` und `dd ri 772` ergeben dasselbe.
 pub fn plate_key(plate: &str) -> String {
     spedhub_save::plate_text(plate).to_uppercase()
 }

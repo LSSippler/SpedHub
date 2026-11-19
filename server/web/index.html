@@ -10,6 +10,8 @@
   try { var t = localStorage.getItem("thema"); if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t); } catch (e) {}
 </script>
 <style>
+  /* hidden gilt immer, auch wo eine Klasse display setzt (Formulare, Felder) */
+  [hidden] { display: none !important; }
   /* ------------------------------------------------------------ Tokens (docs/design-system.md) */
   :root {
     color-scheme: light;
@@ -68,6 +70,8 @@
 
     --line: 1px; --line-plate: 2px; --line-accent: 3px; --line-toast: 4px; --ring: 2px;
     --nav-w: 240px; --topbar-h: 56px; --content-max: 1280px; --nav-item-h: 40px;
+    --narrow-max: 880px; --bar-max: 860px; --text-min: 20rem;
+    --filter-min: 9rem; --filter-max: 14rem; --filter-wide-min: 12rem; --filter-wide-max: 18rem;
     --ctl-h: 36px; --ctl-h-sm: 30px; --sym-btn: 32px; --sym-feld: 32px;
     --avatar: 32px; --avatar-sm: 24px; --sym: 20px; --sym-sm: 16px;
     --row-h: 44px; --head-h: 40px; --bar-h: 6px; --dot: 6px; --check: 16px;
@@ -302,7 +306,7 @@
 
   /* ------------------------------------------------------------ Kopfzeile eines Bereichs */
   .kopfzeile { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: var(--sp-3) var(--sp-6); }
-  .kopf-text { min-width: 0; flex: 1 1 20rem; }
+  .kopf-text { min-width: 0; flex: 1 1 var(--text-min); }
   .kopf-unter { color: var(--text-2); margin-top: var(--sp-1); max-width: 72ch; }
   .kopf-aktion { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
 
@@ -472,7 +476,6 @@
     padding: var(--sp-1); background: var(--surface); border: var(--line) solid var(--border); border-radius: var(--r-md); box-shadow: var(--shadow-md);
   }
   .menue-liste.nach-oben { top: auto; bottom: calc(100% + var(--sp-1)); left: 0; right: 0; min-width: 0; }
-  .menue-liste[hidden] { display: none; }
   .menue-eintrag {
     display: flex; align-items: center; gap: var(--sp-2); width: 100%; padding: var(--sp-2) var(--sp-3); border: 0; border-radius: var(--r-sm);
     background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; white-space: nowrap;
@@ -511,8 +514,8 @@
 
   /* ------------------------------------------------------------ Kassenbuch */
   .filterleiste { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--sp-3) var(--sp-4); padding: var(--sp-4) var(--sp-5); }
-  .filterleiste .feld { flex: 1 1 9rem; max-width: 14rem; }
-  .filterleiste .feld.art { max-width: 18rem; flex-basis: 12rem; }
+  .filterleiste .feld { flex: 1 1 var(--filter-min); max-width: var(--filter-max); }
+  .filterleiste .feld.art { max-width: var(--filter-wide-max); flex-basis: var(--filter-wide-min); }
   .schnellwahl { display: flex; flex-wrap: wrap; gap: var(--sp-2); flex: 1 1 100%; }
   .kb-tabelle td.wann { white-space: nowrap; width: 1%; }
   .wann-zeit { font-weight: 600; }
@@ -545,11 +548,10 @@
   .kauf select { width: auto; max-width: 100%; height: var(--ctl-h-sm); }
   .tabelle-hinweis { padding: var(--sp-2) var(--sp-5); color: var(--text-2); font-size: var(--fs-sm); line-height: var(--lh-sm); background: var(--surface-2); border-bottom: var(--line) solid var(--border); }
   .auswahl-leiste {
-    position: sticky; bottom: var(--sp-4); z-index: 20; align-self: center; width: min(100%, 860px);
+    position: sticky; bottom: var(--sp-4); z-index: 20; align-self: center; width: min(100%, var(--bar-max));
     display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-3); padding: var(--sp-3) var(--sp-4);
     background: var(--surface); border: var(--line) solid var(--border-strong); border-radius: var(--r-md); box-shadow: var(--shadow-lg);
   }
-  .auswahl-leiste[hidden] { display: none; }
   .auswahl-zahl { font-weight: 600; }
   .auswahl-summe { color: var(--text-2); font-size: var(--fs-sm); margin-right: auto; }
   .ungeklaert-liste li { flex-wrap: wrap; }
@@ -638,7 +640,7 @@
   .anmelde-karte form { display: flex; flex-direction: column; gap: var(--sp-4); padding: var(--sp-5) var(--sp-6) var(--sp-6); }
   .anmelde-karte .knopfreihe { display: flex; flex-direction: column; gap: var(--sp-2); }
   .anmelde-karte .btn { width: 100%; }
-  .firmenwahl { max-width: 880px; margin: 0 auto; display: flex; flex-direction: column; gap: var(--sp-6); }
+  .firmenwahl { max-width: var(--narrow-max); margin: 0 auto; display: flex; flex-direction: column; gap: var(--sp-6); }
   .karte form { display: flex; flex-direction: column; gap: var(--sp-4); }
 
   @media (prefers-reduced-motion: reduce) {
@@ -837,9 +839,16 @@ function wann(s) {
   return heute ? uhrzeit(s) : d.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit" }) + " " + uhrzeit(s);
 }
 /** "scania.s_2016" wird zu "Scania S 2016", "volvo.fh16_2012" zu "Volvo FH16 2012", "mercedes.actros2014" zu "Mercedes Actros 2014". */
+/**
+ * "daf.xf_euro6" wird zu "DAF XF Euro 6". Gleiche Regeln wie `theme::model_name` im Launcher:
+ * Wort mit mindestens 4 Buchstaben und Zahl dahinter wird getrennt (actros2014, euro6), Mischungen
+ * wie fh16 und Kürzel bis 2 Buchstaben sind groß, dazu die Kürzel in MODELL_KUERZEL, sonst groß am Anfang.
+ */
+const MODELL_KUERZEL = ["daf", "man", "tgx", "tgs", "tgm", "tgl"];
 const modellName = (m) => String(m || "").split(/[._\s]+/).filter(Boolean)
   .flatMap((w) => { const t = /^([a-z]{4,})(\d+)$/i.exec(w); return t ? [t[1], t[2]] : [w]; })
-  .map((w) => ((/\d/.test(w) && /[a-z]/i.test(w)) || w.length <= 3 ? w.toUpperCase() : w[0].toUpperCase() + w.slice(1)))
+  .map((w) => ((/\d/.test(w) && /[a-z]/i.test(w)) || (/^[a-z]{1,2}$/i.test(w)) || MODELL_KUERZEL.includes(w.toLowerCase())
+    ? w.toUpperCase() : w[0].toUpperCase() + w.slice(1)))
   .join(" ");
 
 /** Ereignisarten, wie das Plugin sie meldet. */
@@ -1027,6 +1036,7 @@ function oeffneDialog(titel, baue) {
         await aktion();
       } catch (err) {
         if (err instanceof ApiFehler && err.status === 401) { d.zu(); abmeldenLokal(); melde("Deine Anmeldung ist abgelaufen. Melde dich neu an.", true); }
+        else if (!dialog.open) melde(err.message || String(err), true);
         else fehler.replaceChildren(sym("warnung"), h("span", {}, err.message || String(err)));
       } finally {
         laedt(knopf, false);
@@ -1240,6 +1250,7 @@ function zeigePasswort() {
 
 function abmeldenLokal() {
   clearInterval(takt);
+  for (const d of document.querySelectorAll("dialog[open]")) d.close();
   zustand.token = null; zustand.ich = null; zustand.firma = null; zustand.firmaId = null;
   speicher.set("token", null); speicher.set("firma", null);
   zeigeAnmeldung(false);
@@ -1815,7 +1826,9 @@ function nachRueckgabe(t, r, anfang) {
 function zeigeRueckgabe(t) {
   const chef = istChef();
   const meiner = t.leased_by && t.leased_by.user_id === zustand.ich.user_id;
-  const stand = h("input", { type: "number", min: t.odometer_km, value: t.odometer_km, required: true, "data-fokus": "markieren" });
+  // Vorbelegt mit dem Stand, den die Karte zeigt (gemeldet aus dem Spiel, falls höher)
+  const stand = h("input", { type: "number", min: t.odometer_km, value: t.current_km != null ? Math.max(t.current_km, t.odometer_km) : t.odometer_km,
+    required: true, "data-fokus": "markieren" });
   dialogFormular(meiner ? t.plate + " zurückgeben" : t.plate + " zurücknehmen", {
     text: [meiner ? "Trag den Kilometerstand aus dem Spiel ein. Neuer Schaden geht anteilig auf dein Lohnkonto."
       : "Verliehen an " + t.leased_by.name + " seit " + wann(t.leased_by.since) + ". Trag den Kilometerstand bei der Rückgabe ein."],
@@ -2031,7 +2044,7 @@ function laufZeilen(l, chef) {
         const weg = x.reversed_by != null;
         // Die Lohnbuchung eines Fahrers lässt sich einzeln stornieren, das Geld geht an die Kasse zurück
         const wahl = chef && x.entry_id != null && !weg
-          ? auswahlKasten(x.entry_id, { amount: x.paid, account: "fahrer", kind: "lohn" }, "Lohn " + x.name + " " + tag(l.day))
+          ? auswahlKasten(x.entry_id, { amount: x.paid, account: "fahrer", kind: "lohn", lauf: true }, "Lohn " + x.name + " " + tag(l.day))
           : null;
         return h("tr", { class: (weg ? "storniert" : "") + (wahl && zustand.auswahl.has(x.entry_id) ? " gewaehlt" : "") },
           chef ? h("td", { class: "eng" }, wahl) : null,
@@ -2079,7 +2092,7 @@ function kaufKnoepfe(e) {
   if (e.kind !== "betriebskosten" || e.account !== "firma") return null;
   if (zustand.verknuepfen !== e.id) {
     return h("div", { class: "kauf" }, h("button", { type: "button", class: "btn leise klein", "data-k": "kauf-" + e.id,
-      onclick: () => { zustand.verknuepfen = e.id; ZEICHNER.kassenbuch(true); const w = document.querySelector('[data-k="kaufwahl-' + e.id + '"]'); if (w) w.focus(); } },
+      onclick: () => { zustand.verknuepfen = e.id; zustand.verknuepfenLkw = null; ZEICHNER.kassenbuch(true); const w = document.querySelector('[data-k="kaufwahl-' + e.id + '"]'); if (w) w.focus(); } },
       sym("lkw"), "Als Lkw-Kauf verknüpfen"));
   }
   const aktiv = aktiveLkw();
@@ -2089,8 +2102,10 @@ function kaufKnoepfe(e) {
     return h("div", { class: "kauf" }, h("span", { class: "hilfe" }, "Noch kein Lkw im Fuhrpark."),
       h("button", { type: "button", class: "btn leise klein", "data-k": "kaufwahl-" + e.id, onclick: zu }, "Abbrechen"));
   }
-  const wahl = h("select", { "aria-label": "Welcher Lkw wurde gekauft", "data-k": "kaufwahl-" + e.id },
-    aktiv.concat(raus).map((t) => h("option", { value: t.id }, t.plate + (t.retired ? " (nicht mehr im Fuhrpark)" : ""))));
+  // Die Wahl steht in `zustand`, damit das Auffrischen sie nicht auf den ersten Lkw zurücksetzt
+  const wahl = h("select", { "aria-label": "Welcher Lkw wurde gekauft", "data-k": "kaufwahl-" + e.id,
+    onchange: (ev) => { zustand.verknuepfenLkw = Number(ev.target.value); } },
+    aktiv.concat(raus).map((t) => h("option", { value: t.id, selected: t.id === zustand.verknuepfenLkw }, t.plate + (t.retired ? " (nicht mehr im Fuhrpark)" : ""))));
   return h("div", { class: "kauf" }, wahl,
     h("button", { type: "button", class: "btn primaer klein", onclick: (ev) => versuche(async () => {
       const r = await api("POST", "/api/companies/" + id + "/ledger/" + e.id + "/link-truck", { truck_id: Number(wahl.value) });
@@ -2151,22 +2166,25 @@ ZEICHNER.kassenbuch = (immer) => {
   const f = zustand.filter;
   const ich = ichSelbst();
   const firma = zustand.firma;
-  const kasse = zustand.buch.entries.filter((e) => e.account === "firma");
+  // Saldo aus denselben Buchungen wie die Liste: Zeitraum, Art, Lohnabrechnungen als Art "lohnabrechnung"
+  const passt = (e) => !f.art || (f.art === "lohnabrechnung" ? e.payroll_id != null : e.payroll_id == null && e.kind === f.art);
+  const kasse = zustand.buch.entries.filter((e) => e.account === "firma" && passt(e));
   const rein = kasse.filter((e) => e.amount > 0).reduce((s, e) => s + e.amount, 0);
   const raus = kasse.filter((e) => e.amount < 0).reduce((s, e) => s + e.amount, 0);
   const bereich = f.von || f.bis;
+  const voll = zustand.buch.entries.length >= buchGrenze();
+  const saldoTitel = f.art || voll ? "Saldo der gezeigten Buchungen" : bereich ? "Saldo im Zeitraum" : "Saldo";
   zeichneSchnellwahl();
-  zeichneTeil($("kb-kacheln"), JSON.stringify([firma.balance, firma.payroll_time, ich && [ich.wallet, ich.open_claim], rein, raus, bereich]), () => [
+  zeichneTeil($("kb-kacheln"), JSON.stringify([firma.balance, firma.payroll_time, ich && [ich.wallet, ich.open_claim], rein, raus, saldoTitel]), () => [
     kachel({ titel: "Firmenkasse", sym: "geld", ton: "primary", wert: euro(firma.balance), minus: firma.balance < 0,
       zusatz: "Abrechnung täglich um " + firma.payroll_time + " Uhr" }),
     ich ? kachel({ titel: "Dein Lohnkonto", sym: "lohn", ton: "success", wert: euro(ich.wallet), minus: ich.wallet < 0,
       zusatz: ich.open_claim ? "offener Lohn " + euro(ich.open_claim) : "kein offener Lohn" }) : null,
-    kachel({ titel: bereich ? "Saldo im Zeitraum" : "Saldo", sym: "kassenbuch", ton: "info", wert: vzEuro(rein + raus), minus: rein + raus < 0,
+    kachel({ titel: saldoTitel, sym: "kassenbuch", ton: "info", wert: vzEuro(rein + raus), minus: rein + raus < 0,
       zusatz: "Einnahmen " + euro(rein) + ", Ausgaben " + euro(-raus) }),
   ]);
   zeichneTeil($("kb-ungeklaert"), JSON.stringify([chef, zustand.ungeklaert]), () => (chef ? baueUngeklaert() : null));
 
-  const voll = zustand.buch.entries.length >= buchGrenze();
   zeichneTeil($("kb-hinweis"), JSON.stringify([f.von, f.bis, voll, chef]), () => [
     bereich ? h("p", { class: "tabelle-hinweis" }, "Gezeigt "
       + (f.von ? "ab " + tag(f.von) : "") + (f.von && f.bis ? " " : "") + (f.bis ? "bis einschließlich " + tag(f.bis) : "")
@@ -2223,11 +2241,10 @@ function zeichneAuswahl() {
   if (live && live.textContent !== text && chef) live.textContent = text;
   box.hidden = !zahl;
   if (!zahl) { box.replaceChildren(); return; }
-  const liste = [...zustand.auswahl.values()];
-  const summe = (konto) => liste.filter((i) => i.account === konto).reduce((s, i) => s - i.amount, 0);
+  const w = stornoWirkung();
   ersetze(box,
     h("span", { class: "auswahl-zahl" }, text),
-    h("span", { class: "auswahl-summe" }, "Storno: Kasse " + vzEuro(summe("firma")) + ", Lohnkonten " + vzEuro(summe("fahrer"))),
+    h("span", { class: "auswahl-summe" }, "Storno: Kasse " + vzEuro(w.firma) + ", Lohnkonten " + vzEuro(w.fahrer)),
     h("button", { type: "button", class: "btn leise klein", "data-k": "auswahl-alle", disabled: !zustand.sichtbar.length,
       title: "„Alle sichtbaren“ lässt Betriebskosten aus: Die korrigiert der Server, wenn du die Ereignisse dahinter stornierst.",
       onclick: () => {
@@ -2238,13 +2255,41 @@ function zeichneAuswahl() {
     h("button", { type: "button", class: "btn gefahr klein", "data-k": "auswahl-storno", onclick: zeigeStorno }, sym("storno"), "Auswahl stornieren"));
 }
 
+/**
+ * Was ein Storno der Auswahl auf Kasse und Lohnkonten bewirkt, wie der Server bucht
+ * (`reversal.rs`): Überweisung und Haftung werden mit der Gegenbuchung auf dem anderen Konto
+ * storniert (einmal je Paar, auch wenn beide Seiten gewählt sind), Lohn aus einer Abrechnung
+ * mit einer Gegenbuchung in der Kasse.
+ */
+function stornoWirkung() {
+  const w = { firma: 0, fahrer: 0 };
+  const anders = (konto) => (konto === "firma" ? "fahrer" : "firma");
+  const paare = new Set();
+  for (const [id, i] of zustand.auswahl) {
+    if (i.kind === "ueberweisung" || i.kind === "haftung") {
+      const vorn = (i.kind === "ueberweisung") === (i.account === "firma");
+      const paar = vorn ? id : id - 1;
+      if (paare.has(paar)) continue;
+      paare.add(paar);
+      w[i.account] -= i.amount;
+      w[anders(i.account)] += i.amount;
+    } else if (i.lauf) {
+      w.fahrer -= i.amount;
+      w.firma += i.amount;
+    } else {
+      w[i.account] -= i.amount;
+    }
+  }
+  return w;
+}
+
 /** Bestätigung mit Pflichtgrund, dann stornieren. */
 function zeigeStorno() {
   const liste = [...zustand.auswahl.entries()];
   if (!liste.length) return;
-  const summe = (konto) => liste.filter(([, i]) => i.account === konto).reduce((s, [, i]) => s - i.amount, 0);
-  const kasse = summe("firma");
-  const lohn = summe("fahrer");
+  const w = stornoWirkung();
+  const kasse = w.firma;
+  const lohn = w.fahrer;
   const kosten = liste.filter(([, i]) => i.kind === "betriebskosten").length;
   const grund = h("input", { required: true, minlength: 3, maxlength: 200, autocomplete: "off", "data-fokus": true });
   dialogFormular(liste.length === 1 ? "1 Buchung stornieren" : liste.length + " Buchungen stornieren", {

@@ -1237,8 +1237,10 @@ impl App {
             .find(|m| m.user_id == me)
     }
 
+    /// Wechselt die Firma. Solange etwas läuft, nicht: Sonst schriebe `plugin.json` schon die
+    /// neue Firma, während die Oberfläche noch die alte zeigt (`refresh` lädt bei `busy` nicht).
     fn choose_company(&mut self, ctx: &egui::Context, chosen: Option<i64>) {
-        if chosen != self.settings.company_id {
+        if chosen != self.settings.company_id && self.busy.is_none() {
             self.settings.company_id = chosen;
             self.save_settings();
             self.write_plugin_config();
@@ -1461,7 +1463,16 @@ impl App {
                     for c in &companies {
                         let role = if c.role == "chef" { "Chef" } else { "Fahrer" };
                         if ui
-                            .selectable_label(chosen == Some(c.id), format!("{} ({role})", c.name))
+                            .add_enabled(
+                                idle,
+                                egui::Button::selectable(
+                                    chosen == Some(c.id),
+                                    format!("{} ({role})", c.name),
+                                ),
+                            )
+                            .on_disabled_hover_text(
+                                "Bitte warten, bis der laufende Vorgang fertig ist",
+                            )
                             .clicked()
                         {
                             chosen = Some(c.id);
@@ -1901,38 +1912,29 @@ impl App {
         theme::card(ui).show(ui, |ui| {
             ui.set_width(ui.available_width());
             let top = ui.min_rect().top();
-            // Kopf: Kennzeichen, Modell, Plakette
+            // Kopf: Kennzeichen und Plakette, darunter das Modell über die volle Breite
             row(ui, 36.0, |ui| {
                 theme::plate(ui, &t.plate, PlateSize::Large);
-                ui.add_space(SP_1);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     theme::badge(ui, status, tone);
-                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                        let model = egui::Label::new(text(
-                            theme::model_name(&t.model),
-                            semibold(FS_BASE),
-                            p.text,
-                        ))
-                        .truncate();
-                        if t.old_plates.is_empty() {
-                            ui.add(model).on_hover_text(&t.model);
-                        } else {
-                            ui.vertical(|ui| {
-                                ui.spacing_mut().item_spacing.y = 0.0;
-                                ui.add(model).on_hover_text(&t.model);
-                                ui.add(
-                                    egui::Label::new(text(
-                                        format!("früher {}", t.old_plates.join(", ")),
-                                        regular(FS_XS),
-                                        p.text_3,
-                                    ))
-                                    .truncate(),
-                                );
-                            });
-                        }
-                    });
                 });
             });
+            ui.add_space(SP_2);
+            let name = theme::model_name(&t.model);
+            ui.spacing_mut().item_spacing.y = 0.0;
+            ui.add(egui::Label::new(text(&name, semibold(FS_MD), p.text)).truncate())
+                .on_hover_text(format!("{name} ({})", t.model));
+            if !t.old_plates.is_empty() {
+                ui.add(
+                    egui::Label::new(text(
+                        format!("früher {}", t.old_plates.join(", ")),
+                        regular(FS_XS),
+                        p.text_3,
+                    ))
+                    .truncate(),
+                );
+            }
+            ui.spacing_mut().item_spacing.y = SP_2;
             ui.add_space(SP_3);
             // Kennwerte: Kilometer und Schaden
             let half = (ui.available_width() - SP_4) / 2.0;
@@ -2387,20 +2389,23 @@ impl App {
                     .as_ref()
                     .map_or_else(|| "Firma wählen".to_string(), |c| c.name.clone());
                 let mut chosen = self.settings.company_id;
-                egui::ComboBox::from_id_salt("firma")
-                    .selected_text(current)
-                    .width(ui.available_width())
-                    .show_ui(ui, |ui| {
-                        ui.spacing_mut().item_spacing.y = 2.0;
-                        for c in &companies {
-                            let role = if c.role == "chef" { "Chef" } else { "Fahrer" };
-                            ui.selectable_value(
-                                &mut chosen,
-                                Some(c.id),
-                                format!("{} ({role})", c.name),
-                            );
-                        }
-                    });
+                let idle = self.busy.is_none();
+                ui.add_enabled_ui(idle, |ui| {
+                    egui::ComboBox::from_id_salt("firma")
+                        .selected_text(current)
+                        .width(ui.available_width())
+                        .show_ui(ui, |ui| {
+                            ui.spacing_mut().item_spacing.y = 2.0;
+                            for c in &companies {
+                                let role = if c.role == "chef" { "Chef" } else { "Fahrer" };
+                                ui.selectable_value(
+                                    &mut chosen,
+                                    Some(c.id),
+                                    format!("{} ({role})", c.name),
+                                );
+                            }
+                        });
+                });
                 self.choose_company(ui.ctx(), chosen);
             }
             ui.add_space(SP_3);
@@ -2558,7 +2563,7 @@ impl App {
             return;
         };
         let p = theme::palette_of(ctx);
-        let modal = egui::Modal::new(egui::Id::unique("rueckgabe"))
+        egui::Modal::new(egui::Id::unique("rueckgabe"))
             .frame(theme::dialog_frame(ctx))
             .show(ctx, |ui| {
                 ui.set_width(440.0);
@@ -2634,7 +2639,9 @@ impl App {
                     }
                 });
             });
-        if modal.should_close() {
+        // Nur Escape schließt, ein Klick neben den Dialog nicht: Sonst wäre der eingetippte
+        // Kilometerstand weg
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             cancel = true;
         }
         if confirm {
@@ -2702,6 +2709,10 @@ impl App {
                     }
                 });
             });
+        // Escape wirkt wie "Nicht verknüpfen"
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            skip = true;
+        }
         if skip {
             self.linking = None;
         } else if confirm {
