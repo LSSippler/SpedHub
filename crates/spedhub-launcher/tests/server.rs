@@ -5,7 +5,7 @@ mod common;
 use common::*;
 use serde_json::json;
 use spedhub_launcher::Error;
-use spedhub_launcher::client::Client;
+use spedhub_launcher::client::{Client, TruckState};
 use spedhub_launcher::flows::{
     PackageSource, describe, lease_package, return_truck, sync_and_write,
 };
@@ -814,6 +814,9 @@ fn rueckgabe_mit_viel_verschleiss_bringt_den_lkw_in_die_werkstatt() {
     let t = s.fahrer.trucks(s.company).unwrap().remove(0);
     assert!(t.in_workshop);
     assert!(t.leased_by.is_none());
+    assert_eq!(t.state(), TruckState::Workshop);
+    // Die Schadensgrenze kommt mit der Firma, für den Strich im Schadensbalken
+    assert_eq!(s.fahrer.company(s.company).unwrap().damage_limit, Some(25));
     assert_eq!(t.damage, r.damage);
     assert!(t.damage_text().starts_with(&format!(
         "{} %",
@@ -843,7 +846,12 @@ fn rueckgabe_mit_viel_verschleiss_bringt_den_lkw_in_die_werkstatt() {
     let t = s.fahrer.trucks(s.company).unwrap().remove(0);
     assert!(!t.in_workshop);
     assert_eq!(t.damage, 0.0);
+    assert_eq!(t.state(), TruckState::Free);
     let again = s.fahrer.checkout(truck_id).unwrap();
+    assert_eq!(
+        s.fahrer.trucks(s.company).unwrap()[0].state(),
+        TruckState::Leased
+    );
     let p = package_from_checkout(&again.truck).unwrap();
     assert_eq!((p.state.engine_wear, p.state.chassis_wear), (0.0, 0.0));
     let _ = fs::remove_dir_all(dir);
@@ -863,6 +871,37 @@ fn schaden_als_text() {
     assert_eq!(t.damage_text(), "12,5 %");
     t.damage_unfixable = 3.0;
     assert_eq!(t.damage_text(), "12,5 %, dauerhaft 3 %");
+}
+
+#[test]
+fn zustand_im_fuhrpark() {
+    use spedhub_launcher::client::Truck;
+    let truck = |extra: serde_json::Value| -> Truck {
+        let mut v = json!({
+            "id": 1, "plate": "SPED 001", "model": "scania.s_2016", "odometer_km": 1000,
+            "rev": 1, "leased_by": null
+        });
+        for (k, x) in extra.as_object().unwrap() {
+            v[k] = x.clone();
+        }
+        serde_json::from_value(v).unwrap()
+    };
+    let lease = json!({ "user_id": 2, "name": "Bora", "since": 5 });
+    let retired = json!({ "reason": "ausgemustert", "at": 9 });
+    assert_eq!(truck(json!({})).state(), TruckState::Free);
+    assert_eq!(
+        truck(json!({ "leased_by": lease })).state(),
+        TruckState::Leased
+    );
+    assert_eq!(
+        truck(json!({ "in_workshop": true })).state(),
+        TruckState::Workshop
+    );
+    // Ausgemustert geht vor allem anderen
+    assert_eq!(
+        truck(json!({ "in_workshop": true, "retired": retired })).state(),
+        TruckState::Retired
+    );
 }
 
 #[test]

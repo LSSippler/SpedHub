@@ -69,6 +69,10 @@ pub struct Company {
     pub revenue_factor: f64,
     #[serde(default)]
     pub payroll_time: String,
+    /// Schadensgrenze in Prozent: darüber kommt ein Lkw in die Werkstatt. Ältere Server
+    /// liefern das nicht.
+    #[serde(default)]
+    pub damage_limit: Option<i64>,
 }
 
 impl Company {
@@ -160,7 +164,33 @@ impl Retired {
     }
 }
 
+/// Wo ein Lkw gerade steht, für Plakette und Filter im Fuhrpark.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TruckState {
+    /// Lässt sich ausleihen
+    Free,
+    /// An einen Fahrer verliehen
+    Leased,
+    /// In der Werkstatt, erst nach der Reparatur wieder auszuleihen
+    Workshop,
+    /// Ausgemustert oder verkauft
+    Retired,
+}
+
 impl Truck {
+    /// Zustand für Plakette und Filter. Ausgemustert geht vor allem anderen.
+    pub fn state(&self) -> TruckState {
+        if self.retired.is_some() {
+            TruckState::Retired
+        } else if self.leased_by.is_some() {
+            TruckState::Leased
+        } else if self.in_workshop {
+            TruckState::Workshop
+        } else {
+            TruckState::Free
+        }
+    }
+
     /// Schaden für die Fuhrparkliste, etwa `12,5 %, dauerhaft 3 %`.
     pub fn damage_text(&self) -> String {
         let mut text = format!("{} %", format_percent(self.damage));

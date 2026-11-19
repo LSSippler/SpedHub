@@ -3,10 +3,13 @@
 //! eigenen Thread, damit das Fenster nicht hängt.
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
-use eframe::egui;
+use eframe::egui::{
+    self, Align, CornerRadius, Frame, Layout, Margin, Rect, Sense, Vec2, pos2, vec2,
+};
 use spedhub_launcher::cli::{self, Command, InstallEnv, InstallOutcome};
 use spedhub_launcher::client::{
-    Client, Company, Me, PurchaseCandidate, Truck, format_percent, version_warning,
+    Client, Company, Me, Member, PurchaseCandidate, Truck, TruckState, age_text, format_percent,
+    version_warning,
 };
 use spedhub_launcher::flows::{
     ProfileReport, describe, lease_package, profile_to_report, return_truck, sync_and_write,
@@ -23,6 +26,11 @@ use spedhub_launcher::settings::{
     AppPaths, DEFAULT_SERVER, Settings, remove_plugin_config, write_plugin_config,
 };
 use spedhub_launcher::system::{self, MessageKind, ProcessCheck};
+use spedhub_launcher::theme::{
+    self, ActionButton, CARD_MIN_WIDTH, CONTENT_MAX_WIDTH, CONTROL_HEIGHT, FS_BASE, FS_LG, FS_MD,
+    FS_SM, FS_XS, Icon, Kpi, NAV_WIDTH, PlateSize, R_MD, R_SM, SP_1, SP_2, SP_3, SP_4, SP_5, SP_6,
+    SP_10, Tone, regular, semibold, text,
+};
 use spedhub_launcher::update::{self, Release, Updater};
 use spedhub_launcher::version::VERSION;
 use spedhub_launcher::{Error, Result};
@@ -33,11 +41,11 @@ use std::{
     time::SystemTime,
 };
 
-const UNCONFIRMED: &str = "Hinweis: Im Spiel bestätigt ist, dass ein eingesetzter Lkw lädt, der neue Speicherplatz des Launchers erscheint und das Spiel den Kontostand aus dem Geldabgleich übernimmt. \
+const UNCONFIRMED: &str = "Im Spiel bestätigt ist, dass ein eingesetzter Lkw lädt, der neue Speicherplatz des Launchers erscheint und das Spiel den Kontostand aus dem Geldabgleich übernimmt. \
 Der Launcher legt immer einen neuen Speicherplatz an und sichert den alten vorher. \
 Trotzdem gilt: vorher selbst ein Backup des Profils anlegen.";
 
-const STEAM_WARNING: &str = "Achtung: Dieses Profil liegt in steam_profiles und wird mit Steam Cloud abgeglichen. \
+const STEAM_WARNING: &str = "Dieses Profil liegt in steam_profiles und wird mit Steam Cloud abgeglichen. \
 Steam kann einen bearbeiteten Spielstand mit einer älteren Fassung aus der Cloud überschreiben. \
 Besser ein Profil ohne Steam Cloud als Firmenprofil nehmen.";
 
@@ -72,14 +80,24 @@ fn run_gui() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(format!("SpedHub {VERSION}"))
-            .with_inner_size([900.0, 680.0])
-            .with_min_inner_size([640.0, 420.0]),
+            .with_inner_size([1180.0, 780.0])
+            .with_min_inner_size([820.0, 540.0]),
         ..Default::default()
     };
     eframe::run_native(
         "SpedHub",
         options,
-        Box::new(|cc| Ok(Box::new(App::new(&cc.egui_ctx)))),
+        Box::new(|cc| {
+            let (regular, semibold) = system::ui_fonts();
+            let preference =
+                theme::theme_preference(std::env::var(theme::THEME_VAR).ok().as_deref());
+            theme::install(
+                &cc.egui_ctx,
+                theme::font_definitions(regular, semibold),
+                preference,
+            );
+            Ok(Box::new(App::new(&cc.egui_ctx)))
+        }),
     )
 }
 
@@ -365,6 +383,11 @@ struct App {
     /// Kennzeichen des Lkw in der Firma, vorbelegt mit dem Vorschlag des Servers
     import_company_plate: String,
 
+    /// Gewählter Bereich in der Seitenleiste
+    view: View,
+    /// Filter über dem Fuhrpark, `None` für alle
+    fleet_filter: Option<TruckState>,
+
     returning: Option<ReturnDialog>,
     linking: Option<LinkDialog>,
     message: Option<Message>,
@@ -414,6 +437,8 @@ impl App {
             import_trucks: Vec::new(),
             import_plate: None,
             import_company_plate: String::new(),
+            view: View::Fleet,
+            fleet_filter: None,
             returning: None,
             linking: None,
             message: None,
@@ -663,7 +688,7 @@ impl App {
                     self.info(text);
                 } else {
                     self.info(format!(
-                        "{text}. Hast du ihn im Spiel gekauft? Dann verknüpfe über dem Fuhrpark die Buchung des Kaufs"
+                        "{text}. Hast du ihn im Spiel gekauft? Dann verknüpfe im Fenster die Buchung des Kaufs"
                     ));
                     self.linking = Some(LinkDialog {
                         truck_id,
@@ -1198,390 +1223,1054 @@ impl App {
 
     // ------------------------------------------------------------------ Ansichten
 
+    fn is_chef(&self) -> bool {
+        self.company.as_ref().is_some_and(Company::is_chef)
+    }
+
+    /// Eigener Eintrag in der Mitgliederliste der gewählten Firma.
+    fn my_member(&self) -> Option<&Member> {
+        let me = self.me.as_ref()?.user_id;
+        self.company
+            .as_ref()?
+            .members
+            .iter()
+            .find(|m| m.user_id == me)
+    }
+
+    fn choose_company(&mut self, ctx: &egui::Context, chosen: Option<i64>) {
+        if chosen != self.settings.company_id {
+            self.settings.company_id = chosen;
+            self.save_settings();
+            self.write_plugin_config();
+            self.refresh(ctx);
+        }
+    }
+
     fn login_view(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Anmelden");
-        ui.add_space(8.0);
-        egui::Grid::new("login")
-            .num_columns(2)
-            .spacing([12.0, 8.0])
-            .show(ui, |ui| {
-                ui.label("Server");
-                ui.text_edit_singleline(&mut self.settings.server_url);
-                ui.end_row();
-                ui.label("Name");
-                ui.text_edit_singleline(&mut self.name);
-                ui.end_row();
-                ui.label("Passwort");
-                ui.add(egui::TextEdit::singleline(&mut self.password).password(true));
-                ui.end_row();
-            });
-        ui.add_space(8.0);
-        let ready =
-            !self.name.trim().is_empty() && !self.password.is_empty() && self.busy.is_none();
-        ui.horizontal(|ui| {
-            if ui
-                .add_enabled(ready, egui::Button::new("Anmelden"))
-                .clicked()
-            {
-                self.login(ui.ctx(), false);
+        let p = theme::palette(ui);
+        let width = 420.0_f32.min(ui.available_width());
+        ui.add_space(SP_10);
+        ui.vertical_centered(|ui| {
+            ui.set_max_width(width);
+            let (rect, _) = ui.allocate_exact_size(Vec2::splat(52.0), Sense::hover());
+            ui.painter()
+                .rect_filled(rect, CornerRadius::same(R_MD + 2), p.nav_active_bg);
+            theme::paint_logo(ui.painter(), rect.shrink(9.0), p.accent, p.nav_active_bg);
+            ui.add_space(SP_2);
+            ui.label(text("SpedHub", semibold(FS_LG), p.text));
+            ui.label(text(
+                "Fuhrpark und Kasse deiner Spedition",
+                regular(FS_SM),
+                p.text_2,
+            ));
+            ui.add_space(SP_6);
+            if self.update_notice(ui) {
+                ui.add_space(SP_4);
             }
-            if ui
-                .add_enabled(ready, egui::Button::new("Konto anlegen"))
-                .clicked()
-            {
-                self.login(ui.ctx(), true);
-            }
+            theme::card(ui)
+                .inner_margin(Margin::same(SP_6 as i8))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.with_layout(Layout::top_down(Align::Min), |ui| {
+                        theme::card_title(ui, "Anmelden", "Mit deinem Konto beim Server der Firma");
+                        ui.add_space(SP_3);
+                        theme::field_label(ui, "Server");
+                        ui.add(
+                            theme::text_field(&mut self.settings.server_url)
+                                .desired_width(f32::INFINITY),
+                        );
+                        ui.add_space(SP_1);
+                        theme::field_label(ui, "Name");
+                        ui.add(theme::text_field(&mut self.name).desired_width(f32::INFINITY));
+                        ui.add_space(SP_1);
+                        theme::field_label(ui, "Passwort");
+                        ui.add(
+                            theme::text_field(&mut self.password)
+                                .password(true)
+                                .desired_width(f32::INFINITY),
+                        );
+                        ui.add_space(SP_4);
+                        let ready = !self.name.trim().is_empty()
+                            && !self.password.is_empty()
+                            && self.busy.is_none();
+                        ui.horizontal(|ui| {
+                            if ui
+                                .add_enabled(ready, ActionButton::primary("Anmelden"))
+                                .clicked()
+                            {
+                                self.login(ui.ctx(), false);
+                            }
+                            if ui
+                                .add_enabled(ready, ActionButton::secondary("Konto anlegen"))
+                                .clicked()
+                            {
+                                self.login(ui.ctx(), true);
+                            }
+                        });
+                    });
+                });
+            ui.add_space(SP_4);
+            self.plugin_card(ui);
+            ui.add_space(SP_6);
         });
     }
 
-    fn top_bar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
-            if let Some(me) = &self.me {
-                ui.label(format!("Angemeldet als {}", me.name));
-            }
-            ui.separator();
-            let companies = self
-                .me
-                .as_ref()
-                .map(|m| m.companies.clone())
-                .unwrap_or_default();
-            if !companies.is_empty() {
-                let current = self
+    /// Seitenleiste: Logo und Firma, Bereiche, unten Nutzer, Version und Server.
+    fn sidebar(&mut self, ui: &mut egui::Ui) {
+        let p = theme::palette(ui);
+        ui.horizontal(|ui| {
+            let (rect, _) = ui.allocate_exact_size(Vec2::splat(36.0), Sense::hover());
+            ui.painter()
+                .rect_filled(rect, CornerRadius::same(R_SM + 2), p.nav_active_bg);
+            theme::paint_logo(ui.painter(), rect.shrink(6.0), p.accent, p.nav_active_bg);
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                ui.label(text("SpedHub", semibold(FS_MD), p.nav_active));
+                let company = self
                     .company
                     .as_ref()
-                    .map_or_else(|| "Firma wählen".to_string(), |c| c.name.clone());
-                let mut chosen = self.settings.company_id;
-                egui::ComboBox::from_id_salt("firma")
-                    .selected_text(current)
-                    .show_ui(ui, |ui| {
-                        for c in &companies {
-                            let role = if c.role == "chef" { "Chef" } else { "Fahrer" };
-                            ui.selectable_value(
-                                &mut chosen,
-                                Some(c.id),
-                                format!("{} ({role})", c.name),
-                            );
-                        }
-                    });
-                if chosen != self.settings.company_id {
-                    self.settings.company_id = chosen;
-                    self.save_settings();
-                    self.write_plugin_config();
-                    self.refresh(ui.ctx());
-                }
+                    .map_or("Keine Firma gewählt", |c| c.name.as_str());
+                ui.add(egui::Label::new(text(company, regular(FS_XS), p.nav_text)).truncate());
+            });
+        });
+        ui.add_space(SP_6);
+        ui.spacing_mut().item_spacing.y = 2.0;
+        for view in View::ALL {
+            if view == View::Import && !self.is_chef() {
+                continue;
             }
+            if theme::nav_item(ui, view.icon(), view.nav_label(), self.view == view).clicked() {
+                self.view = view;
+            }
+        }
+        ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
+            ui.spacing_mut().item_spacing.y = SP_1;
+            let server = self
+                .settings
+                .server_url
+                .trim_start_matches("https://")
+                .trim_start_matches("http://")
+                .trim_end_matches('/');
+            ui.add(
+                egui::Label::new(text(format!("Server {server}"), regular(FS_XS), p.nav_text))
+                    .truncate(),
+            )
+            .on_hover_text(&self.settings.server_url);
+            let (version, color, hover) = match &self.update {
+                UpdateState::Checking => (
+                    format!("Version {VERSION}"),
+                    p.nav_text,
+                    Some("Suche nach Updates".to_string()),
+                ),
+                UpdateState::Current => (format!("Version {VERSION}, aktuell"), p.nav_text, None),
+                UpdateState::Failed(e) => (
+                    format!("Version {VERSION}"),
+                    p.nav_text,
+                    Some(format!("Update-Prüfung: {e}")),
+                ),
+                UpdateState::Available(r) | UpdateState::Downloading(r) => (
+                    format!("Version {VERSION}, {} verfügbar", r.version),
+                    p.accent,
+                    None,
+                ),
+            };
+            let label = ui.add(egui::Label::new(text(version, regular(FS_XS), color)).truncate());
+            if let Some(h) = hover {
+                label.on_hover_text(h);
+            }
+            ui.add_space(SP_2);
+            self.user_block(ui);
+            ui.add_space(SP_1);
+            let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
+            ui.painter()
+                .rect_filled(rect, CornerRadius::ZERO, p.nav_active_bg);
+        });
+    }
+
+    /// Nutzer unten in der Seitenleiste, mit Menü: Firma wechseln, Abmelden.
+    fn user_block(&mut self, ui: &mut egui::Ui) {
+        let p = theme::palette(ui);
+        let Some(me) = self.me.clone() else {
+            return;
+        };
+        let role = match self.company.as_ref() {
+            Some(c) if c.is_chef() => "Chef",
+            Some(_) => "Fahrer",
+            None => "ohne Firma",
+        };
+        let (rect, response) =
+            ui.allocate_exact_size(vec2(ui.available_width(), 48.0), Sense::click());
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::Role::Button, true, format!("{}, {role}", me.name))
+        });
+        if response.hovered() {
+            ui.painter()
+                .rect_filled(rect, CornerRadius::same(R_SM), p.nav_active_bg);
+        }
+        let painter = ui.painter();
+        let center = pos2(rect.left() + 8.0 + 16.0, rect.center().y);
+        painter.circle_filled(center, 16.0, p.accent);
+        painter.text(
+            center,
+            egui::Align2::CENTER_CENTER,
+            theme::initials(&me.name),
+            semibold(FS_SM),
+            p.nav_bg,
+        );
+        let x = rect.left() + 8.0 + 32.0 + 10.0;
+        painter.text(
+            pos2(x, rect.center().y - 9.0),
+            egui::Align2::LEFT_CENTER,
+            &me.name,
+            semibold(FS_BASE),
+            p.nav_active,
+        );
+        painter.text(
+            pos2(x, rect.center().y + 9.0),
+            egui::Align2::LEFT_CENTER,
+            role,
+            regular(FS_XS),
+            p.nav_text,
+        );
+        theme::paint_icon(
+            painter,
+            Rect::from_center_size(
+                pos2(rect.right() - 16.0, rect.center().y),
+                Vec2::splat(16.0),
+            ),
+            Icon::ChevronDown,
+            p.nav_text,
+        );
+        let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+        let companies = me.companies.clone();
+        let mut chosen = self.settings.company_id;
+        let mut logout = false;
+        let idle = self.busy.is_none();
+        egui::Popup::menu(&response)
+            .align(egui::RectAlign::TOP_START)
+            .width(rect.width().max(220.0))
+            .show(|ui| {
+                ui.set_min_width(200.0);
+                ui.spacing_mut().item_spacing.y = 2.0;
+                if companies.len() > 1 {
+                    ui.label(text(
+                        "Firma wechseln",
+                        semibold(FS_XS),
+                        theme::palette(ui).text_2,
+                    ));
+                    for c in &companies {
+                        let role = if c.role == "chef" { "Chef" } else { "Fahrer" };
+                        if ui
+                            .selectable_label(chosen == Some(c.id), format!("{} ({role})", c.name))
+                            .clicked()
+                        {
+                            chosen = Some(c.id);
+                            ui.close();
+                        }
+                    }
+                    ui.separator();
+                }
+                if ui
+                    .add_enabled(idle, egui::Button::new("Einstellungen"))
+                    .clicked()
+                {
+                    self.view = View::Settings;
+                    ui.close();
+                }
+                if ui
+                    .add_enabled(idle, egui::Button::new("Abmelden"))
+                    .clicked()
+                {
+                    logout = true;
+                    ui.close();
+                }
+            });
+        self.choose_company(ui.ctx(), chosen);
+        if logout {
+            self.logout(ui.ctx());
+        }
+    }
+
+    /// Kopf, Hinweise, Kennzahlen und der gewählte Bereich.
+    fn content(&mut self, ui: &mut egui::Ui) {
+        let subtitle = self.subtitle();
+        let idle = self.busy.is_none();
+        let mut refresh = false;
+        theme::page_header(ui, self.view.title(), &subtitle, |ui| {
             if ui
-                .add_enabled(self.busy.is_none(), egui::Button::new("Aktualisieren"))
+                .add(ActionButton::primary("Spiel starten").icon(Icon::Play))
                 .clicked()
             {
-                self.refresh(ui.ctx());
-            }
-            if ui.button("Spiel starten").clicked() {
                 match system::start_game() {
                     Ok(()) => self.info("Steam startet Euro Truck Simulator 2"),
                     Err(e) => self.error(e),
                 }
             }
             if ui
-                .add_enabled(self.busy.is_none(), egui::Button::new("Abmelden"))
+                .add_enabled(
+                    idle,
+                    ActionButton::secondary("Aktualisieren").icon(Icon::Refresh),
+                )
                 .clicked()
             {
-                self.logout(ui.ctx());
+                refresh = true;
             }
         });
+        if refresh {
+            self.refresh(ui.ctx());
+        }
+        ui.add_space(SP_5);
+        self.notices(ui);
+        self.kpis(ui);
+        ui.add_space(SP_2);
+        match self.view {
+            View::Fleet => self.fleet_view(ui),
+            View::Money => self.money_view(ui),
+            View::Import => self.import_view(ui),
+            View::Settings => self.settings_view(ui),
+        }
     }
 
-    fn profile_view(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
-            ui.label("Firmenprofil");
-            let current = self
-                .profile()
-                .map_or_else(|| "Profil wählen".to_string(), profile_label);
-            let mut chosen = self.settings.profile_dir.clone();
-            egui::ComboBox::from_id_salt("profil")
-                .selected_text(current)
-                .width(260.0)
-                .show_ui(ui, |ui| {
-                    for p in &self.profiles {
-                        ui.selectable_value(&mut chosen, Some(p.dir.clone()), profile_label(p));
-                    }
-                });
-            if chosen != self.settings.profile_dir {
-                self.settings.profile_dir = chosen;
-                self.import_slots.clear();
-                self.import_slot = None;
-                self.import_trucks.clear();
-                self.save_settings();
-                // Das Plugin meldet nur aus dem Firmenprofil, Plugin und Server müssen es wissen
-                self.write_plugin_config();
-                self.report_profile(ui.ctx());
+    /// Eine Zeile Nebentext unter dem Titel.
+    fn subtitle(&self) -> String {
+        match self.view {
+            View::Fleet => match &self.company {
+                None => "Noch keine Firma".into(),
+                Some(c) => {
+                    let active: Vec<&Truck> =
+                        self.trucks.iter().filter(|t| t.retired.is_none()).collect();
+                    let count = |s: TruckState| active.iter().filter(|t| t.state() == s).count();
+                    format!(
+                        "{}: {} Lkw, {} unterwegs, {} in der Werkstatt",
+                        c.name,
+                        active.len(),
+                        count(TruckState::Leased),
+                        count(TruckState::Workshop)
+                    )
+                }
+            },
+            View::Money => "Firmenprofil wählen und Geld mit dem Spielstand abgleichen".into(),
+            View::Import => {
+                "Einen Lkw aus deinem Spielstand in den Fuhrpark der Firma holen".into()
             }
-            if ui.button("Profile neu suchen").clicked() {
-                self.profiles = self
-                    .ets2_dir
-                    .as_deref()
-                    .map(find_profiles)
-                    .unwrap_or_default();
-            }
-        });
-        if self.profiles.is_empty() {
-            let place = self.ets2_dir.as_ref().map_or_else(
-                || "Der Dokumente-Ordner ließ sich nicht finden".to_string(),
-                |d| format!("Keine Profile gefunden unter {}", d.display()),
+            View::Settings => "Konto, Passwort, Plugin und Version".into(),
+        }
+    }
+
+    /// Warnungen als Hinweiskarten: Update, Version, Plugin, Firmenprofil.
+    fn notices(&mut self, ui: &mut egui::Ui) {
+        if self.update_notice(ui) {
+            ui.add_space(SP_3);
+        }
+        if let Some(w) = self.version_warning.clone() {
+            theme::notice(
+                ui,
+                Tone::Warning,
+                "Launcher und Server passen nicht zusammen",
+                &w,
+                |_| {},
             );
-            ui.label(place);
+            ui.add_space(SP_3);
+        }
+        let status = self.plugin.status;
+        let problem = !matches!(status, PluginStatus::Installed | PluginStatus::NoBundledDll);
+        // In den Einstellungen steht das Plugin in seiner eigenen Karte
+        if (self.plugin.installing || problem) && self.view != View::Settings {
+            let body = match status {
+                PluginStatus::Outdated => {
+                    "Im Spiel liegt eine andere Fassung als die mitgelieferte. Bitte neu installieren"
+                        .to_string()
+                }
+                PluginStatus::Missing => {
+                    "Ohne Plugin meldet das Spiel keine Aufträge, Maut und Strafen an den Server"
+                        .to_string()
+                }
+                PluginStatus::GameNotFound => self.plugin.problem.clone().unwrap_or_else(|| {
+                    "Der Ordner von Euro Truck Simulator 2 ist nicht bekannt".to_string()
+                }),
+                _ => String::new(),
+            };
+            theme::notice(ui, Tone::Warning, status.label(), &body, |ui| {
+                self.plugin_actions(ui);
+            });
+            ui.add_space(SP_3);
         }
         if self.settings.profile_dir.is_none() {
-            ui.colored_label(egui::Color32::from_rgb(200, 120, 0), NO_PROFILE);
+            let elsewhere = self.view != View::Money;
+            theme::notice(
+                ui,
+                Tone::Warning,
+                "Kein Firmenprofil gewählt",
+                NO_PROFILE,
+                |ui| {
+                    if elsewhere
+                        && ui
+                            .add(ActionButton::secondary("Firmenprofil wählen"))
+                            .clicked()
+                    {
+                        self.view = View::Money;
+                    }
+                },
+            );
+            ui.add_space(SP_3);
         }
         if self.profile().is_some_and(|p| p.steam_cloud) {
-            ui.colored_label(egui::Color32::from_rgb(200, 120, 0), STEAM_WARNING);
+            theme::notice(
+                ui,
+                Tone::Warning,
+                "Firmenprofil mit Steam Cloud",
+                STEAM_WARNING,
+                |_| {},
+            );
+            ui.add_space(SP_3);
+        }
+    }
+
+    /// Hinweis auf eine neue Version. `true`, wenn er angezeigt wurde.
+    fn update_notice(&mut self, ui: &mut egui::Ui) -> bool {
+        let (release, downloading) = match &self.update {
+            UpdateState::Available(r) => (r.clone(), false),
+            UpdateState::Downloading(r) => (r.clone(), true),
+            _ => return false,
+        };
+        theme::notice(
+            ui,
+            Tone::Info,
+            &format!("Version {} verfügbar", release.version),
+            &format!("Du hast {VERSION}."),
+            |ui| {
+                if downloading {
+                    ui.spinner();
+                    ui.label("Setup wird geladen und geprüft");
+                } else if ui
+                    .add(
+                        ActionButton::primary("Herunterladen und installieren")
+                            .icon(Icon::Download),
+                    )
+                    .clicked()
+                {
+                    self.start_update(ui.ctx());
+                }
+                if !release.html_url.is_empty() {
+                    ui.hyperlink_to("Was ist neu?", &release.html_url);
+                }
+            },
+        );
+        true
+    }
+
+    /// Kennzahl-Kacheln: Lohnkonto, Firmenkasse, Plugin, Firmenprofil.
+    fn kpis(&mut self, ui: &mut egui::Ui) {
+        let p = theme::palette(ui);
+        let minus = |n: i64| (n < 0).then_some(p.danger);
+        let mut tiles = Vec::new();
+        if let Some(m) = self.my_member() {
+            let note = if m.open_claim > 0 {
+                format!("offene Lohnforderung {}", theme::euro(m.open_claim))
+            } else {
+                format!("Level {}, {}", m.game_level, stage_text(m.stage))
+            };
+            tiles.push(Kpi {
+                icon: Icon::Wallet,
+                tone: Tone::Primary,
+                label: "Dein Lohnkonto",
+                value: theme::euro(m.wallet),
+                value_color: minus(m.wallet),
+                small_value: false,
+                note,
+            });
+        }
+        if let Some(c) = &self.company {
+            let count = self.trucks.iter().filter(|t| t.retired.is_none()).count();
+            tiles.push(Kpi {
+                icon: Icon::Money,
+                tone: Tone::Success,
+                label: "Firmenkasse",
+                value: theme::euro(c.balance),
+                value_color: minus(c.balance),
+                small_value: false,
+                note: format!("{count} Lkw im Fuhrpark"),
+            });
+        }
+        let (state, tone) = plugin_state(self.plugin.status);
+        let note = match (&self.plugin.game_dir, &self.plugin.problem) {
+            (Some(dir), _) => dir.display().to_string(),
+            (None, Some(problem)) => problem.clone(),
+            (None, None) => String::new(),
+        };
+        tiles.push(Kpi {
+            icon: Icon::Plugin,
+            tone,
+            label: "Plugin",
+            value: state.into(),
+            value_color: Some(tone.strong(p)),
+            small_value: true,
+            note,
+        });
+        let (value, tone, note) = match self.profile() {
+            Some(pr) if pr.steam_cloud => (
+                pr.name.clone(),
+                Tone::Warning,
+                "mit Steam Cloud, besser ein anderes".to_string(),
+            ),
+            Some(pr) => (pr.name.clone(), Tone::Info, "ohne Steam Cloud".to_string()),
+            None => (
+                "nicht gewählt".to_string(),
+                Tone::Warning,
+                "ohne Profil meldet das Plugin nichts".to_string(),
+            ),
+        };
+        tiles.push(Kpi {
+            icon: Icon::Profile,
+            tone,
+            label: "Firmenprofil",
+            value,
+            value_color: None,
+            small_value: true,
+            note,
+        });
+        let (cols, width) = theme::grid_columns(ui.available_width(), 200.0, SP_4);
+        for row in tiles.chunks(cols) {
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = SP_4;
+                for kpi in row {
+                    theme::column(ui, width, |ui| theme::kpi_tile(ui, kpi));
+                }
+            });
+            ui.add_space(SP_2);
         }
     }
 
     fn fleet_view(&mut self, ui: &mut egui::Ui) {
+        let p = theme::palette(ui);
         let Some(company) = self.company.clone() else {
+            theme::empty_state(
+                ui,
+                Icon::Building,
+                "Du bist noch in keiner Firma. Gründe eine im Dashboard oder tritt mit einem Einladungscode bei",
+                |_| {},
+            );
             return;
         };
-        ui.heading(format!("Fuhrpark von {}", company.name));
-        ui.label(format!("Firmenkasse: {} Euro", company.balance));
         let my_id = self.me.as_ref().map(|m| m.user_id);
-        if let Some(m) = company.members.iter().find(|m| Some(m.user_id) == my_id) {
-            let stage = m.stage.map_or_else(
-                || "keine Lohnstufe".to_string(),
-                |s| format!("Lohnstufe {s}"),
-            );
-            let claim = if m.open_claim > 0 {
-                format!(", offene Lohnforderung {} Euro", m.open_claim)
-            } else {
-                String::new()
-            };
-            ui.label(format!(
-                "Dein Lohnkonto: {} Euro{claim}. Level {}, {} Firmenkilometer, {stage} ({} Cent je km)",
-                m.wallet, m.game_level, m.company_km, m.cents_per_km
-            ));
-        }
+        let limit = company.damage_limit.unwrap_or(DEFAULT_DAMAGE_LIMIT) as f64;
+        let chef = company.is_chef();
+        // Ausgemusterte und verkaufte Lkw stehen unten für sich, ohne Knöpfe
+        let trucks = self.trucks.clone();
+        let (active, retired): (Vec<&Truck>, Vec<&Truck>) =
+            trucks.iter().partition(|t| t.retired.is_none());
+        let count = |s: TruckState| active.iter().filter(|t| t.state() == s).count();
         ui.horizontal_wrapped(|ui| {
+            for (label, filter) in [
+                ("Alle", None),
+                ("Frei", Some(TruckState::Free)),
+                ("Unterwegs", Some(TruckState::Leased)),
+                ("Werkstatt", Some(TruckState::Workshop)),
+            ] {
+                let n = filter.map_or(active.len(), count);
+                if theme::filter_pill(ui, label, n, self.fleet_filter == filter).clicked() {
+                    self.fleet_filter = filter;
+                }
+            }
+        });
+        ui.add_space(SP_3);
+        let shown: Vec<&Truck> = active
+            .iter()
+            .copied()
+            .filter(|t| self.fleet_filter.is_none_or(|f| t.state() == f))
+            .collect();
+        if active.is_empty() {
+            let sentence = if chef {
+                "Noch kein Lkw im Fuhrpark. Übernimm den ersten aus deinem Spielstand"
+            } else {
+                "Noch kein Lkw im Fuhrpark. Der Chef legt Lkw an"
+            };
+            theme::empty_state(ui, Icon::Truck, sentence, |ui| {
+                if chef
+                    && ui
+                        .add(ActionButton::primary("Lkw übernehmen").icon(Icon::Import))
+                        .clicked()
+                {
+                    self.view = View::Import;
+                }
+            });
+        } else if shown.is_empty() {
+            theme::empty_state(ui, Icon::Truck, "Kein Lkw mit diesem Status", |_| {});
+        }
+        let mut action: Option<(TruckAction, Truck)> = None;
+        let (cols, width) = theme::grid_columns(ui.available_width(), CARD_MIN_WIDTH, SP_4);
+        for (i, row) in shown.chunks(cols).enumerate() {
+            // Karten einer Reihe sind gleich hoch, die Knöpfe stehen unten auf einer Linie.
+            // Die Höhe kommt aus dem letzten Bild.
+            let row_id = egui::Id::unique(("fuhrpark-reihe", i, cols));
+            let target: f32 = ui.data(|d| d.get_temp(row_id)).unwrap_or(0.0);
+            let mut tallest = 0.0_f32;
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = SP_4;
+                for t in row {
+                    theme::column(ui, width, |ui| {
+                        let (a, body) = self.truck_card(ui, t, my_id, limit, target);
+                        tallest = tallest.max(body);
+                        if let Some(a) = a {
+                            action = Some((a, (*t).clone()));
+                        }
+                    });
+                }
+            });
+            if (tallest - target).abs() > 0.5 {
+                ui.data_mut(|d| d.insert_temp(row_id, tallest));
+                ui.ctx().request_repaint();
+            }
+            ui.add_space(SP_2);
+        }
+        if !retired.is_empty() {
+            ui.add_space(SP_2);
+            egui::CollapsingHeader::new(text(
+                format!("Ausgemustert und verkauft ({})", retired.len()),
+                semibold(FS_BASE),
+                p.text_2,
+            ))
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.multiply_opacity(0.8);
+                theme::card(ui).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    for (i, t) in retired.iter().enumerate() {
+                        if i > 0 {
+                            theme::divider(ui);
+                        }
+                        row(ui, 30.0, |ui| {
+                            theme::plate(ui, &t.plate, PlateSize::Small);
+                            ui.label(text(
+                                theme::model_name(&t.model),
+                                regular(FS_BASE),
+                                p.text_2,
+                            ));
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                let why = t.retired.as_ref().map(|r| r.text()).unwrap_or_default();
+                                ui.label(text(why, regular(FS_SM), p.text_3));
+                                ui.label(text(theme::km(t.odometer_km), regular(FS_SM), p.text_3));
+                            });
+                        });
+                    }
+                });
+            });
+        }
+        ui.add_space(SP_4);
+        theme::notice(
+            ui,
+            Tone::Info,
+            "Vor dem Schreiben in den Spielstand",
+            UNCONFIRMED,
+            |_| {},
+        );
+        match action {
+            Some((TruckAction::Checkout, t)) => self.checkout(ui.ctx(), &t),
+            Some((TruckAction::Write, t)) => self.write_to_save(ui.ctx(), &t),
+            Some((TruckAction::Return, t)) => self.start_return(ui.ctx(), &t),
+            None => {}
+        }
+    }
+
+    /// Karte eines Lkw: Kennzeichen, Modell und Plakette, Kilometer und Schaden, Fahrer, eine
+    /// Hauptaktion.
+    fn truck_card(
+        &self,
+        ui: &mut egui::Ui,
+        t: &Truck,
+        my_id: Option<i64>,
+        limit: f64,
+        body_height: f32,
+    ) -> (Option<TruckAction>, f32) {
+        let p = theme::palette(ui);
+        let mine = t
+            .leased_by
+            .as_ref()
+            .is_some_and(|l| Some(l.user_id) == my_id);
+        let state = t.state();
+        let (status, tone) = match state {
+            TruckState::Free => ("frei", Tone::Success),
+            TruckState::Workshop => ("in der Werkstatt", Tone::Danger),
+            TruckState::Leased if t.driving => ("wird gefahren", Tone::Warning),
+            TruckState::Leased if mine => ("bei dir", Tone::Warning),
+            TruckState::Leased => ("verliehen", Tone::Warning),
+            TruckState::Retired => ("ausgemustert", Tone::Neutral),
+        };
+        let now = unix_seconds(SystemTime::now()) as i64;
+        let idle = self.busy.is_none();
+        let mut action = None;
+        let mut body = 0.0;
+        theme::card(ui).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            let top = ui.min_rect().top();
+            // Kopf: Kennzeichen, Modell, Plakette
+            row(ui, 36.0, |ui| {
+                theme::plate(ui, &t.plate, PlateSize::Large);
+                ui.add_space(SP_1);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    theme::badge(ui, status, tone);
+                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                        let model = egui::Label::new(text(
+                            theme::model_name(&t.model),
+                            semibold(FS_BASE),
+                            p.text,
+                        ))
+                        .truncate();
+                        if t.old_plates.is_empty() {
+                            ui.add(model).on_hover_text(&t.model);
+                        } else {
+                            ui.vertical(|ui| {
+                                ui.spacing_mut().item_spacing.y = 0.0;
+                                ui.add(model).on_hover_text(&t.model);
+                                ui.add(
+                                    egui::Label::new(text(
+                                        format!("früher {}", t.old_plates.join(", ")),
+                                        regular(FS_XS),
+                                        p.text_3,
+                                    ))
+                                    .truncate(),
+                                );
+                            });
+                        }
+                    });
+                });
+            });
+            ui.add_space(SP_3);
+            // Kennwerte: Kilometer und Schaden
+            let half = (ui.available_width() - SP_4) / 2.0;
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = SP_4;
+                theme::column(ui, half, |ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    ui.label(text("Kilometerstand", regular(FS_XS), p.text_2));
+                    ui.label(text(theme::km(t.odometer_km), semibold(FS_MD), p.text));
+                });
+                theme::column(ui, half, |ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    ui.label(text("Schaden", regular(FS_XS), p.text_2));
+                    ui.allocate_ui_with_layout(
+                        vec2(ui.available_width(), 22.0),
+                        Layout::right_to_left(Align::Center),
+                        |ui| {
+                            let color = match theme::damage_tone(t.damage, limit) {
+                                Tone::Danger => p.danger,
+                                _ => p.text,
+                            };
+                            ui.label(text(
+                                format!("{} %", format_percent(t.damage)),
+                                semibold(FS_BASE),
+                                color,
+                            ));
+                            let bar = ui.available_width().max(24.0);
+                            theme::damage_bar(ui, t.damage, limit, bar).on_hover_text(format!(
+                                "Schadensgrenze {} %, darüber kommt der Lkw in die Werkstatt",
+                                format_percent(limit)
+                            ));
+                        },
+                    );
+                    if t.damage_unfixable > 0.0 {
+                        ui.label(text(
+                            format!("dauerhaft {} %", format_percent(t.damage_unfixable)),
+                            regular(FS_XS),
+                            p.text_3,
+                        ));
+                    }
+                });
+            });
+            // Fahrer, wenn verliehen
+            if let Some(l) = &t.leased_by {
+                ui.add_space(SP_3);
+                theme::inset(ui).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.spacing_mut().item_spacing.y = SP_1;
+                    row(ui, 26.0, |ui| {
+                        theme::avatar(ui, &l.name, 26.0, p.primary_soft, p.primary);
+                        let who = if mine { "Du".to_string() } else { l.name.clone() };
+                        ui.label(text(who, semibold(FS_BASE), p.text));
+                        ui.add(
+                            egui::Label::new(text(
+                                format!("ausgeliehen {}", age_text(now - l.since)),
+                                regular(FS_SM),
+                                p.text_2,
+                            ))
+                            .truncate(),
+                        );
+                    });
+                    if t.driving {
+                        row(ui, 20.0, |ui| {
+                            theme::icon(ui, Icon::Speed, 18.0, p.warning);
+                            let speed = match t.speed_kmh {
+                                Some(v) => format!("fährt gerade, {v:.0} km/h"),
+                                None => "fährt gerade".to_string(),
+                            };
+                            ui.label(text(speed, regular(FS_SM), p.text));
+                        });
+                    }
+                });
+            }
+            if t.in_workshop {
+                ui.add_space(SP_3);
+                let cost = if t.repair_cost > 0 {
+                    format!(". Reparatur {}", theme::euro(t.repair_cost))
+                } else {
+                    String::new()
+                };
+                ui.add(
+                    egui::Label::new(text(
+                        format!(
+                            "Über der Schadensgrenze. Ausleihen geht erst, wenn der Chef ihn im Dashboard reparieren lässt{cost}"
+                        ),
+                        regular(FS_SM),
+                        p.danger,
+                    ))
+                    .wrap(),
+                );
+            }
+            body = ui.min_rect().bottom() - top;
+            if body_height > body {
+                ui.add_space(body_height - body);
+            }
+            ui.add_space(SP_3);
+            theme::divider(ui);
+            ui.add_space(SP_3);
+            row(ui, CONTROL_HEIGHT, |ui| match state {
+                TruckState::Free => {
+                    if ui
+                        .add_enabled(idle, ActionButton::primary("Ausleihen"))
+                        .on_disabled_hover_text("Bitte warten")
+                        .clicked()
+                    {
+                        action = Some(TruckAction::Checkout);
+                    }
+                }
+                TruckState::Workshop => {
+                    // Ein Lkw in der Werkstatt lässt sich erst nach der Reparatur ausleihen
+                    ui.add_enabled(false, ActionButton::primary("Ausleihen"))
+                        .on_disabled_hover_text(
+                            "In der Werkstatt. Ausleihen geht erst, wenn der Chef ihn im Dashboard reparieren lässt",
+                        );
+                }
+                TruckState::Leased if mine => {
+                    if ui
+                        .add_enabled(idle, ActionButton::primary("Zurückgeben"))
+                        .clicked()
+                    {
+                        action = Some(TruckAction::Return);
+                    }
+                    if ui
+                        .add_enabled(
+                            idle,
+                            ActionButton::secondary("In Spielstand schreiben").icon(Icon::Save),
+                        )
+                        .clicked()
+                    {
+                        action = Some(TruckAction::Write);
+                    }
+                }
+                TruckState::Leased => {
+                    let name = t.leased_by.as_ref().map_or("", |l| l.name.as_str());
+                    ui.label(text(
+                        format!("Zurückgeben kann nur {name}"),
+                        regular(FS_SM),
+                        p.text_3,
+                    ));
+                }
+                TruckState::Retired => {}
+            });
+        });
+        (action, body)
+    }
+
+    fn money_view(&mut self, ui: &mut egui::Ui) {
+        let full = ui.available_width();
+        if theme::grid_columns(full, 360.0, SP_4).0 >= 2 {
+            let left = ((full - SP_4) * 0.58).floor();
+            let right = full - SP_4 - left;
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = SP_4;
+                theme::column(ui, left, |ui| {
+                    self.profile_card(ui);
+                    self.sync_card(ui);
+                });
+                theme::column(ui, right, |ui| self.wallet_card(ui));
+            });
+        } else {
+            self.profile_card(ui);
+            self.sync_card(ui);
+            self.wallet_card(ui);
+        }
+        ui.add_space(SP_2);
+        theme::notice(ui, Tone::Info, "Vor dem Abgleich", UNCONFIRMED, |_| {});
+    }
+
+    fn profile_card(&mut self, ui: &mut egui::Ui) {
+        theme::card(ui).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            theme::card_title(
+                ui,
+                "Firmenprofil",
+                "Das Profil im Spiel, in dem du für die Firma fährst. Plugin und Server zählen nur, was dort passiert",
+            );
+            ui.add_space(SP_3);
+            theme::field_label(ui, "Profil");
+            ui.horizontal(|ui| {
+                let current = self
+                    .profile()
+                    .map_or_else(|| "Profil wählen".to_string(), profile_label);
+                let mut chosen = self.settings.profile_dir.clone();
+                egui::ComboBox::from_id_salt("profil")
+                    .selected_text(current)
+                    .width((ui.available_width() - 190.0).max(160.0))
+                    .show_ui(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 2.0;
+                        for p in &self.profiles {
+                            ui.selectable_value(&mut chosen, Some(p.dir.clone()), profile_label(p));
+                        }
+                    });
+                if chosen != self.settings.profile_dir {
+                    self.settings.profile_dir = chosen;
+                    self.import_slots.clear();
+                    self.import_slot = None;
+                    self.import_trucks.clear();
+                    self.save_settings();
+                    // Das Plugin meldet nur aus dem Firmenprofil, Plugin und Server müssen es wissen
+                    self.write_plugin_config();
+                    self.report_profile(ui.ctx());
+                }
+                if ui
+                    .add(ActionButton::secondary("Profile neu suchen").icon(Icon::Refresh))
+                    .clicked()
+                {
+                    self.profiles = self
+                        .ets2_dir
+                        .as_deref()
+                        .map(find_profiles)
+                        .unwrap_or_default();
+                }
+            });
+            if self.profiles.is_empty() {
+                let place = self.ets2_dir.as_ref().map_or_else(
+                    || "Der Dokumente-Ordner ließ sich nicht finden".to_string(),
+                    |d| format!("Keine Profile gefunden unter {}", d.display()),
+                );
+                theme::help_text(ui, &place);
+            }
+        });
+        ui.add_space(SP_4);
+    }
+
+    fn sync_card(&mut self, ui: &mut egui::Ui) {
+        let Some(advance) = self.company.as_ref().map(|c| c.advance) else {
+            return;
+        };
+        theme::card(ui).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            theme::card_title(
+                ui,
+                "Geld abgleichen",
+                &format!(
+                    "Liest Kontostand und Erfahrung aus dem neuesten Spielstand und legt einen neuen Speicherplatz mit Lohnkonto plus {} Vorschuss an",
+                    theme::euro(advance)
+                ),
+            );
+            ui.add_space(SP_3);
             let ready = self.busy.is_none() && self.profile().is_some();
             if ui
-                .add_enabled(ready, egui::Button::new("Geld abgleichen"))
+                .add_enabled(ready, ActionButton::primary("Geld abgleichen").icon(Icon::Money))
+                .on_disabled_hover_text("Bitte zuerst ein Firmenprofil wählen")
                 .clicked()
             {
                 self.sync_money(ui.ctx());
             }
-            ui.label(format!(
-                "Liest Kontostand und Erfahrung aus dem neuesten Spielstand und legt einen neuen Speicherplatz mit Lohnkonto plus {} Euro Vorschuss an",
-                company.advance
-            ));
         });
-        ui.add_space(4.0);
-        // Ausgemusterte und verkaufte Lkw stehen unten für sich, ohne Knöpfe
-        let (active, retired): (Vec<&Truck>, Vec<&Truck>) =
-            self.trucks.iter().partition(|t| t.retired.is_none());
-        if active.is_empty() {
-            ui.label("Noch keine Lkw im Fuhrpark");
-        }
-        let mut action: Option<(&'static str, Truck)> = None;
-        egui::Grid::new("fuhrpark")
-            .num_columns(6)
-            .striped(true)
-            .spacing([16.0, 6.0])
-            .show(ui, |ui| {
-                ui.strong("Kennzeichen");
-                ui.strong("Modell");
-                ui.strong("km");
-                ui.strong("Schaden");
-                ui.strong("Fährt gerade");
-                ui.strong("");
-                ui.end_row();
-                for t in &active {
-                    ui.label(&t.plate);
-                    ui.label(&t.model);
-                    ui.label(t.odometer_km.to_string());
-                    ui.label(t.damage_text());
-                    let mine = t
-                        .leased_by
-                        .as_ref()
-                        .is_some_and(|l| Some(l.user_id) == my_id);
-                    let who = match &t.leased_by {
-                        None if t.in_workshop => "in der Werkstatt".to_string(),
-                        None => "frei".to_string(),
-                        Some(_) if mine => "du".to_string(),
-                        Some(l) => l.name.clone(),
-                    };
-                    // Aus dem Herzschlag des Plugins: wird der Lkw gerade gefahren?
-                    let who = match (t.driving, t.speed_kmh) {
-                        (true, Some(v)) => format!("{who}, fährt gerade, {v:.0} km/h"),
-                        (true, None) => format!("{who}, fährt gerade"),
-                        _ => who,
-                    };
-                    ui.label(who);
-                    ui.horizontal(|ui| {
-                        let idle = self.busy.is_none();
-                        if t.leased_by.is_none() {
-                            // Ein Lkw in der Werkstatt lässt sich erst nach der Reparatur ausleihen
-                            if ui
-                                .add_enabled(idle && !t.in_workshop, egui::Button::new("Ausleihen"))
-                                .on_disabled_hover_text(if t.in_workshop {
-                                    "In der Werkstatt. Ausleihen geht erst, wenn der Chef ihn im Dashboard reparieren lässt"
-                                } else {
-                                    "Bitte warten"
-                                })
-                                .clicked()
-                            {
-                                action = Some(("ausleihen", (*t).clone()));
-                            }
-                        } else if mine {
-                            if ui
-                                .add_enabled(idle, egui::Button::new("In Spielstand schreiben"))
-                                .clicked()
-                            {
-                                action = Some(("schreiben", (*t).clone()));
-                            }
-                            if ui
-                                .add_enabled(idle, egui::Button::new("Zurückgeben"))
-                                .clicked()
-                            {
-                                action = Some(("zurueck", (*t).clone()));
-                            }
-                        }
-                    });
-                    ui.end_row();
-                }
-            });
-        if !retired.is_empty() {
-            egui::CollapsingHeader::new(format!("Ausgemustert und verkauft ({})", retired.len()))
-                .default_open(false)
-                .show(ui, |ui| {
-                    for t in &retired {
-                        let why = t.retired.as_ref().map(|r| r.text()).unwrap_or_default();
-                        ui.label(format!(
-                            "{}, {}, {} km, {why}",
-                            t.plate, t.model, t.odometer_km
-                        ));
-                    }
-                });
-        }
-        match action {
-            Some(("ausleihen", t)) => self.checkout(ui.ctx(), &t),
-            Some(("schreiben", t)) => self.write_to_save(ui.ctx(), &t),
-            Some(("zurueck", t)) => self.start_return(ui.ctx(), &t),
-            _ => {}
-        }
+        ui.add_space(SP_4);
     }
 
-    fn return_view(&mut self, ui: &mut egui::Ui) {
-        let mut cancel = false;
-        let mut confirm = false;
-        let Some(dialog) = &mut self.returning else {
+    fn wallet_card(&mut self, ui: &mut egui::Ui) {
+        let (Some(m), Some(company)) = (self.my_member().cloned(), self.company.clone()) else {
             return;
         };
-        egui::Frame::group(ui.style()).show(ui, |ui| {
-            ui.strong(format!("{} zurückgeben", dialog.plate));
-            match &dialog.data {
-                Some(d) => {
-                    let how = match d.found_by {
-                        FoundBy::Plate => "Gefunden über das Kennzeichen".to_string(),
-                        FoundBy::Parts { share } => format!(
-                            "Gefunden über Modell und Teile ({} Prozent Übereinstimmung)",
-                            (share * 100.0).floor()
-                        ),
-                    };
-                    ui.label(format!(
-                        "{how}. Im neuesten Spielstand (Speicherplatz {}) steht der Lkw mit {} km. Zustand und Verschleiß gehen mit an den Server",
-                        d.slot, d.odometer_km
-                    ));
-                    if let Some(p) = &d.new_plate {
-                        ui.label(format!(
-                            "Das Spiel hat das Kennzeichen ersetzt. Neu ist {p}, das meldet der Launcher mit"
-                        ));
-                    }
-                }
-                None => {
-                    if let Some(problem) = &dialog.problem {
-                        ui.colored_label(egui::Color32::from_rgb(200, 40, 40), problem);
-                    }
-                    ui.label("Im neuesten Spielstand ist der Lkw nicht sicher zu finden. Bitte den Kilometerstand von Hand eingeben");
-                    ui.horizontal(|ui| {
-                        ui.label("Kilometerstand");
-                        ui.text_edit_singleline(&mut dialog.manual_km);
-                    });
-                }
+        let p = theme::palette(ui);
+        let minus = |n: i64| (n < 0).then_some(p.danger);
+        theme::card(ui).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            theme::card_title(ui, "Dein Lohnkonto", "");
+            ui.add_space(SP_2);
+            theme::key_value(ui, "Lohnkonto", &theme::euro(m.wallet), minus(m.wallet));
+            if m.open_claim > 0 {
+                theme::key_value(
+                    ui,
+                    "Offene Lohnforderung",
+                    &theme::euro(m.open_claim),
+                    Some(p.danger),
+                );
             }
-            ui.horizontal(|ui| {
-                if ui.button("Zurückgeben").clicked() {
-                    confirm = true;
-                }
-                if ui.button("Abbrechen").clicked() {
-                    cancel = true;
-                }
-            });
+            theme::key_value(ui, "Level im Spiel", &m.game_level.to_string(), None);
+            theme::key_value(ui, "Firmenkilometer", &theme::km(m.company_km), None);
+            theme::key_value(ui, "Lohnstufe", &stage_text(m.stage), None);
+            theme::key_value(
+                ui,
+                "Lohn je Kilometer",
+                &format!("{} Cent", m.cents_per_km),
+                None,
+            );
+            ui.add_space(SP_1);
+            theme::divider(ui);
+            ui.add_space(SP_1);
+            theme::key_value(
+                ui,
+                "Firmenkasse",
+                &theme::euro(company.balance),
+                minus(company.balance),
+            );
+            theme::key_value(
+                ui,
+                "Vorschuss beim Abgleich",
+                &theme::euro(company.advance),
+                None,
+            );
         });
-        if cancel {
-            self.returning = None;
-        } else if confirm {
-            self.finish_return(ui.ctx());
-        }
-    }
-
-    fn link_view(&mut self, ui: &mut egui::Ui) {
-        let mut skip = false;
-        let mut confirm = false;
-        let idle = self.busy.is_none();
-        let Some(dialog) = &mut self.linking else {
-            return;
-        };
-        let now = unix_seconds(SystemTime::now()) as i64;
-        egui::Frame::group(ui.style()).show(ui, |ui| {
-            ui.strong(format!("Kauf von {} verknüpfen", dialog.plate));
-            ui.label(format!(
-                "Hast du {} im Spiel gekauft, hat der Geldabgleich den Kaufpreis als Betriebskosten gebucht. Wähle die Buchung, dann steht im Kassenbuch Lkw-Kauf {} statt Betriebskosten. Die Buchung selbst bleibt, wie sie ist",
-                dialog.plate, dialog.plate
-            ));
-            for c in &dialog.candidates {
-                ui.radio_value(&mut dialog.chosen, Some(c.id), c.label(now));
-            }
-            ui.horizontal(|ui| {
-                if ui
-                    .add_enabled(
-                        idle && dialog.chosen.is_some(),
-                        egui::Button::new("Als Lkw-Kauf verknüpfen"),
-                    )
-                    .clicked()
-                {
-                    confirm = true;
-                }
-                if ui.button("Nicht verknüpfen").clicked() {
-                    skip = true;
-                }
-            });
-        });
-        if skip {
-            self.linking = None;
-        } else if confirm {
-            self.link_purchase(ui.ctx());
-        }
+        ui.add_space(SP_4);
     }
 
     fn import_view(&mut self, ui: &mut egui::Ui) {
-        if !self.company.as_ref().is_some_and(Company::is_chef) {
+        if !self.is_chef() {
             return;
         }
-        egui::CollapsingHeader::new("Lkw in den Fuhrpark übernehmen")
-            .default_open(false)
-            .show(ui, |ui| {
-                let Some(profile) = self.profile().map(|p| p.dir.clone()) else {
-                    ui.label("Bitte zuerst ein Profil wählen");
-                    return;
-                };
-                if self.import_slots.is_empty() {
-                    self.import_slots = list_slots(&profile);
+        let Some(profile) = self.profile().map(|p| p.dir.clone()) else {
+            theme::empty_state(ui, Icon::Profile, "Bitte zuerst ein Profil wählen", |ui| {
+                if ui
+                    .add(ActionButton::secondary("Firmenprofil wählen"))
+                    .clicked()
+                {
+                    self.view = View::Money;
                 }
-                if self.import_slots.is_empty() {
-                    ui.label("Im Profil gibt es noch keinen Spielstand");
-                    return;
-                }
-                ui.label("Aus welchem Spielstand?");
+            });
+            return;
+        };
+        if self.import_slots.is_empty() {
+            self.import_slots = list_slots(&profile);
+        }
+        if self.import_slots.is_empty() {
+            theme::empty_state(
+                ui,
+                Icon::Save,
+                "Im Profil gibt es noch keinen Spielstand",
+                |_| {},
+            );
+            return;
+        }
+        let width = ui.available_width().min(760.0);
+        theme::column(ui, width, |ui| {
+            theme::card(ui).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                theme::card_title(
+                    ui,
+                    "Lkw in den Fuhrpark übernehmen",
+                    "Danach gehört der Lkw der Firma und alle Fahrer können ihn ausleihen",
+                );
+                ui.add_space(SP_4);
+                theme::field_label(ui, "Aus welchem Spielstand?");
                 let current = self
                     .import_slot
                     .and_then(|i| self.import_slots.get(i))
@@ -1589,8 +2278,9 @@ impl App {
                 let mut chosen = self.import_slot;
                 egui::ComboBox::from_id_salt("spielstand")
                     .selected_text(current)
-                    .width(260.0)
+                    .width(ui.available_width())
                     .show_ui(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 2.0;
                         for (i, s) in self.import_slots.iter().enumerate() {
                             ui.selectable_value(&mut chosen, Some(i), s.label());
                         }
@@ -1600,152 +2290,425 @@ impl App {
                     self.import_trucks.clear();
                     self.load_save_trucks(ui.ctx());
                 }
-                for t in &self.import_trucks {
-                    let model = t.model.as_deref().unwrap_or("unbekanntes Modell");
-                    let extra = if t.active { ", fährt gerade" } else { "" };
-                    ui.radio_value(
-                        &mut self.import_plate,
-                        Some(t.plate.clone()),
-                        format!("{} ({model}{extra})", t.plate),
-                    );
+                if !self.import_trucks.is_empty() {
+                    ui.add_space(SP_3);
+                    theme::field_label(ui, "Welcher Lkw?");
+                    let mut picked = None;
+                    for t in &self.import_trucks {
+                        let selected = self.import_plate.as_deref() == Some(t.plate.as_str());
+                        let model = t
+                            .model
+                            .as_deref()
+                            .map_or_else(|| "unbekanntes Modell".to_string(), theme::model_name);
+                        let p = theme::palette(ui);
+                        let response = theme::choice_row(ui, &t.plate, selected, |ui| {
+                            theme::plate(ui, &t.plate, PlateSize::Small);
+                            ui.label(text(model, regular(FS_BASE), p.text));
+                            if t.active {
+                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    theme::badge(ui, "fährt gerade", Tone::Warning);
+                                });
+                            }
+                        });
+                        if response.clicked() {
+                            picked = Some(t.plate.clone());
+                        }
+                    }
+                    if picked.is_some() {
+                        self.import_plate = picked;
+                    }
                 }
-                ui.horizontal(|ui| {
-                    ui.label("Kennzeichen in der Firma");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.import_company_plate)
-                            .char_limit(16)
-                            .desired_width(120.0),
-                    );
-                });
-                ui.weak("Mit diesem Kennzeichen setzt der Launcher den Lkw in die Spielstände der Fahrer. Vorgeschlagen ist das nächste freie der Firma. Erlaubt sind A bis Z, Ziffern, Leerzeichen, Punkt und Bindestrich");
+                ui.add_space(SP_3);
+                theme::field_label(ui, "Kennzeichen in der Firma");
+                ui.add(
+                    theme::text_field(&mut self.import_company_plate)
+                        .char_limit(16)
+                        .desired_width(180.0),
+                );
+                theme::help_text(
+                    ui,
+                    "Mit diesem Kennzeichen setzt der Launcher den Lkw in die Spielstände der Fahrer. Vorgeschlagen ist das nächste freie der Firma. Erlaubt sind A bis Z, Ziffern, Leerzeichen, Punkt und Bindestrich",
+                );
+                ui.add_space(SP_4);
                 let ready = self.import_plate.is_some()
                     && !self.import_company_plate.trim().is_empty()
                     && self.busy.is_none();
                 if ui
-                    .add_enabled(ready, egui::Button::new("Lkw übernehmen"))
+                    .add_enabled(ready, ActionButton::primary("Lkw übernehmen").icon(Icon::Import))
                     .clicked()
                 {
                     self.import_truck(ui.ctx());
                 }
             });
+        });
     }
 
     fn settings_view(&mut self, ui: &mut egui::Ui) {
-        egui::CollapsingHeader::new("Einstellungen")
-            .default_open(false)
-            .show(ui, |ui| {
-                ui.strong("Passwort ändern");
-                ui.label("Danach sind alle anderen Anmeldungen mit diesem Konto abgemeldet, zum Beispiel im Dashboard. Der Launcher bleibt angemeldet");
-                egui::Grid::new("passwort")
-                    .num_columns(2)
-                    .spacing([12.0, 8.0])
-                    .show(ui, |ui| {
-                        ui.label("Altes Passwort");
-                        ui.add(egui::TextEdit::singleline(&mut self.pw_old).password(true));
-                        ui.end_row();
-                        ui.label("Neues Passwort, mindestens 8 Zeichen");
-                        ui.add(egui::TextEdit::singleline(&mut self.pw_new).password(true));
-                        ui.end_row();
-                        ui.label("Neues Passwort wiederholen");
-                        ui.add(egui::TextEdit::singleline(&mut self.pw_repeat).password(true));
-                        ui.end_row();
-                    });
-                let ready = !self.pw_old.is_empty()
-                    && !self.pw_new.is_empty()
-                    && !self.pw_repeat.is_empty()
-                    && self.busy.is_none();
-                if ui
-                    .add_enabled(ready, egui::Button::new("Passwort ändern"))
-                    .clicked()
-                {
-                    self.change_password(ui.ctx());
-                }
+        let full = ui.available_width();
+        if theme::grid_columns(full, 360.0, SP_4).0 >= 2 {
+            let half = ((full - SP_4) / 2.0).floor();
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = SP_4;
+                theme::column(ui, half, |ui| {
+                    self.account_card(ui);
+                    self.password_card(ui);
+                });
+                theme::column(ui, half, |ui| {
+                    self.plugin_card(ui);
+                    ui.add_space(SP_4);
+                    self.version_card(ui);
+                });
             });
+        } else {
+            self.account_card(ui);
+            self.password_card(ui);
+            self.plugin_card(ui);
+            ui.add_space(SP_4);
+            self.version_card(ui);
+        }
     }
 
-    /// Hinweis auf eine neue Version, oben im Fenster.
-    fn update_banner(&mut self, ui: &mut egui::Ui) {
-        let (release, downloading) = match &self.update {
-            UpdateState::Available(r) => (r.clone(), false),
-            UpdateState::Downloading(r) => (r.clone(), true),
-            _ => return,
-        };
-        ui.horizontal_wrapped(|ui| {
-            ui.colored_label(
-                egui::Color32::from_rgb(40, 110, 200),
-                format!("Version {} verfügbar, du hast {VERSION}.", release.version),
+    fn account_card(&mut self, ui: &mut egui::Ui) {
+        let name = self.me.as_ref().map(|m| m.name.clone()).unwrap_or_default();
+        let companies = self
+            .me
+            .as_ref()
+            .map(|m| m.companies.clone())
+            .unwrap_or_default();
+        theme::card(ui).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            theme::card_title(ui, "Konto", "");
+            ui.add_space(SP_2);
+            theme::key_value(ui, "Angemeldet als", &name, None);
+            theme::key_value(ui, "Server", &self.settings.server_url, None);
+            if !companies.is_empty() {
+                ui.add_space(SP_2);
+                theme::field_label(ui, "Firma");
+                let current = self
+                    .company
+                    .as_ref()
+                    .map_or_else(|| "Firma wählen".to_string(), |c| c.name.clone());
+                let mut chosen = self.settings.company_id;
+                egui::ComboBox::from_id_salt("firma")
+                    .selected_text(current)
+                    .width(ui.available_width())
+                    .show_ui(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 2.0;
+                        for c in &companies {
+                            let role = if c.role == "chef" { "Chef" } else { "Fahrer" };
+                            ui.selectable_value(
+                                &mut chosen,
+                                Some(c.id),
+                                format!("{} ({role})", c.name),
+                            );
+                        }
+                    });
+                self.choose_company(ui.ctx(), chosen);
+            }
+            ui.add_space(SP_3);
+            if ui
+                .add_enabled(
+                    self.busy.is_none(),
+                    ActionButton::secondary("Abmelden").icon(Icon::Logout),
+                )
+                .clicked()
+            {
+                self.logout(ui.ctx());
+            }
+        });
+        ui.add_space(SP_4);
+    }
+
+    fn password_card(&mut self, ui: &mut egui::Ui) {
+        theme::card(ui).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            theme::card_title(
+                ui,
+                "Passwort ändern",
+                "Danach sind alle anderen Anmeldungen mit diesem Konto abgemeldet, zum Beispiel im Dashboard. Der Launcher bleibt angemeldet",
             );
-            if downloading {
-                ui.spinner();
-                ui.label("Setup wird geladen und geprüft");
-            } else if ui.button("Herunterladen und installieren").clicked() {
-                self.start_update(ui.ctx());
+            ui.add_space(SP_3);
+            for (label, value) in [
+                ("Altes Passwort", &mut self.pw_old),
+                ("Neues Passwort, mindestens 8 Zeichen", &mut self.pw_new),
+                ("Neues Passwort wiederholen", &mut self.pw_repeat),
+            ] {
+                theme::field_label(ui, label);
+                ui.add(
+                    theme::text_field(value)
+                        .password(true)
+                        .desired_width(f32::INFINITY),
+                );
+                ui.add_space(SP_1);
             }
-            if !release.html_url.is_empty() {
-                ui.hyperlink_to("Was ist neu?", &release.html_url);
+            ui.add_space(SP_2);
+            let ready = !self.pw_old.is_empty()
+                && !self.pw_new.is_empty()
+                && !self.pw_repeat.is_empty()
+                && self.busy.is_none();
+            if ui
+                .add_enabled(ready, ActionButton::primary("Passwort ändern").icon(Icon::Key))
+                .clicked()
+            {
+                self.change_password(ui.ctx());
             }
         });
-        ui.separator();
+        ui.add_space(SP_4);
     }
 
-    fn plugin_view(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
-            let status = self.plugin.status;
-            let color = match status {
-                PluginStatus::Installed => egui::Color32::from_rgb(40, 140, 60),
-                PluginStatus::NoBundledDll => ui.visuals().weak_text_color(),
-                _ => egui::Color32::from_rgb(200, 120, 0),
+    /// Stand des Plugins mit Knöpfen, im Anmeldefenster und in den Einstellungen.
+    fn plugin_card(&mut self, ui: &mut egui::Ui) {
+        let p = theme::palette(ui);
+        let (state, tone) = plugin_state(self.plugin.status);
+        theme::card(ui).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.with_layout(Layout::top_down(Align::Min), |ui| {
+                row(ui, 28.0, |ui| {
+                    ui.label(text("Plugin", semibold(FS_MD), p.text));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        theme::badge(ui, state, tone);
+                    });
+                });
+                theme::help_text(
+                    ui,
+                    "Meldet Aufträge, Maut, Strafen und den Herzschlag aus dem Spiel an den Server",
+                );
+                if let Some(dir) = &self.plugin.game_dir {
+                    ui.add_space(SP_1);
+                    theme::key_value(ui, "Spiel", &dir.display().to_string(), None);
+                }
+                if let Some(problem) = &self.plugin.problem {
+                    ui.add(egui::Label::new(text(problem, regular(FS_SM), p.text_2)).wrap());
+                }
+                ui.add_space(SP_3);
+                ui.horizontal_wrapped(|ui| self.plugin_actions(ui));
+            });
+        });
+    }
+
+    /// Knöpfe zum Plugin: installieren, Ordner wählen, neu prüfen.
+    fn plugin_actions(&mut self, ui: &mut egui::Ui) {
+        let status = self.plugin.status;
+        if self.plugin.installing {
+            ui.spinner();
+            ui.label("Plugin wird installiert");
+            return;
+        }
+        if (status.can_install() || status == PluginStatus::GameNotFound)
+            && ui
+                .add(ActionButton::primary("Plugin installieren").icon(Icon::Plugin))
+                .clicked()
+        {
+            self.install_plugin(ui.ctx());
+        }
+        if status == PluginStatus::GameNotFound
+            && ui.add(ActionButton::secondary("Ordner wählen")).clicked()
+        {
+            self.choose_game_folder(ui.ctx(), false);
+        }
+        if ui
+            .add(ActionButton::quiet("Neu prüfen").icon(Icon::Refresh))
+            .clicked()
+        {
+            self.plugin = PluginView::detect(&self.settings);
+        }
+    }
+
+    fn version_card(&mut self, ui: &mut egui::Ui) {
+        let p = theme::palette(ui);
+        theme::card(ui).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            theme::card_title(ui, "Version", "");
+            ui.add_space(SP_2);
+            theme::key_value(ui, "Launcher", VERSION, None);
+            let (state, color) = match &self.update {
+                UpdateState::Checking => ("Suche nach Updates".to_string(), None),
+                UpdateState::Current => ("aktuell".to_string(), Some(p.success)),
+                UpdateState::Failed(_) => ("Update-Prüfung ging nicht".to_string(), Some(p.text_2)),
+                UpdateState::Available(r) | UpdateState::Downloading(r) => {
+                    (format!("Version {} verfügbar", r.version), Some(p.warning))
+                }
             };
-            ui.colored_label(color, status.label());
-            if self.plugin.installing {
-                ui.spinner();
-            } else {
-                if (status.can_install() || status == PluginStatus::GameNotFound)
-                    && ui.button("Plugin installieren").clicked()
-                {
-                    self.install_plugin(ui.ctx());
-                }
-                if status == PluginStatus::GameNotFound && ui.button("Ordner wählen").clicked() {
-                    self.choose_game_folder(ui.ctx(), false);
-                }
-                if ui.button("Neu prüfen").clicked() {
-                    self.plugin = PluginView::detect(&self.settings);
-                }
+            theme::key_value(ui, "Stand", &state, color);
+            if let UpdateState::Failed(e) = &self.update {
+                theme::help_text(ui, e);
             }
         });
-        if let Some(dir) = &self.plugin.game_dir {
-            ui.weak(format!("Spiel: {}", dir.display()));
-        }
-        if let Some(problem) = &self.plugin.problem {
-            ui.weak(problem);
-        }
     }
 
+    /// Unten: was gerade läuft, oder die letzte Meldung.
     fn status_bar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
+        let p = theme::palette(ui);
+        ui.horizontal(|ui| {
             if let Some(b) = &self.busy {
                 ui.spinner();
-                ui.label(b);
+                ui.label(text(b, regular(FS_BASE), p.text));
             } else if let Some(m) = &self.message {
-                if m.error {
-                    ui.colored_label(egui::Color32::from_rgb(200, 40, 40), &m.text);
-                } else {
-                    ui.label(&m.text);
-                }
+                let tone = if m.error { Tone::Danger } else { Tone::Info };
+                theme::icon(ui, tone.icon(), 18.0, tone.strong(p));
+                let color = if m.error { p.danger } else { p.text };
+                ui.add(egui::Label::new(text(&m.text, regular(FS_BASE), color)).wrap());
             }
         });
-        // Version und Stand der Update-Prüfung, leise
-        ui.horizontal_wrapped(|ui| {
-            ui.weak(format!("SpedHub {VERSION}"));
-            match &self.update {
-                UpdateState::Checking => ui.weak("Suche nach Updates"),
-                UpdateState::Current => ui.weak("aktuell"),
-                UpdateState::Failed(e) => ui.weak(format!("Update-Prüfung: {e}")),
-                UpdateState::Available(r) | UpdateState::Downloading(r) => {
-                    ui.weak(format!("Version {} verfügbar", r.version))
+    }
+
+    /// Dialog "Lkw zurückgeben": Kilometer und Zustand aus dem Spielstand, sonst von Hand.
+    fn return_dialog(&mut self, ctx: &egui::Context) {
+        let mut cancel = false;
+        let mut confirm = false;
+        let Some(dialog) = &mut self.returning else {
+            return;
+        };
+        let p = theme::palette_of(ctx);
+        let modal = egui::Modal::new(egui::Id::unique("rueckgabe"))
+            .frame(theme::dialog_frame(ctx))
+            .show(ctx, |ui| {
+                ui.set_width(440.0);
+                row(ui, 32.0, |ui| {
+                    ui.label(text("Lkw zurückgeben", semibold(FS_MD), p.text));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        theme::plate(ui, &dialog.plate, PlateSize::Small);
+                    });
+                });
+                ui.add_space(SP_2);
+                match &dialog.data {
+                    Some(d) => {
+                        let how = match d.found_by {
+                            FoundBy::Plate => "Kennzeichen".to_string(),
+                            FoundBy::Parts { share } => format!(
+                                "Modell und Teile, {} Prozent Übereinstimmung",
+                                (share * 100.0).floor()
+                            ),
+                        };
+                        theme::inset(ui).show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            theme::key_value(ui, "Speicherplatz", &d.slot, None);
+                            theme::key_value(ui, "Kilometerstand", &theme::km(d.odometer_km), None);
+                            theme::key_value(ui, "Gefunden über", &how, None);
+                        });
+                        ui.add_space(SP_1);
+                        ui.add(
+                            egui::Label::new(text(
+                                "Gelesen aus dem neuesten Spielstand. Zustand und Verschleiß gehen mit an den Server",
+                                regular(FS_SM),
+                                p.text_2,
+                            ))
+                            .wrap(),
+                        );
+                        if let Some(new) = &d.new_plate {
+                            ui.add_space(SP_2);
+                            theme::notice(
+                                ui,
+                                Tone::Info,
+                                "",
+                                &format!(
+                                    "Das Spiel hat das Kennzeichen ersetzt. Neu ist {new}, das meldet der Launcher mit"
+                                ),
+                                |_| {},
+                            );
+                        }
+                    }
+                    None => {
+                        if let Some(problem) = &dialog.problem {
+                            theme::notice(ui, Tone::Danger, "", problem, |_| {});
+                            ui.add_space(SP_2);
+                        }
+                        ui.add(
+                            egui::Label::new(text(
+                                "Im neuesten Spielstand ist der Lkw nicht sicher zu finden. Bitte den Kilometerstand von Hand eingeben",
+                                regular(FS_BASE),
+                                p.text,
+                            ))
+                            .wrap(),
+                        );
+                        ui.add_space(SP_2);
+                        theme::field_label(ui, "Kilometerstand");
+                        ui.add(theme::text_field(&mut dialog.manual_km).desired_width(180.0));
+                    }
                 }
-            };
-        });
+                ui.add_space(SP_5);
+                row_right(ui, |ui| {
+                    if ui.add(ActionButton::primary("Zurückgeben")).clicked() {
+                        confirm = true;
+                    }
+                    if ui.add(ActionButton::quiet("Abbrechen")).clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+        if modal.should_close() {
+            cancel = true;
+        }
+        if confirm {
+            self.finish_return(ctx);
+        } else if cancel {
+            self.returning = None;
+        }
+    }
+
+    /// Dialog nach "Lkw übernehmen": Betriebskosten-Buchung als Kauf verknüpfen.
+    fn link_dialog(&mut self, ctx: &egui::Context) {
+        let mut skip = false;
+        let mut confirm = false;
+        let idle = self.busy.is_none();
+        let Some(dialog) = &mut self.linking else {
+            return;
+        };
+        let p = theme::palette_of(ctx);
+        let now = unix_seconds(SystemTime::now()) as i64;
+        egui::Modal::new(egui::Id::unique("kauf"))
+            .frame(theme::dialog_frame(ctx))
+            .show(ctx, |ui| {
+                ui.set_width(460.0);
+                ui.label(text(
+                    format!("Kauf von {} verknüpfen", dialog.plate),
+                    semibold(FS_MD),
+                    p.text,
+                ));
+                ui.add_space(SP_2);
+                ui.add(
+                    egui::Label::new(text(
+                        format!(
+                            "Hast du {} im Spiel gekauft, hat der Geldabgleich den Kaufpreis als Betriebskosten gebucht. Wähle die Buchung, dann steht im Kassenbuch Lkw-Kauf {} statt Betriebskosten. Die Buchung selbst bleibt, wie sie ist",
+                            dialog.plate, dialog.plate
+                        ),
+                        regular(FS_BASE),
+                        p.text_2,
+                    ))
+                    .wrap(),
+                );
+                ui.add_space(SP_3);
+                for c in &dialog.candidates {
+                    let selected = dialog.chosen == Some(c.id);
+                    if theme::choice_row(ui, c.id, selected, |ui| {
+                        ui.label(text(c.label(now), regular(FS_BASE), p.text));
+                    })
+                    .clicked()
+                    {
+                        dialog.chosen = Some(c.id);
+                    }
+                }
+                ui.add_space(SP_5);
+                row_right(ui, |ui| {
+                    if ui
+                        .add_enabled(
+                            idle && dialog.chosen.is_some(),
+                            ActionButton::primary("Als Lkw-Kauf verknüpfen"),
+                        )
+                        .clicked()
+                    {
+                        confirm = true;
+                    }
+                    if ui.add(ActionButton::quiet("Nicht verknüpfen")).clicked() {
+                        skip = true;
+                    }
+                });
+            });
+        if skip {
+            self.linking = None;
+        } else if confirm {
+            self.link_purchase(ctx);
+        }
     }
 }
 
@@ -1759,38 +2722,147 @@ impl eframe::App for App {
             let ctx = ui.ctx().clone();
             self.handle_background(&ctx, done);
         }
-        egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
-        egui::CentralPanel::default().show(ui, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                self.update_banner(ui);
-                if self.token.is_none() {
-                    self.login_view(ui);
-                    ui.add_space(12.0);
-                    ui.separator();
-                    self.plugin_view(ui);
-                    return;
-                }
-                self.top_bar(ui);
-                if let Some(w) = &self.version_warning {
-                    ui.colored_label(egui::Color32::from_rgb(200, 150, 0), w);
-                }
-                ui.separator();
-                self.profile_view(ui);
-                ui.add_space(4.0);
-                self.plugin_view(ui);
-                ui.add_space(4.0);
-                ui.colored_label(egui::Color32::from_rgb(200, 120, 0), UNCONFIRMED);
-                ui.separator();
-                self.return_view(ui);
-                self.link_view(ui);
-                self.fleet_view(ui);
-                ui.add_space(12.0);
-                self.import_view(ui);
-                ui.add_space(8.0);
-                self.settings_view(ui);
+        let p = theme::palette(ui);
+        if self.busy.is_some() || self.message.is_some() {
+            egui::Panel::bottom("status")
+                .show_separator_line(true)
+                .frame(
+                    Frame::new()
+                        .fill(p.surface)
+                        .inner_margin(Margin::symmetric(SP_6 as i8, SP_3 as i8)),
+                )
+                .show(ui, |ui| self.status_bar(ui));
+        }
+        if self.token.is_none() {
+            egui::CentralPanel::default()
+                .frame(Frame::new().fill(p.bg))
+                .show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .auto_shrink(false)
+                        .show(ui, |ui| self.login_view(ui));
+                });
+            return;
+        }
+        if self.view == View::Import && !self.is_chef() {
+            self.view = View::Fleet;
+        }
+        egui::Panel::left("navigation")
+            .exact_size(NAV_WIDTH)
+            .resizable(false)
+            .show_separator_line(false)
+            .frame(
+                Frame::new()
+                    .fill(p.nav_bg)
+                    .inner_margin(Margin::symmetric(SP_3 as i8, SP_4 as i8)),
+            )
+            .show(ui, |ui| self.sidebar(ui));
+        egui::CentralPanel::default()
+            .frame(Frame::new().fill(p.bg))
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .auto_shrink(false)
+                    .show(ui, |ui| {
+                        Frame::new()
+                            .inner_margin(Margin::same(SP_6 as i8))
+                            .show(ui, |ui| {
+                                ui.set_max_width(ui.available_width().min(CONTENT_MAX_WIDTH));
+                                self.content(ui);
+                            });
+                    });
             });
-        });
+        let ctx = ui.ctx().clone();
+        self.return_dialog(&ctx);
+        self.link_dialog(&ctx);
     }
+}
+
+/// Die Bereiche des Launchers in der Seitenleiste.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum View {
+    Fleet,
+    Money,
+    Import,
+    Settings,
+}
+
+impl View {
+    const ALL: [View; 4] = [View::Fleet, View::Money, View::Import, View::Settings];
+
+    fn nav_label(self) -> &'static str {
+        match self {
+            View::Fleet => "Fuhrpark",
+            View::Money => "Geld und Spielstand",
+            View::Import => "Übernehmen",
+            View::Settings => "Einstellungen",
+        }
+    }
+
+    fn title(self) -> &'static str {
+        match self {
+            View::Fleet => "Fuhrpark",
+            View::Money => "Geld und Spielstand",
+            View::Import => "Lkw übernehmen",
+            View::Settings => "Einstellungen",
+        }
+    }
+
+    fn icon(self) -> Icon {
+        match self {
+            View::Fleet => Icon::Truck,
+            View::Money => Icon::Money,
+            View::Import => Icon::Import,
+            View::Settings => Icon::Settings,
+        }
+    }
+}
+
+/// Hauptaktion auf einer Lkw-Karte.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TruckAction {
+    Checkout,
+    Write,
+    Return,
+}
+
+/// Schadensgrenze, wenn der Server keine meldet (sein Standard).
+const DEFAULT_DAMAGE_LIMIT: i64 = 25;
+
+/// Zeile fester Höhe, Inhalt links nach rechts, mittig.
+fn row<R>(ui: &mut egui::Ui, height: f32, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    ui.allocate_ui_with_layout(
+        vec2(ui.available_width(), height),
+        Layout::left_to_right(Align::Center),
+        add,
+    )
+    .inner
+}
+
+/// Zeile für Knöpfe rechtsbündig, der zuerst hinzugefügte steht ganz rechts.
+fn row_right<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    ui.allocate_ui_with_layout(
+        vec2(ui.available_width(), CONTROL_HEIGHT),
+        Layout::right_to_left(Align::Center),
+        add,
+    )
+    .inner
+}
+
+/// Kurzer Stand des Plugins für Kachel und Plakette.
+fn plugin_state(status: PluginStatus) -> (&'static str, Tone) {
+    match status {
+        PluginStatus::Installed => ("installiert", Tone::Success),
+        PluginStatus::Outdated => ("veraltet", Tone::Warning),
+        PluginStatus::Missing => ("fehlt", Tone::Warning),
+        PluginStatus::GameNotFound => ("kein Spielordner", Tone::Warning),
+        PluginStatus::NoBundledDll => ("keine DLL", Tone::Neutral),
+    }
+}
+
+fn stage_text(stage: Option<i64>) -> String {
+    stage.map_or_else(
+        || "keine Lohnstufe".to_string(),
+        |s| format!("Lohnstufe {s}"),
+    )
 }
 
 fn profile_label(p: &Profile) -> String {

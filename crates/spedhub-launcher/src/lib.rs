@@ -11,6 +11,7 @@
 //! | [`savegame`] | Lkw übernehmen, einsetzen, für die Rückgabe lesen (über `spedhub-save`) |
 //! | [`settings`] | Einstellungen mit verschlüsseltem Token, `plugin.json` |
 //! | [`steam`] | ETS2 über Steam finden: Registry-Werte, `libraryfolders.vdf`, App-Manifest |
+//! | [`theme`] | Aussehen nach `docs/design-system.md`: Farben, Schrift, Abstände, Bausteine |
 //! | [`system`] | Windows-Anbindung: Dokumente, laufendes Spiel, Steam, DPAPI, Registry, Dialoge |
 //! | [`update`] | Neue Version über GitHub-Releases finden, Setup laden und prüfen |
 //! | [`version`] | Versionen lesen und vergleichen, passen Launcher und Server zusammen? |
@@ -25,6 +26,7 @@ pub mod savegame;
 pub mod settings;
 pub mod steam;
 pub mod system;
+pub mod theme;
 pub mod update;
 pub mod version;
 

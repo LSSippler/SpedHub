@@ -24,14 +24,15 @@ Im Dashboard stehen alle Werte als CSS-Variablen an einer Stelle (`:root`), im L
 | `--border-strong` | `#cbd5e1` | `#33425e` | Ränder von Eingaben |
 | `--text` | `#0f172a` | `#e5eaf2` | Text |
 | `--text-2` | `#475569` | `#a3b1c6` | Nebentext, Beschriftungen |
-| `--text-3` | `#7a8699` | `#74839b` | Hinweise, leere Zustände |
+| `--text-3` | `#64748b` | `#8191a8` | Hinweise, leere Zustände |
 | `--primary` | `#1d4ed8` | `#5b8def` | Hauptaktion, Links, Auswahl |
 | `--primary-hover` | `#1e40af` | `#7aa3f5` | |
+| `--on-primary` | `#ffffff` | `#0b1220` | Schrift auf `--primary` und `--danger` (Knöpfe) |
 | `--primary-soft` | `#e6eefc` | `#17284a` | Hintergrund ausgewählter Zeilen, aktive Navigation |
 | `--accent` | `#ea7a1a` | `#f0953f` | Signalfarbe der Marke: Markierung der aktiven Navigation, Logo |
-| `--success` | `#15803d` | `#4ade80` | frei, bezahlt, online, Plus |
+| `--success` | `#166534` | `#4ade80` | frei, bezahlt, online, Plus |
 | `--success-soft` | `#e3f6ea` | `#123423` | |
-| `--warning` | `#b45309` | `#fbbf24` | unterwegs, verliehen, Achtung |
+| `--warning` | `#a34a06` | `#fbbf24` | unterwegs, verliehen, Achtung |
 | `--warning-soft` | `#fdf1dc` | `#3a2a0c` | |
 | `--danger` | `#b91c1c` | `#f87171` | Werkstatt, Minus, Fehler |
 | `--danger-soft` | `#fde7e7` | `#3b1515` | |
@@ -41,6 +42,8 @@ Im Dashboard stehen alle Werte als CSS-Variablen an einer Stelle (`:root`), im L
 | `--nav-text` | `#c3cede` | `#aab7ca` | |
 | `--nav-active` | `#ffffff` | `#ffffff` | |
 | `--nav-active-bg` | `#1b3150` | `#162843` | |
+
+Text auf Flächen hat mindestens 4,5:1 Kontrast, auch in den Plaketten (kräftige Farbe auf weicher Farbe) und auf Knöpfen. Im Dunkelmodus ist die Schrift auf Knöpfen deshalb dunkel.
 
 Der Dunkelmodus folgt der Systemeinstellung (`prefers-color-scheme`). Im Dashboard lässt er sich zusätzlich über einen Schalter in der Seitenleiste festlegen (`data-theme="light"` oder `"dark"` am Wurzelelement, im Browser gemerkt).
 
@@ -81,10 +84,10 @@ Systemschrift, keine Webfonts: `"Segoe UI", system-ui, -apple-system, Roboto, "H
 ### Knopf
 | Art | Aussehen | Wofür |
 |---|---|---|
-| primär | `--primary`, weiße Schrift | eine Hauptaktion je Bereich oder Karte |
+| primär | `--primary`, Schrift `--on-primary` | eine Hauptaktion je Bereich oder Karte |
 | sekundär | `--surface`, Rand `--border-strong`, Schrift `--text` | weitere Aktionen |
 | leise | ohne Rand, Schrift `--primary` | Aktionen in Listen, "Abbrechen" |
-| Gefahr | `--danger`, weiße Schrift | Stornieren, Ausmustern, Verkaufen (immer mit Bestätigung) |
+| Gefahr | `--danger`, Schrift `--on-primary` | Stornieren, Ausmustern, Verkaufen (immer mit Bestätigung) |
 | Symbol | 32 × 32 px, nur Symbol mit `aria-label` | Menü "Mehr", Schließen |
 
 Höhe 36 px (klein 30 px), Radius `--r-sm`, Schrift 14 px Gewicht 600. Zustände: Hover etwas dunkler, Fokus 2 px Ring in `--primary` mit 2 px Abstand, deaktiviert 50 % Deckkraft, beim Laden ein kleiner Kreisel statt Symbol und kein zweiter Klick.
