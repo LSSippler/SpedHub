@@ -43,6 +43,19 @@ Im Dashboard stehen alle Werte als CSS-Variablen an einer Stelle (`:root`), im L
 | `--nav-active` | `#ffffff` | `#ffffff` | |
 | `--nav-active-bg` | `#1b3150` | `#162843` | |
 
+Nur im Dashboard gibt es dazu:
+
+| Token | Hell | Dunkel | Wofür |
+|---|---|---|---|
+| `--danger-hover` | `#991b1b` | `#fca5a5` | Hover auf Gefahr-Knöpfen |
+| `--nav-hover-bg` | `#16283f` | `#111f35` | Hover in der Seitenleiste |
+| `--nav-line` | `#22344f` | `#1b2a42` | Trennlinie unten in der Seitenleiste |
+| `--plate-bg`, `--plate-text`, `--plate-border` | `#ffffff`, `#0f172a`, `#0f172a` | gleich | Kennzeichen, bleibt auch im Dunkelmodus ein weißes Schild |
+| `--plate-eu`, `--plate-eu-text` | `#1d4ed8`, `#ffffff` | gleich | blauer Streifen mit "D" |
+| `--overlay` | `rgb(15 23 42 / 45%)` | `rgb(0 0 0 / 60%)` | abgedunkelter Hintergrund hinter Dialogen und dem Menü auf dem Telefon |
+
+Maße, die keine Abstände sind (Breite der Seitenleiste, Höhe von Knöpfen und Zeilen, Größe von Symbolen, Mindestbreite der Karten, Breite von Dialog und Meldung), stehen im Dashboard ebenfalls als Variablen in `:root`.
+
 Text auf Flächen hat mindestens 4,5:1 Kontrast, auch in den Plaketten (kräftige Farbe auf weicher Farbe) und auf Knöpfen. Im Dunkelmodus ist die Schrift auf Knöpfen deshalb dunkel.
 
 Der Dunkelmodus folgt der Systemeinstellung (`prefers-color-scheme`). Im Dashboard lässt er sich zusätzlich über einen Schalter in der Seitenleiste festlegen (`data-theme="light"` oder `"dark"` am Wurzelelement, im Browser gemerkt).
@@ -69,7 +82,7 @@ Systemschrift, keine Webfonts: `"Segoe UI", system-ui, -apple-system, Roboto, "H
 
 ## Aufbau
 
-- **Seitenleiste** (240 px, `--nav-bg`):
+- **Seitenleiste** (240 px, `--nav-bg`, Fokus-Ring dort in `--nav-active`, weil `--primary` auf dem dunklen Grund kaum zu sehen ist):
   - Oben das Logo: ein kleines Lkw-Symbol in `--accent` und der Firmenname.
   - Darunter die Bereiche mit Symbol: Übersicht, Fuhrpark, Fahrer, Kassenbuch, Büro (nur Chef), Testbereich.
   - Der aktive Bereich hat `--nav-active-bg` und links eine 3 px breite Leiste in `--accent`.
@@ -125,18 +138,18 @@ Das bestehende Kennzeichen bleibt das Erkennungszeichen eines Lkw, sauberer geze
 
 ### Lkw-Karte (Fuhrpark)
 - **Kopf:**
-  - Kennzeichen, daneben Marke und Modell lesbar ("Scania S 2016", nie umbrechend, sonst gekürzt mit Titel-Tooltip).
-  - Rechts die Plakette des Status.
+  - Oben das Kennzeichen (groß), rechts daneben die Plakette des Status.
+  - Darunter über die volle Breite Marke und Modell lesbar ("Scania S 2016", `--fs-md`, nie umbrechend, sonst gekürzt mit Titel-Tooltip), darunter klein der Name aus dem Spiel und frühere Kennzeichen. Neben Kennzeichen und Plakette blieben bei 320 px Breite für das Modell nur gut 100 px.
 - **Mitte, drei Kennwerte in einer Reihe:**
   - Kilometerstand
   - Schaden als Balken: grün unter 10 %, Bernstein bis zur Grenze, rot darüber, dazu die Zahl. Darunter "dauerhaft x %" in `--text-3`.
-  - Tank, falls bekannt.
+  - Tank, falls bekannt. Die Liste der Lkw liefert keinen Tank, das Dashboard zeigt an dieser Stelle "Letzte Meldung": Zeit und Kilometerstand des letzten Herzschlags, "jetzt" während der Fahrt.
 - **Fahrer-Zeile, wenn verliehen:**
   - Initialen-Kreis, Name, "seit 10:02".
   - Fährt der Lkw gerade: "84 km/h, Bremen nach Hannover" mit Symbol in `--warning`.
 - **Fuß:**
   - Genau eine Hauptaktion: frei "Ausleihen", eigener "Zurückgeben", Chef bei fremder Leihe "Zurücknehmen", Werkstatt beim Chef "Reparieren, 3.870 €".
-  - Alles Weitere im Menü "Mehr": Kennzeichen ändern, Verkaufen, Ausmustern.
+  - Alles Weitere im Menü "Mehr": beim Chef "Reparieren lassen" für einen freien Lkw mit Schaden, Kennzeichen ändern (mit dem Vorschlag des Servers), Verkaufen, Ausmustern.
 - **Raster:** Karten mit mindestens 320 px Breite, so viele Spalten wie passen. Darüber Filter-Pillen: Alle, Frei, Unterwegs, Werkstatt, mit Anzahl.
 - **Ausgemusterte und verkaufte Lkw:** in einem eingeklappten Bereich darunter, gedämpft.
 
@@ -149,7 +162,7 @@ Das bestehende Kennzeichen bleibt das Erkennungszeichen eines Lkw, sauberer geze
 
 ### Kassenbuch
 - **Kopf:**
-  - Kennzahl Firmenkasse.
+  - Kennzahlen: Firmenkasse, eigenes Lohnkonto, Saldo der gezeigten Buchungen (Einnahmen, Ausgaben).
   - Filter: Zeitraum mit Schnellwahl (Heute, 7 Tage, 30 Tage, Alle) und Datumsfeldern, dazu Art.
   - Die Auswahlleiste erscheint nur, wenn etwas ausgewählt ist, schwebend unten: "3 ausgewählt", "Stornieren".
 - **Zeilen:**
@@ -159,6 +172,7 @@ Das bestehende Kennzeichen bleibt das Erkennungszeichen eines Lkw, sauberer geze
   - Betrag Kasse und Betrag Lohnkonto, rechtsbündig, Plus grün mit "+", Minus rot.
 - **Stornierte Zeilen:** gedämpft, durchgestrichen, mit Plakette "storniert" und Tooltip mit Grund.
 - **Lohnabrechnungen:** als aufklappbare Gruppe.
+- **Schmal (unter 700 px):** Jede Buchung wird ein Block: oben Zeit, darunter Titel und Nebenzeile, rechts die Beträge mit kleiner Beschriftung "Kasse" oder "Lohnkonto". So bleiben die Beträge sichtbar, statt aus der Tabelle zu rollen.
 
 ### Formular
 - Beschriftung über dem Feld in `--fs-sm` Gewicht 600.
